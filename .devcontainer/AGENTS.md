@@ -457,7 +457,7 @@ El `; true` al final garantiza que el comando total sea exitoso aunque ningún `
 ## Problema 10: Terminal pelada, sin contexto ni ayudas (no hay oh-my-zsh)
 
 ### Síntoma
-La terminal del container es `bash` puro: prompt mínimo (`devuser@host:/workspace$`), sin rama de git, sin estado del último comando, sin autocompletado decente y con historial pobre. La experiencia es tortuosa comparada con oh-my-zsh.
+La terminal del container es `bash` puro: prompt mínimo (`vscode@host:/workspace$`), sin rama de git, sin estado del último comando, sin autocompletado decente y con historial pobre. La experiencia es tortuosa comparada con oh-my-zsh.
 
 ### Causa
 La imagen base (`python:3.11-slim`, Debian) trae bash minimal. El `~/.bashrc` de skel no configura prompt informativo y **falta el paquete `bash-completion`** (el loader). Además `git-prompt.sh` no viene incluido en Debian (solo `git-completion`).
@@ -476,9 +476,9 @@ oh-my-zsh / starship añaden dependencias y, sobre todo, los temas powerline **r
 2. **Dockerfile** — añadir `bash-completion` a las deps de apt y conectar el script:
    ```dockerfile
    # en el apt-get install: ... bash-completion ...
-   COPY --chown=devuser:devuser bash-enhancements.sh /home/devuser/.bash_enhancements.sh
+   COPY --chown=${USER_UID}:${USER_GID} bash-enhancements.sh /home/vscode/.bash_enhancements.sh
    RUN printf '\n# devcontainer bash enhancements\n[ -f "$HOME/.bash_enhancements.sh" ] && . "$HOME/.bash_enhancements.sh"\n' \
-       >> /home/devuser/.bashrc
+       >> /home/vscode/.bashrc
    ```
 
 **Regla general**: el home no persiste entre rebuilds (salvo el volumen `~/.claude`), por lo que la config de shell debe inyectarse vía Dockerfile (COPY + append al `~/.bashrc`), no editando el home en runtime.
@@ -490,7 +490,7 @@ grep -q .bash_enhancements.sh ~/.bashrc || \
   printf '\n[ -f "$HOME/.bash_enhancements.sh" ] && . "$HOME/.bash_enhancements.sh"\n' >> ~/.bashrc
 source ~/.bashrc   # o simplemente abrir una terminal nueva
 ```
-(`bash-completion` como tal requiere el rebuild, ya que `devuser` no tiene sudo; el resto funciona al instante.)
+(`bash-completion` se instala en la imagen, así que añadirlo requiere rebuild; el resto de mejoras se aplican al instante con `source ~/.bash_enhancements.sh`.)
 
 ---
 
@@ -515,7 +515,7 @@ Montar un volumen solo en `~/.claude` **no basta**: `~/.claude.json` queda fuera
 
 ```json
 "mounts": [
-  "source=capta-claude-config,target=/home/devuser/.claude,type=volume"
+  "source=claude-home,target=/home/vscode/.claude,type=volume"
 ]
 ```
 
@@ -523,7 +523,7 @@ Montar un volumen solo en `~/.claude` **no basta**: `~/.claude.json` queda fuera
 
 ```json
 "containerEnv": {
-  "CLAUDE_CONFIG_DIR": "/home/devuser/.claude"
+  "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"
 }
 ```
 
@@ -548,20 +548,20 @@ Sin esto, el volumen aparece como `root:root` y Claude Code no puede escribir tr
 ### Diagnóstico
 ```bash
 # ¿El volumen está montado y con el owner correcto?
-docker exec <container> stat -c "%U %G %a %n" /home/devuser/.claude
+docker exec <container> stat -c "%U %G %a %n" /home/vscode/.claude
 
 # ¿Dónde acabó .claude.json?
 docker exec <container> sh -c 'ls -la ~/.claude.json ~/.claude/.claude.json 2>&1'
 
 # ¿Qué hay realmente guardado en el volumen?
-docker run --rm -v capta-claude-config:/claude alpine sh -c \
+docker run --rm -v claude-home:/claude alpine sh -c \
   'ls /claude; find /claude/projects -name "*.jsonl" | wc -l'
 ```
 
 ### Ojo con estos casos
-- `docker volume prune` borra cualquier volumen que no esté en uso por un container existente — incluido `capta-claude-config` si en ese momento no hay container. Hacer backup antes.
+- `docker volume prune` borra cualquier volumen que no esté en uso por un container existente — incluido `claude-home` si en ese momento no hay container. Hacer backup antes.
 - El volumen contiene credenciales en claro; un `tar` del volumen es un secreto.
-- Los nombres llevan el prefijo del proyecto (`capta-`), así que el estado no se comparte con otros devcontainers. Para un único login e historial en toda la máquina, usar un nombre común (p. ej. `claude-home`) en todos los proyectos.
+- `claude-home` es compartido por todos los devcontainers de la máquina: un solo login y un solo historial. Para aislarlo por proyecto, anteponer `${localWorkspaceFolderBasename}-` al nombre del volumen.
 - Las sesiones siguen indexadas por ruta absoluta: las de `/workspaces/proyecto` no se mezclan con las del host aunque compartas el directorio (Problema 8).
 
 ---
@@ -587,7 +587,7 @@ Hay una trampa añadida: git prefiere `~/.gitconfig` sobre `~/.config/git/config
 
 ```json
 "mounts": [
-  "source=capta-git-config,target=/home/devuser/.config/git,type=volume"
+  "source=git-home,target=/home/vscode/.config/git,type=volume"
 ]
 ```
 
@@ -597,7 +597,7 @@ Hay una trampa añadida: git prefiere `~/.gitconfig` sobre `~/.config/git/config
 
 ```json
 "containerEnv": {
-  "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
+  "GIT_CONFIG_GLOBAL": "/home/vscode/.config/git/config"
 }
 ```
 
@@ -614,7 +614,7 @@ docker exec <container> sh -c 'echo $GIT_CONFIG_GLOBAL; git config --global --li
 docker exec <container> sh -c 'git config --global core.excludesFile; cat "$(git config --global core.excludesFile)"'
 
 # ¿Hay un ~/.gitconfig fuera del volumen pisando al del volumen?
-docker exec <container> ls -la /home/devuser/.gitconfig
+docker exec <container> ls -la /home/vscode/.gitconfig
 
 # Comprobar que una regla global ignora de verdad en cualquier repo
 docker exec <container> sh -c 'cd /tmp && rm -rf t && mkdir t && cd t && git init -q . && touch .env visible.txt && git status --porcelain'
@@ -622,7 +622,7 @@ docker exec <container> sh -c 'cd /tmp && rm -rf t && mkdir t && cd t && git ini
 ```
 
 ### Ojo con estos casos
-- El volumen `capta-git-config` es de este proyecto. Para una sola identidad y un solo gitignore global en toda la máquina, usar un nombre común en todos los devcontainers.
+- El volumen `git-home` es de este proyecto. Para una sola identidad y un solo gitignore global en toda la máquina, usar un nombre común en todos los devcontainers.
 - El gitignore global **no** sustituye al `.gitignore` del repo: las reglas que el equipo debe compartir van en el repo; las personales, aquí.
 - `core.excludesFile` con una ruta fuera del volumen (por ejemplo `~/.gitignore_global`) rompe la persistencia aunque el volumen esté montado; `post-create.sh` la reapunta al archivo del volumen.
 
@@ -632,46 +632,52 @@ docker exec <container> sh -c 'cd /tmp && rm -rf t && mkdir t && cd t && git ini
 
 ### `devcontainer.json` completo
 
-Es el `devcontainer.json` de este repositorio (ver también `README.md`):
+Es el `devcontainer.json` del template (ver `README.md` para adaptarlo a cada
+proyecto):
 
 ```json
 {
-  "name": "gt-algorithia-capta-homologacion",
-  "build": { "dockerfile": "Dockerfile", "context": "." },
-  "runArgs": ["--name", "gt-algorithia-capta-homologacion"],
-  "remoteUser": "devuser",
+  "name": "${localWorkspaceFolderBasename}",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".",
+    "args": {
+      "BASE_IMAGE": "debian:bookworm-slim",
+      "USERNAME": "vscode",
+      "EXTRA_APT": "",
+      "INSTALL_AWSCLI": "false",
+      "PIP_PACKAGES": ""
+    }
+  },
+  "runArgs": ["--name", "${localWorkspaceFolderBasename}-dev"],
+  "remoteUser": "vscode",
   "workspaceFolder": "/workspace",
 
   "mounts": [
     "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "source=capta-claude-config,target=/home/devuser/.claude,type=volume",
-    "source=capta-git-config,target=/home/devuser/.config/git,type=volume",
-    "source=capta-bash-history,target=/commandhistory,type=volume",
-    "source=capta-ide-extensions,target=/home/devuser/.antigravity-ide-server/extensions,type=volume"
+    "source=claude-home,target=/home/vscode/.claude,type=volume",
+    "source=git-home,target=/home/vscode/.config/git,type=volume",
+    "source=${localWorkspaceFolderBasename}-bash-history,target=/commandhistory,type=volume",
+    "source=${localWorkspaceFolderBasename}-ide-extensions,target=/home/vscode/.antigravity-ide-server/extensions,type=volume"
   ],
 
   "containerEnv": {
     "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CONFIG_DIR": "/home/devuser/.claude",
-    "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
-  },
-
-  "customizations": {
-    "vscode": {
-      "extensions": ["ms-python.python", "ms-toolsai.jupyter", "anthropic.claude-code"]
-    }
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    "GIT_CONFIG_GLOBAL": "/home/vscode/.config/git/config"
   },
 
   "postCreateCommand": "bash .devcontainer/post-create.sh"
 }
 ```
 
-Notas sobre los montajes:
+Notas sobre esta configuración:
 
-- `capta-claude-config` es un **volumen**, no un bind mount al `~/.claude` del host: persiste conversaciones y credenciales entre rebuilds (Problema 11). El bind mount del Problema 8 es la alternativa excluyente si se quiere compartir estado con el host.
-- `capta-git-config` persiste el **gitignore global del home** (`~/.config/git/ignore`) y la config global de git (Problema 12). No tiene nada que ver con el `.gitignore` de cada repositorio, que viaja dentro del repo.
-- Los nombres de volumen **no llevan `${devcontainerId}`**: ese ID cambia al modificar `devcontainer.json` y con él se "pierde" el volumen anterior (sigue existiendo, pero ya no se monta).
-- `post-create.sh` concentra el postCreateCommand: permisos de los volúmenes, migración al volumen de `~/.claude.json`, `~/.gitconfig` y `~/.gitignore_global`, `core.excludesFile`, sanity checks del stack (aws, nbformat, boto3) e `install-extensions.sh`.
+- **`workspaceFolder` fijo `/workspace`** con bind explícito de `${localWorkspaceFolder}`: elimina de raíz el Problema 9b (nombres con espacios o mayúsculas).
+- **Imagen base parametrizable** (`BASE_IMAGE`): el template no ata el proyecto a ningún runtime. Por defecto `debian:bookworm-slim` (27 MB comprimido, frente a 336 MB de `devcontainers/base:bookworm`), y el CLI de Claude Code se instala como **binario nativo**, sin Node.
+- **`claude-home` y `git-home` sin prefijo de proyecto**: un solo login y un solo gitignore global para todos los devcontainers de la máquina. Los volúmenes de historial y extensiones sí van por proyecto.
+- **Ningún nombre usa `${devcontainerId}`**: ese ID cambia al editar `devcontainer.json` y con él se "pierde" el volumen anterior (sigue existiendo, pero ya no se monta).
+- **Hooks del proyecto**: `extras/build.sh` (build), `post-create.local.sh` (tras crear el container) y `extensions.local.sh` (lista de extensiones). Permiten adaptar el template sin editarlo.
 
 ### Orden de operaciones en cada rebuild
 
@@ -680,9 +686,9 @@ Notas sobre los montajes:
 3. `postCreateCommand` ejecuta `post-create.sh`:
    - `mkdir -p` + `chown` → garantiza permisos en los volúmenes de `.claude`, de git y de extensiones
    - migra al volumen `~/.claude.json`, `~/.gitconfig` y `~/.gitignore_global` si venían de fuera
-   - reapunta `core.excludesFile` al gitignore global del volumen
-   - sanity checks de `aws`, `nbformat` y `boto3`
+   - reapunta `core.excludesFile` al gitignore global del volumen y marca `/workspace` como `safe.directory`
    - `install-extensions.sh` → descarga VSIXs faltantes de Open VSX, actualiza `extensions.json`
+   - `post-create.local.sh` del proyecto, si existe
 4. Antigravity conecta al container, lee `extensions.json`, carga las extensiones
 5. Reload Window si las extensiones no aparecen inmediatamente
 

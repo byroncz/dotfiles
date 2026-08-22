@@ -1,48 +1,79 @@
 {
-  "name": "gt-algorithia-capta-homologacion",
+  // ───────────────────────────────────────────────────────────────────────
+  //  Template de devcontainer. Copiar como .devcontainer/ dentro de un
+  //  proyecto; lo único que suele cambiar son los build args y la lista de
+  //  extensiones. Ver README.md.
+  // ───────────────────────────────────────────────────────────────────────
+  "name": "${localWorkspaceFolderBasename}",
+
   "build": {
     "dockerfile": "Dockerfile",
-    "context": "."
+    "context": ".",
+    "args": {
+      // Base por defecto: 27 MB comprimido. Cambiar solo si el proyecto
+      // necesita otro runtime (p. ej. "python:3.11-slim", "node:22-slim").
+      "BASE_IMAGE": "debian:bookworm-slim",
+      "USERNAME": "vscode",
+      // Extras opcionales del proyecto:
+      "EXTRA_APT": "",
+      "INSTALL_AWSCLI": "false",
+      "PIP_PACKAGES": ""
+    }
   },
-  "runArgs": [
-    "--name",
-    "gt-algorithia-capta-homologacion"
-  ],
-  "remoteUser": "devuser",
+
+  // Nombre de container derivado del directorio del proyecto (Problema 1).
+  // Si el directorio local tiene espacios, poner aquí un nombre fijo.
+  "runArgs": ["--name", "${localWorkspaceFolderBasename}-dev"],
+  "remoteUser": "vscode",
+
+  // Bind explícito a una ruta FIJA: evita el desajuste entre workspaceFolder
+  // y el nombre real del directorio local (Problema 9b).
   "workspaceFolder": "/workspace",
+
+  // ───────────────────────────────────────────────────────────────────────
+  //  Volúmenes persistentes. Sobreviven a
+  //  `devcontainer up --remove-existing-container` y a `docker rm -f`.
+  //
+  //  claude-home y git-home NO llevan el nombre del proyecto: son
+  //  compartidos por todos los devcontainers de la máquina, así que el login
+  //  de Claude Code y el gitignore global se hacen una sola vez. Para
+  //  aislarlos por proyecto, anteponer ${localWorkspaceFolderBasename}-.
+  //
+  //  Ningún nombre usa ${devcontainerId}: ese ID cambia al editar este
+  //  archivo y con él se dejaría de montar el volumen anterior.
+  // ───────────────────────────────────────────────────────────────────────
   "mounts": [
     "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "source=capta-claude-config,target=/home/devuser/.claude,type=volume",
-    "source=capta-git-config,target=/home/devuser/.config/git,type=volume",
-    "source=capta-bash-history,target=/commandhistory,type=volume",
-    "source=capta-ide-extensions,target=/home/devuser/.antigravity-ide-server/extensions,type=volume"
+    "source=claude-home,target=/home/vscode/.claude,type=volume",
+    "source=git-home,target=/home/vscode/.config/git,type=volume",
+    "source=${localWorkspaceFolderBasename}-bash-history,target=/commandhistory,type=volume",
+    "source=${localWorkspaceFolderBasename}-ide-extensions,target=/home/vscode/.antigravity-ide-server/extensions,type=volume"
   ],
+
   "containerEnv": {
     "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CONFIG_DIR": "/home/devuser/.claude",
-    "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
+    // Sin esto, ~/.claude.json queda fuera del volumen y en cada rebuild se
+    // pierden login, MCP servers y trust por proyecto (Problema 11).
+    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
+    // Sin esto, `git config --global` crea ~/.gitconfig fuera del volumen y
+    // ese archivo tiene prioridad sobre ~/.config/git/config (Problema 12).
+    "GIT_CONFIG_GLOBAL": "/home/vscode/.config/git/config"
   },
+
   "customizations": {
     "vscode": {
-      "extensions": [
-        "ms-python.python",
-        "ms-toolsai.jupyter",
-        "ms-toolsai.vscode-jupyter-cell-tags",
-        "amazonwebservices.aws-toolkit-vscode",
-        "anthropic.claude-code"
-      ],
+      // Antigravity ignora este campo (Problema 3): la instalación real la
+      // hace install-extensions.sh. Se mantiene por documentación y para
+      // otros IDEs.
+      "extensions": ["anthropic.claude-code"],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
-        "jupyter.notebookFileRoot": "/workspace",
         "terminal.integrated.defaultProfile.linux": "bash",
         "terminal.integrated.profiles.linux": {
-          "bash": {
-            "path": "/bin/bash",
-            "args": ["-l"]
-          }
+          "bash": { "path": "/bin/bash", "args": ["-l"] }
         }
       }
     }
   },
+
   "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

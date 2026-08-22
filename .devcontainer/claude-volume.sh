@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Gestión de los volúmenes Docker persistentes del devcontainer:
-#   capta-claude-config -> ~/.claude (conversaciones, credenciales, settings,
+#   claude-home -> ~/.claude (conversaciones, credenciales, settings,
 #                          plugins, .claude.json)
-#   capta-git-config    -> ~/.config/git (config global y gitignore GLOBAL del home)
-#   capta-bash-history  -> /commandhistory (historial de bash)
+#   git-home    -> ~/.config/git (config global y gitignore GLOBAL del home)
+#   ${PROYECTO}-bash-history  -> /commandhistory (historial de bash)
 #
 # Se ejecuta EN EL HOST (no dentro del container).
 #
@@ -12,11 +12,11 @@
 #   ./claude-volume.sh backup [destino]     tarball con timestamp
 #   ./claude-volume.sh restore <tarball>    restaura (SOBRESCRIBE)
 #
-# Volumen por defecto: capta-claude-config (debe coincidir con devcontainer.json).
-# Para operar sobre otro:  CLAUDE_VOLUME=capta-git-config ./claude-volume.sh info
+# Volumen por defecto: claude-home (debe coincidir con devcontainer.json).
+# Para operar sobre otro:  CLAUDE_VOLUME=git-home ./claude-volume.sh info
 set -euo pipefail
 
-VOLUME="${CLAUDE_VOLUME:-capta-claude-config}"
+VOLUME="${CLAUDE_VOLUME:-claude-home}"
 HELPER_IMAGE="${HELPER_IMAGE:-alpine:3.20}"
 
 die() { echo "error: $*" >&2; exit 1; }

@@ -9,7 +9,8 @@
 # ─────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-EXTENSIONS_DIR="/home/devuser/.antigravity-ide-server/extensions"
+# Derivado de $HOME: el template no fija el nombre de usuario.
+EXTENSIONS_DIR="${HOME}/.antigravity-ide-server/extensions"
 EXTENSIONS_JSON="${EXTENSIONS_DIR}/extensions.json"
 ARCH=$(uname -m)
 PLATFORM="linux-x64"
@@ -48,7 +49,7 @@ install_vsix() {
     version="$pinned"
   else
     version=$(curl -sf "https://open-vsx.org/api/${publisher}/${name}" \
-      | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])") || {
+      | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])" 2>/dev/null) || {
       echo "[ext] WARN: ${extid} not on Open VSX, skipping"
       return 0
     }
@@ -94,12 +95,27 @@ install_vsix() {
   echo "[ext] Installed ${extid}@${version}"
 }
 
-# ── Extensiones del proyecto (engine OK con Antigravity 1.107.0 → sin pin) ──
-install_vsix ms-python  python                              # 2026.4.0  (generic)
-install_vsix ms-toolsai jupyter                             # 2025.9.1  (generic)
-install_vsix ms-toolsai vscode-jupyter-cell-tags            # 0.1.9     (generic)
-install_vsix amazonwebservices aws-toolkit-vscode           # 4.7.0     (generic)
-install_vsix Anthropic  claude-code                         # 2.1.186   (platform-specific linux-arm64)
+# ─────────────────────────────────────────────────────────────────────────
+#  Extensiones. La base del template instala solo Claude Code; cada proyecto
+#  añade las suyas en .devcontainer/extensions.local.sh, que se sourcea al
+#  final y puede usar install_vsix igual que aquí. Así el template se puede
+#  actualizar entero sin perder la lista del proyecto.
+#
+#  Ejemplo de extensions.local.sh (stack python/AWS):
+#    install_vsix ms-python  python
+#    install_vsix ms-toolsai jupyter
+#    install_vsix ms-toolsai vscode-jupyter-cell-tags
+#    install_vsix amazonwebservices aws-toolkit-vscode
+#    install_vsix james-yu   latex-workshop     10.13.1   # pin por engine
+# ─────────────────────────────────────────────────────────────────────────
+install_vsix Anthropic claude-code                          # platform-specific
+
+LOCAL_LIST="$(dirname "$0")/extensions.local.sh"
+if [ -f "$LOCAL_LIST" ]; then
+  echo "[ext] cargando extensions.local.sh del proyecto"
+  # shellcheck disable=SC1090
+  . "$LOCAL_LIST"
+fi
 
 echo "[ext] Done. Registered extensions:"
 python3 -c "import json; print('  ' + '\n  '.join(e['identifier']['id']+'@'+e['version'] for e in json.load(open('$EXTENSIONS_JSON'))))" 2>/dev/null || true
