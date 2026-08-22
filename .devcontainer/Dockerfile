@@ -39,8 +39,39 @@ ARG USER_GID=1000
 RUN groupadd --gid $USER_GID $USERNAME \
     && useradd --uid $USER_UID --gid $USER_GID -m --shell /bin/bash $USERNAME \
     && mkdir -p /home/$USERNAME/.claude /home/$USERNAME/.local/bin \
+       /home/$USERNAME/.config/git \
        /home/$USERNAME/.antigravity-ide-server/extensions \
-    && chown -R $USER_UID:$USER_GID /home/$USERNAME
+       /commandhistory \
+    && touch /commandhistory/.bash_history \
+    && chown -R $USER_UID:$USER_GID /home/$USERNAME /commandhistory \
+    && chmod 700 /home/$USERNAME/.claude
+
+# Puntos de montaje de los volúmenes persistentes (Problemas 7b, 11 y 12).
+# Docker crea el directorio de un mount point como root:root si no existe en la
+# imagen; pre-creándolo aquí con el owner correcto, el volumen nombrado hereda
+# contenido y ownership la primera vez que se monta.
+#
+# Semilla de la config global de git dentro del volumen:
+#   ~/.config/git/ignore -> gitignore GLOBAL (el del home, no el de cada repo)
+#   ~/.config/git/config -> config global
+RUN printf '%s\n' \
+      '# gitignore global del usuario (~/.config/git/ignore).' \
+      '# Aplica a TODOS los repos del container y persiste en su volumen.' \
+      '# Para reglas de un repo concreto usa el .gitignore de ese repo.' \
+      '' \
+      '.DS_Store' \
+      '*.swp' \
+      '.env' \
+      '.env.*' \
+      '!.env.example' \
+      '.ipynb_checkpoints/' \
+      '.claude/settings.local.json' \
+      > /home/$USERNAME/.config/git/ignore \
+    && printf '%s\n' \
+      '[core]' \
+      "  excludesFile = /home/$USERNAME/.config/git/ignore" \
+      > /home/$USERNAME/.config/git/config \
+    && chown -R $USER_UID:$USER_GID /home/$USERNAME/.config
 
 USER $USERNAME
 ENV HOME=/home/devuser
@@ -50,6 +81,12 @@ WORKDIR /workspace
 # Installs to ~/.local/bin; ~/.claude is a persisted named volume (see devcontainer.json)
 RUN curl -fsSL https://claude.ai/install.sh | bash
 ENV PATH="/home/devuser/.local/bin:${PATH}"
+
+# Todo el estado de Claude Code (transcripciones, credenciales, settings,
+# plugins y .claude.json) dentro del volumen montado en ~/.claude, y el config
+# global de git dentro del suyo — también para escritura (Problemas 11 y 12).
+ENV CLAUDE_CONFIG_DIR="/home/devuser/.claude"
+ENV GIT_CONFIG_GLOBAL="/home/devuser/.config/git/config"
 
 # Enhanced bash terminal (informative prompt, history, completion) — ASCII-safe,
 # no oh-my-zsh/starship. Sourced from ~/.bashrc so every interactive shell gets it.

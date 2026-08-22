@@ -13,10 +13,14 @@
   "mounts": [
     "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
     "source=capta-claude-config,target=/home/devuser/.claude,type=volume",
+    "source=capta-git-config,target=/home/devuser/.config/git,type=volume",
+    "source=capta-bash-history,target=/commandhistory,type=volume",
     "source=capta-ide-extensions,target=/home/devuser/.antigravity-ide-server/extensions,type=volume"
   ],
   "containerEnv": {
-    "DISABLE_AUTOUPDATER": "1"
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CONFIG_DIR": "/home/devuser/.claude",
+    "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
   },
   "customizations": {
     "vscode": {
@@ -40,5 +44,5 @@
       }
     }
   },
-  "postCreateCommand": "aws --version && python -c \"import nbformat; print('nbformat OK')\" && python -c \"import boto3; print('boto3 OK')\" && chmod +x .devcontainer/*.sh 2>/dev/null ; bash .devcontainer/install-extensions.sh ; true"
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }

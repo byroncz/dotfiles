@@ -403,6 +403,8 @@ Bind mount del `~/.claude` del host:
 **Lo que NO se comparte (limitación estructural):**
 - Sesiones de proyecto específico. Claude Code identifica proyectos por su ruta absoluta en el filesystem. La ruta difiere entre host (`/Users/usuario/dev/proyecto`) y container (`/workspaces/proyecto`), por lo que cada entorno mantiene sus propias sesiones bajo claves distintas en `~/.claude/projects/`.
 
+> **Nota**: el bind mount y el volumen persistente del Problema 11 son mutuamente excluyentes (mismo destino). Este repo usa el volumen; elige el bind mount solo si quieres compartir el estado con el host.
+
 ---
 
 ## Problema 9b: postCreateCommand falla con "chdir ... no such file or directory"
@@ -492,47 +494,194 @@ source ~/.bashrc   # o simplemente abrir una terminal nueva
 
 ---
 
+## Problema 11: Las conversaciones y credenciales de Claude Code se pierden al rehacer el container
+
+### Síntoma
+Tras `devcontainer up --remove-existing-container` (o `docker rm -f`), dentro del container hay que volver a hacer login en Claude Code y `claude --resume` no muestra ninguna sesión anterior.
+
+### Causa
+Todo el estado de Claude Code vive en el home del usuario del container, que se destruye con el container:
+
+- `~/.claude/projects/<proyecto>/<sesión>.jsonl` — transcripción completa de cada conversación
+- `~/.claude/.credentials.json` — sesión OAuth / API key (en Linux; en macOS va al Keychain)
+- `~/.claude/settings.json`, `~/.claude/plugins/`, `~/.claude/history.jsonl`
+- `~/.claude.json` — **fuera** de `~/.claude`: login, MCP servers de usuario, `trust` por proyecto
+
+Montar un volumen solo en `~/.claude` **no basta**: `~/.claude.json` queda fuera y se pierde en cada rebuild, así que Claude Code vuelve a pedir login y a preguntar si confía en la carpeta.
+
+### Solución
+
+**1. Volumen con nombre fijo montado en `~/.claude`** (sin `${devcontainerId}`, para que sobreviva a cambios en `devcontainer.json`):
+
+```json
+"mounts": [
+  "source=capta-claude-config,target=/home/devuser/.claude,type=volume"
+]
+```
+
+**2. `CLAUDE_CONFIG_DIR` apuntando al mismo directorio**, para que `.claude.json` también caiga dentro del volumen:
+
+```json
+"containerEnv": {
+  "CLAUDE_CONFIG_DIR": "/home/devuser/.claude"
+}
+```
+
+Comprobado en Claude Code 2.1.240: con `CLAUDE_CONFIG_DIR=$DIR`, el archivo de configuración se escribe en `$DIR/.claude.json` y no se crea nada en `$HOME`.
+
+```bash
+CLAUDE_CONFIG_DIR=/tmp/cfg HOME=/tmp/home claude mcp list
+ls -a /tmp/cfg   # .claude.json, backups/, ...
+ls -a /tmp/home  # vacío
+```
+
+**3. Pre-crear el mount point en el `Dockerfile`** con el owner correcto (misma regla del Problema 7b). Un volumen nombrado vacío hereda contenido y ownership del directorio de la imagen la primera vez que se monta:
+
+```dockerfile
+RUN mkdir -p "/home/${USERNAME}/.claude" \
+ && chown -R "${USER_UID}:${USER_GID}" "/home/${USERNAME}/.claude" \
+ && chmod 700 "/home/${USERNAME}/.claude"
+```
+
+Sin esto, el volumen aparece como `root:root` y Claude Code no puede escribir transcripciones ni credenciales.
+
+### Diagnóstico
+```bash
+# ¿El volumen está montado y con el owner correcto?
+docker exec <container> stat -c "%U %G %a %n" /home/devuser/.claude
+
+# ¿Dónde acabó .claude.json?
+docker exec <container> sh -c 'ls -la ~/.claude.json ~/.claude/.claude.json 2>&1'
+
+# ¿Qué hay realmente guardado en el volumen?
+docker run --rm -v capta-claude-config:/claude alpine sh -c \
+  'ls /claude; find /claude/projects -name "*.jsonl" | wc -l'
+```
+
+### Ojo con estos casos
+- `docker volume prune` borra cualquier volumen que no esté en uso por un container existente — incluido `capta-claude-config` si en ese momento no hay container. Hacer backup antes.
+- El volumen contiene credenciales en claro; un `tar` del volumen es un secreto.
+- Los nombres llevan el prefijo del proyecto (`capta-`), así que el estado no se comparte con otros devcontainers. Para un único login e historial en toda la máquina, usar un nombre común (p. ej. `claude-home`) en todos los proyectos.
+- Las sesiones siguen indexadas por ruta absoluta: las de `/workspaces/proyecto` no se mezclan con las del host aunque compartas el directorio (Problema 8).
+
+---
+
+## Problema 12: El gitignore global y la identidad de git se pierden al rehacer el container
+
+### Síntoma
+Tras un rebuild, `git config --global user.email` está vacío y las reglas del **gitignore global** desaparecen: archivos que antes estaban ignorados en todos los repos (`.env`, credenciales, `settings.local.json`) vuelven a aparecer como untracked y pueden acabar commiteados por error.
+
+### Causa
+Son archivos del **home**, no de los repos:
+
+- `~/.config/git/ignore` — gitignore global, aplica a todos los repos del container
+- `~/.config/git/config` (o `~/.gitconfig`) — identidad, alias, `core.excludesFile`
+
+El `.gitignore` de cada repositorio viaja dentro del repo y no corre peligro; estos dos viven en el home del container y se destruyen con él.
+
+Hay una trampa añadida: git prefiere `~/.gitconfig` sobre `~/.config/git/config`. Si el IDE copia el `.gitconfig` del host al home del container, o si alguien ejecuta `git config --global ...`, el archivo que manda queda **fuera** del volumen.
+
+### Solución
+
+**1. Volumen con nombre fijo en el directorio de config de git del home:**
+
+```json
+"mounts": [
+  "source=capta-git-config,target=/home/devuser/.config/git,type=volume"
+]
+```
+
+`~/.config/git/ignore` es el excludesFile por defecto de git cuando `core.excludesFile` no está fijado, así que con montar ese directorio el gitignore global ya persiste.
+
+**2. `GIT_CONFIG_GLOBAL` apuntando al config dentro del volumen**, para que git lea **y escriba** ahí:
+
+```json
+"containerEnv": {
+  "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
+}
+```
+
+Comprobado en git 2.43: con `GIT_CONFIG_GLOBAL` fijado, `git config --global core.excludesFile <ruta>` escribe en ese archivo y **no** crea `~/.gitconfig`.
+
+**3. Semilla en el `Dockerfile`** (un volumen vacío copia el contenido de la imagen la primera vez que se monta), y **fusión de lo que quede fuera** en `post-create.sh`: si aparecen `~/.gitconfig` o `~/.gitignore_global` (copiados del host o heredados de un container anterior), se anexan una sola vez al archivo del volumen — con un marcador que evita duplicados — y el original se renombra a `*.pre-volume`.
+
+### Diagnóstico
+```bash
+# ¿Qué archivo global está usando git dentro del container?
+docker exec <container> sh -c 'echo $GIT_CONFIG_GLOBAL; git config --global --list --show-origin | head'
+
+# ¿Qué gitignore global se aplica y qué reglas tiene?
+docker exec <container> sh -c 'git config --global core.excludesFile; cat "$(git config --global core.excludesFile)"'
+
+# ¿Hay un ~/.gitconfig fuera del volumen pisando al del volumen?
+docker exec <container> ls -la /home/devuser/.gitconfig
+
+# Comprobar que una regla global ignora de verdad en cualquier repo
+docker exec <container> sh -c 'cd /tmp && rm -rf t && mkdir t && cd t && git init -q . && touch .env visible.txt && git status --porcelain'
+# Debe listar solo "?? visible.txt"
+```
+
+### Ojo con estos casos
+- El volumen `capta-git-config` es de este proyecto. Para una sola identidad y un solo gitignore global en toda la máquina, usar un nombre común en todos los devcontainers.
+- El gitignore global **no** sustituye al `.gitignore` del repo: las reglas que el equipo debe compartir van en el repo; las personales, aquí.
+- `core.excludesFile` con una ruta fuera del volumen (por ejemplo `~/.gitignore_global`) rompe la persistencia aunque el volumen esté montado; `post-create.sh` la reapunta al archivo del volumen.
+
+---
+
 ## Configuración final de referencia
 
 ### `devcontainer.json` completo
 
+Es el `devcontainer.json` de este repositorio (ver también `README.md`):
+
 ```json
 {
-  "name": "nombre-descriptivo",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": "..",
-    "args": { "USERNAME": "vscode", "NODE_MAJOR": "22" }
+  "name": "gt-algorithia-capta-homologacion",
+  "build": { "dockerfile": "Dockerfile", "context": "." },
+  "runArgs": ["--name", "gt-algorithia-capta-homologacion"],
+  "remoteUser": "devuser",
+  "workspaceFolder": "/workspace",
+
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "source=capta-claude-config,target=/home/devuser/.claude,type=volume",
+    "source=capta-git-config,target=/home/devuser/.config/git,type=volume",
+    "source=capta-bash-history,target=/commandhistory,type=volume",
+    "source=capta-ide-extensions,target=/home/devuser/.antigravity-ide-server/extensions,type=volume"
+  ],
+
+  "containerEnv": {
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CONFIG_DIR": "/home/devuser/.claude",
+    "GIT_CONFIG_GLOBAL": "/home/devuser/.config/git/config"
   },
-  "runArgs": ["--name", "nombre-descriptivo"],
-  "remoteUser": "vscode",
-  "workspaceFolder": "/workspaces/proyecto",
 
   "customizations": {
     "vscode": {
-      "extensions": [
-        "anthropic.claude-code",
-        "james-yu.latex-workshop"
-      ]
+      "extensions": ["ms-python.python", "ms-toolsai.jupyter", "anthropic.claude-code"]
     }
   },
 
-  "mounts": [
-    "source=proyecto-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-    "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
-    "source=nombre-descriptivo-ide-extensions,target=/home/vscode/.antigravity-ide-server/extensions,type=volume"
-  ],
-
-  "postCreateCommand": "sudo mkdir -p /home/vscode/.antigravity-ide-server/extensions && sudo chown -R vscode:vscode /commandhistory /home/vscode/.antigravity-ide-server && chmod +x ./*.sh && bash .devcontainer/install-extensions.sh ; true"
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }
 ```
+
+Notas sobre los montajes:
+
+- `capta-claude-config` es un **volumen**, no un bind mount al `~/.claude` del host: persiste conversaciones y credenciales entre rebuilds (Problema 11). El bind mount del Problema 8 es la alternativa excluyente si se quiere compartir estado con el host.
+- `capta-git-config` persiste el **gitignore global del home** (`~/.config/git/ignore`) y la config global de git (Problema 12). No tiene nada que ver con el `.gitignore` de cada repositorio, que viaja dentro del repo.
+- Los nombres de volumen **no llevan `${devcontainerId}`**: ese ID cambia al modificar `devcontainer.json` y con él se "pierde" el volumen anterior (sigue existiendo, pero ya no se monta).
+- `post-create.sh` concentra el postCreateCommand: permisos de los volúmenes, migración al volumen de `~/.claude.json`, `~/.gitconfig` y `~/.gitignore_global`, `core.excludesFile`, sanity checks del stack (aws, nbformat, boto3) e `install-extensions.sh`.
 
 ### Orden de operaciones en cada rebuild
 
 1. `devcontainer up --workspace-folder /ruta --remove-existing-container`
 2. Docker crea el container con el nombre fijo y monta los volúmenes
-3. `postCreateCommand` ejecuta:
-   - `sudo mkdir -p` + `chown` → garantiza permisos en el volumen de extensiones
+3. `postCreateCommand` ejecuta `post-create.sh`:
+   - `mkdir -p` + `chown` → garantiza permisos en los volúmenes de `.claude`, de git y de extensiones
+   - migra al volumen `~/.claude.json`, `~/.gitconfig` y `~/.gitignore_global` si venían de fuera
+   - reapunta `core.excludesFile` al gitignore global del volumen
+   - sanity checks de `aws`, `nbformat` y `boto3`
    - `install-extensions.sh` → descarga VSIXs faltantes de Open VSX, actualiza `extensions.json`
 4. Antigravity conecta al container, lee `extensions.json`, carga las extensiones
 5. Reload Window si las extensiones no aparecen inmediatamente

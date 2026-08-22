@@ -13,6 +13,10 @@ export HISTCONTROL=ignoreboth:erasedups   # drop dups and leading-space cmds
 export HISTTIMEFORMAT='%F %T  '
 shopt -s histappend cmdhist
 
+# Historial persistente entre rebuilds: /commandhistory es un volumen Docker
+# (ver devcontainer.json). Si no está montado, se usa el ~/.bash_history normal.
+[ -d /commandhistory ] && export HISTFILE=/commandhistory/.bash_history
+
 # ── Quality-of-life shell options ───────────────────────────────────────────
 shopt -s checkwinsize           # keep $LINES/$COLUMNS right after a resize
 shopt -s globstar  2>/dev/null  # ** matches recursively
