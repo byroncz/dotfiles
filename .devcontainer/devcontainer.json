@@ -1,64 +1,35 @@
 {
   // ───────────────────────────────────────────────────────────────────────
-  //  Template de devcontainer. Copiar como .devcontainer/ dentro de un
-  //  proyecto; lo único que suele cambiar son los build args y la lista de
-  //  extensiones. Ver README.md.
+  //  Template de devcontainer sobre Docker Compose. Copiar como
+  //  .devcontainer/ dentro de un proyecto. Lo que suele cambiar NO está
+  //  aquí, sino en .devcontainer/.env y en docker-compose.yml.
+  //  Ver README.md.
+  //
+  //  Este archivo ya NO describe la imagen: solo apunta al compose. Los
+  //  volúmenes, las variables de entorno y los puertos viven allí.
   // ───────────────────────────────────────────────────────────────────────
   "name": "${localWorkspaceFolderBasename}",
 
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".",
-    "args": {
-      // Base por defecto: 27 MB comprimido. Cambiar solo si el proyecto
-      // necesita otro runtime (p. ej. "python:3.11-slim", "node:22-slim").
-      "BASE_IMAGE": "debian:bookworm-slim",
-      "USERNAME": "vscode",
-      // Extras opcionales del proyecto:
-      "EXTRA_APT": "",
-      "INSTALL_AWSCLI": "false",
-      "PIP_PACKAGES": ""
-    }
-  },
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
 
-  // Nombre de container derivado del directorio del proyecto (Problema 1).
-  // Si el directorio local tiene espacios, poner aquí un nombre fijo.
-  "runArgs": ["--name", "${localWorkspaceFolderBasename}-dev"],
-  "remoteUser": "vscode",
-
-  // Bind explícito a una ruta FIJA: evita el desajuste entre workspaceFolder
-  // y el nombre real del directorio local (Problema 9b).
+  // Debe coincidir EXACTAMENTE con el destino del bind de código en el
+  // compose ("..:/workspace"). Ruta fija en singular: no depende del nombre
+  // del directorio local, que puede llevar espacios o mayúsculas (Problema 9b).
   "workspaceFolder": "/workspace",
 
-  // ───────────────────────────────────────────────────────────────────────
-  //  Volúmenes persistentes. Sobreviven a
-  //  `devcontainer up --remove-existing-container` y a `docker rm -f`.
-  //
-  //  claude-home y git-home NO llevan el nombre del proyecto: son
-  //  compartidos por todos los devcontainers de la máquina, así que el login
-  //  de Claude Code y el gitignore global se hacen una sola vez. Para
-  //  aislarlos por proyecto, anteponer ${localWorkspaceFolderBasename}-.
-  //
-  //  Ningún nombre usa ${devcontainerId}: ese ID cambia al editar este
-  //  archivo y con él se dejaría de montar el volumen anterior.
-  // ───────────────────────────────────────────────────────────────────────
-  "mounts": [
-    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "source=claude-home,target=/home/vscode/.claude,type=volume",
-    "source=git-home,target=/home/vscode/.config/git,type=volume",
-    "source=${localWorkspaceFolderBasename}-bash-history,target=/commandhistory,type=volume",
-    "source=${localWorkspaceFolderBasename}-ide-extensions,target=/home/vscode/.antigravity-ide-server/extensions,type=volume"
-  ],
+  // Debe coincidir con el arg USERNAME del compose (por defecto "vscode").
+  // devcontainer.json no lee .env, así que si cambias uno, cambia el otro.
+  "remoteUser": "vscode",
 
-  "containerEnv": {
-    "DISABLE_AUTOUPDATER": "1",
-    // Sin esto, ~/.claude.json queda fuera del volumen y en cada rebuild se
-    // pierden login, MCP servers y trust por proyecto (Problema 11).
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
-    // Sin esto, `git config --global` crea ~/.gitconfig fuera del volumen y
-    // ese archivo tiene prioridad sobre ~/.config/git/config (Problema 12).
-    "GIT_CONFIG_GLOBAL": "/home/vscode/.config/git/config"
-  },
+  // ───────────────────────────────────────────────────────────────────────
+  //  OBLIGATORIO: "none".
+  //
+  //  El valor por defecto ("stopCompose") pararía TODOS los servicios del
+  //  compose al cerrar el devcontainer, incluidos los sidecars de respaldo,
+  //  que es justo cuando más falta hacen. No cambiar.
+  // ───────────────────────────────────────────────────────────────────────
+  "shutdownAction": "none",
 
   "customizations": {
     "vscode": {

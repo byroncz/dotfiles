@@ -1,0 +1,7 @@
+# Red de seguridad: nada de esto debe llegar nunca a un repositorio, ni al
+# de un cliente ni a este. Los secretos reales viven FUERA del repo
+# (ver CONFIGURACION-MANUAL.md); estas reglas solo evitan el accidente.
+
+.env
+rclone.conf
+*.pre-volume

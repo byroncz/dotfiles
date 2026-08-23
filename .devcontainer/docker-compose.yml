@@ -1,0 +1,78 @@
+# ───────────────────────────────────────────────────────────────────────────
+#  Template de devcontainer sobre Docker Compose.
+#
+#  IMPORTANTE: este archivo vive en .devcontainer/, así que TODAS las rutas
+#  relativas (context, volumes, env_file) se resuelven desde .devcontainer/,
+#  no desde la raíz del repo. Por eso el código se monta como "..".
+#
+#  Variables: se leen de .devcontainer/.env (ver .env.example). Ese archivo
+#  NO se versiona y NO debe contener secretos: solo identificadores.
+# ───────────────────────────────────────────────────────────────────────────
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Base por defecto: 27 MB comprimido. Cambiar solo si el proyecto
+        # necesita otro runtime (p. ej. "python:3.11-slim", "node:22-slim").
+        BASE_IMAGE: "${BASE_IMAGE:-debian:bookworm-slim}"
+        USERNAME: "${USERNAME:-vscode}"
+        EXTRA_APT: "${EXTRA_APT:-}"
+        INSTALL_AWSCLI: "${INSTALL_AWSCLI:-false}"
+        PIP_PACKAGES: "${PIP_PACKAGES:-}"
+
+    container_name: "${CLIENTE:-local}-${PROYECTO:-dev}"
+
+    # Sin esto el contenedor arranca, no encuentra proceso que mantener y se
+    # apaga de inmediato. El devcontainer necesita un PID 1 que no termine.
+    command: sleep infinity
+
+    volumes:
+      # Solo ESTE repo, no el directorio padre: un devcontainer por proyecto
+      # de un solo cliente. Evita que un sidecar de respaldo pueda alcanzar
+      # código de otro cliente. Ruta destino FIJA (/workspace, singular) para
+      # que no dependa del nombre del directorio local (Problema 9b).
+      - ..:/workspace:cached
+
+      - claude-config:/home/${USERNAME:-vscode}/.claude
+      - git-home:/home/${USERNAME:-vscode}/.config/git
+      - bash-history:/commandhistory
+      - ide-extensions:/home/${USERNAME:-vscode}/.antigravity-ide-server/extensions
+
+    environment:
+      DISABLE_AUTOUPDATER: "1"
+      # Sin esto, ~/.claude.json queda FUERA del volumen y en cada rebuild se
+      # pierden login OAuth, MCP servers y trust por proyecto (Problema 11).
+      # El volumen por sí solo NO basta: hacen falta las dos cosas.
+      CLAUDE_CONFIG_DIR: "/home/${USERNAME:-vscode}/.claude"
+      # Sin esto, `git config --global` escribe ~/.gitconfig fuera del volumen
+      # y ese archivo tiene prioridad sobre ~/.config/git/config (Problema 12).
+      GIT_CONFIG_GLOBAL: "/home/${USERNAME:-vscode}/.config/git/config"
+
+    # Puertos de la aplicación del proyecto. Con compose, `forwardPorts` y
+    # `appPort` de devcontainer.json se ignoran: los puertos van aquí.
+    # El servidor de desarrollo DEBE escuchar en 0.0.0.0, no en 127.0.0.1.
+    # ports:
+    #   - "5173:5173"
+
+# ───────────────────────────────────────────────────────────────────────────
+#  Volúmenes.
+#
+#  `name:` explícito en todos: sin él, compose antepone el nombre del
+#  proyecto y los nombres reales dependerían de cómo se invoque el CLI.
+#
+#  claude-config va por CLIENTE, no por proyecto ni global: los transcripts
+#  de un cliente no deben acabar en el respaldo cifrado de otro. El precio es
+#  un `/login` por cliente, no uno por proyecto.
+# ───────────────────────────────────────────────────────────────────────────
+volumes:
+  claude-config:
+    name: "claude-${CLIENTE:-local}"
+  git-home:
+    name: "git-home"
+  bash-history:
+    name: "bash-history-${CLIENTE:-local}-${PROYECTO:-dev}"
+  ide-extensions:
+    name: "ide-extensions-${CLIENTE:-local}-${PROYECTO:-dev}"
