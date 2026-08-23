@@ -93,26 +93,48 @@ Termina con `Configure this as a Shared Drive? n` y `y) Yes this is OK`.
 cliente no se puede descifrar con las claves de otro, aunque los dos vivan en
 la misma cuenta de Drive.
 
-Son **cuatro** remotos crypt, uno por volumen respaldado, que comparten las
-mismas claves pero apuntan a carpetas distintas:
+Esto es lo que quedará en Drive, con `<cliente>` y `<proyecto>` legibles y
+todo lo de dentro cifrado:
 
-| Remoto | Carpeta en Drive |
-|---|---|
-| `crypt-<cliente>-claude` | `gdrive:respaldo-<cliente>/claude` |
-| `crypt-<cliente>-workspace` | `gdrive:respaldo-<cliente>/workspace` |
-| `crypt-<cliente>-knowledge` | `gdrive:respaldo-<cliente>/knowledge` |
-| `crypt-<cliente>-historial` | `gdrive:respaldo-<cliente>/historial` |
+```
+acme/                       <- legible
+├── claude/                 <- legible
+│   └── 7hq3n8k2.../           cifrado
+├── knowledge/              <- legible
+└── tienda-web/             <- legible
+    ├── workspace/          <- legible
+    │   └── mv91xz4b.../       cifrado
+    └── historial/          <- legible
+```
 
-> **Por qué cuatro y no uno.** Lo que escribes en `remote>` es una ruta normal
-> de Drive y se ve **en claro**; todo lo que el crypt guarda por debajo se
-> cifra. Con un solo crypt, las cuatro subcarpetas quedarían cifradas y en
-> Drive verías cuatro nombres ilegibles sin saber cuál es cuál. Con uno por
-> volumen, la carpeta de arriba es legible y el contenido sigue cifrado: si un
-> día tienes que recuperar un volumen concreto, sabes a dónde ir.
+Un remoto crypt por cada carpeta legible. **Dos son del cliente y se crean
+una sola vez; dos son del proyecto y se repiten en cada proyecto nuevo:**
+
+| Remoto | Carpeta en Drive | Cuándo |
+|---|---|---|
+| `crypt-<cliente>-claude` | `gdrive:<cliente>/claude` | una vez por cliente |
+| `crypt-<cliente>-knowledge` | `gdrive:<cliente>/knowledge` | una vez por cliente |
+| `crypt-<cliente>-<proyecto>-workspace` | `gdrive:<cliente>/<proyecto>/workspace` | por proyecto |
+| `crypt-<cliente>-<proyecto>-historial` | `gdrive:<cliente>/<proyecto>/historial` | por proyecto |
+
+Los nombres no se configuran en ningún sitio: los sidecars los derivan de
+`CLIENTE` y `PROYECTO` del `.env`. Por eso esos dos valores deben ser
+identificadores simples, sin espacios ni acentos.
+
+> **Por qué la ruta está partida así.** Refleja el alcance real de cada
+> volumen. `claude` y `knowledge` son **del cliente**: los comparten todos sus
+> proyectos, así que colgarlos de un proyecto los duplicaría. `workspace` e
+> `historial` son **del proyecto**, y ahí el error sería el contrario: dos
+> proyectos apuntando a la misma carpeta se destruirían el respaldo mutuamente,
+> porque `sync` borra en destino lo que no está en origen.
+
+> **Por qué un remoto por carpeta.** Lo que escribes en `remote>` es ruta
+> normal de Drive y se ve **en claro**; todo lo que el crypt guarda por debajo
+> se cifra. Un nombre solo es legible si hay un crypt anclado justo ahí.
 >
-> El precio es que alguien con acceso a tu Drive ve el nombre del cliente y
-> las cuatro categorías, aunque no pueda leer nada. Si eso te incomoda, usa un
-> identificador neutro (`respaldo-c1`) y apunta la equivalencia en NordPass.
+> El precio es que quien acceda a tu Drive ve los nombres de cliente y
+> proyecto, aunque no pueda leer nada. Si eso te incomoda, usa identificadores
+> neutros (`c1/p1`) y apunta la equivalencia en NordPass.
 
 Las carpetas **no hay que crearlas en Drive**: se crean solas en la primera
 subida.
@@ -123,7 +145,7 @@ Empieza por el primero, en la misma sesión de `rclone config`:
 n) New remote
 name> crypt-<cliente>-claude               <- <cliente> = CLIENTE en .env
 Storage> crypt
-remote> gdrive:respaldo-<cliente>/claude   <- esta ruta se ve EN CLARO
+remote> gdrive:<cliente>/claude            <- esta ruta se ve EN CLARO
 filename_encryption> 1                     (standard: cifra también los nombres)
 directory_name_encryption> 1               (true)
 ```
@@ -162,7 +184,7 @@ recordándola de memoria: va a vivir en un gestor de contraseñas de todos modos
 ### Los otros tres remotos
 
 Repite `n) New remote` tres veces más, cambiando solo el nombre y la carpeta
-(`-workspace`, `-knowledge`, `-historial`).
+según la tabla de arriba.
 
 **Con una diferencia importante:** en estos tres, cuando pregunte por la
 contraseña y el salt, elige **`y) Yes, type in my own password`** y pega
@@ -190,11 +212,24 @@ Cuando tengas los cuatro, sal con `q) Quit config`. Comprueba:
 
 Debe listar `gdrive:` y los cuatro `crypt-<cliente>-*:`.
 
+### Al empezar un proyecto nuevo del MISMO cliente
+
+Dos remotos más, con las claves de ese cliente (opción `y`, pegando los
+valores de NordPass):
+
+```
+crypt-<cliente>-<proyecto2>-workspace   -> gdrive:<cliente>/<proyecto2>/workspace
+crypt-<cliente>-<proyecto2>-historial   -> gdrive:<cliente>/<proyecto2>/historial
+```
+
+Los de `claude` y `knowledge` ya existen y se reutilizan tal cual: sus
+volúmenes son del cliente, no del proyecto.
+
 ### Otros clientes
 
-Cada cliente lleva su propio juego de cuatro remotos y **sus propias claves**,
-generadas de nuevo con `g`. Ese es el punto: el respaldo de un cliente no se
-puede descifrar con las claves de otro.
+Cada cliente lleva sus propios remotos y **sus propias claves**, generadas de
+nuevo con `g`. Ese es el punto: el respaldo de un cliente no se puede
+descifrar con las claves de otro.
 
 ---
 
