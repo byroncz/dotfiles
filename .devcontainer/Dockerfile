@@ -72,6 +72,8 @@ RUN mkdir -p "/home/$USERNAME/.claude" \
       "/home/$USERNAME/.config/git" \
       "/home/$USERNAME/.local/bin" \
       "/home/$USERNAME/.antigravity-ide-server/extensions" \
+      "/home/$USERNAME/basic-memory" \
+      "/home/$USERNAME/.basic-memory" \
       /commandhistory \
  && touch /commandhistory/.bash_history \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory \

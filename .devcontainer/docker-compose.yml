@@ -41,6 +41,19 @@ services:
       - bash-history:/commandhistory
       - ide-extensions:/home/${USERNAME:-vscode}/.antigravity-ide-server/extensions
 
+      # Basic Memory, en DOS volúmenes porque son dos cosas distintas:
+      #   ~/basic-memory   los markdown. Es el conocimiento real, no se puede
+      #                    regenerar, y por eso SÍ entra en el respaldo cifrado.
+      #   ~/.basic-memory  el índice SQLite y la config. Se reconstruye entero
+      #                    desde los markdown con `basic-memory sync`, así que
+      #                    NO se respalda: copiar un SQLite vivo mientras se
+      #                    escribe es la forma habitual de acabar restaurando
+      #                    una base corrupta.
+      # Deliberadamente FUERA de ~/.claude: el conocimiento es del proyecto, no
+      # del agente. Codex y cualquier otro deben poder leer el mismo directorio.
+      - basic-memory:/home/${USERNAME:-vscode}/basic-memory
+      - basic-memory-index:/home/${USERNAME:-vscode}/.basic-memory
+
     environment:
       DISABLE_AUTOUPDATER: "1"
       # Sin esto, ~/.claude.json queda FUERA del volumen y en cada rebuild se
@@ -50,6 +63,12 @@ services:
       # Sin esto, `git config --global` escribe ~/.gitconfig fuera del volumen
       # y ese archivo tiene prioridad sobre ~/.config/git/config (Problema 12).
       GIT_CONFIG_GLOBAL: "/home/${USERNAME:-vscode}/.config/git/config"
+      # Ambas explícitas: por defecto Basic Memory deduce las rutas de $HOME,
+      # y basta que algo cambie $HOME para que escriba fuera de los volúmenes
+      # y el conocimiento se pierda en el siguiente rebuild. Verificado en
+      # basic-memory 0.22.1 (config.py: resolve_data_dir / BASIC_MEMORY_HOME).
+      BASIC_MEMORY_HOME: "/home/${USERNAME:-vscode}/basic-memory"
+      BASIC_MEMORY_CONFIG_DIR: "/home/${USERNAME:-vscode}/.basic-memory"
 
     # Puertos de la aplicación del proyecto. Con compose, `forwardPorts` y
     # `appPort` de devcontainer.json se ignoran: los puertos van aquí.
@@ -76,3 +95,11 @@ volumes:
     name: "bash-history-${CLIENTE:-local}-${PROYECTO:-dev}"
   ide-extensions:
     name: "ide-extensions-${CLIENTE:-local}-${PROYECTO:-dev}"
+
+  # Por CLIENTE, no por proyecto: el conocimiento acumulado sobre un cliente
+  # sirve en todos sus proyectos. Nunca compartido entre clientes distintos,
+  # por el mismo motivo que claude-config.
+  basic-memory:
+    name: "basic-memory-${CLIENTE:-local}"
+  basic-memory-index:
+    name: "basic-memory-index-${CLIENTE:-local}"
