@@ -1,0 +1,46 @@
+# Filtros de rclone para el respaldo del WORKSPACE (el código del proyecto).
+#
+# Sintaxis: "- patrón" excluye, "+ patrón" incluye. Se evalúan en orden y
+# gana la primera que coincide, así que las inclusiones van ANTES.
+#
+# Criterio: se excluye lo que se regenera con un comando (dependencias,
+# artefactos de build, cachés) y se conserva todo lo demás. Esas carpetas
+# son además las que más archivos tienen, así que excluirlas es la
+# diferencia entre un respaldo de segundos y uno de minutos.
+
+# ── .git NO se excluye ─────────────────────────────────────────────────────
+# Es justo lo que hace útil este respaldo. Ahí viven los commits que aún no
+# has pusheado y los stashes: lo único del workspace que no existe en
+# ningún otro sitio. Si excluyeras .git/, respaldarías solo la copia de
+# trabajo y perderías precisamente lo irrecuperable.
++ .git/**
+
+# ── Dependencias ───────────────────────────────────────────────────────────
+- node_modules/**
+- .venv/**
+- venv/**
+- vendor/**
+- .bundle/**
+
+# ── Artefactos de build ────────────────────────────────────────────────────
+- target/**
+- dist/**
+- build/**
+- .next/**
+- .nuxt/**
+- out/**
+- *.egg-info/**
+
+# ── Cachés ─────────────────────────────────────────────────────────────────
+- __pycache__/**
+- .pytest_cache/**
+- .mypy_cache/**
+- .ruff_cache/**
+- .ipynb_checkpoints/**
+- .terraform/**
+
+# ── Ruido ──────────────────────────────────────────────────────────────────
+- *.log
+- *.tmp
+- *.pyc
+- .DS_Store

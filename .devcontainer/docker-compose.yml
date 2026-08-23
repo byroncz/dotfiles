@@ -87,6 +87,114 @@ services:
     # ports:
     #   - "5173:5173"
 
+  # ─────────────────────────────────────────────────────────────────────────
+  #  SIDECARS DE RESPALDO
+  #
+  #  Cuatro contenedores hermanos, la misma imagen y el MISMO watch.sh. Lo
+  #  único que cambia es qué vigilan, a dónde suben y cada cuánto.
+  #
+  #  Van aparte de `dev` a propósito: al cerrar el devcontainer, `dev` se
+  #  para, y es justo cuando el respaldo más falta hace. Con
+  #  shutdownAction "none" en devcontainer.json, estos siguen vivos.
+  #
+  #  Todos montan su origen en :ro. Aunque watch.sh tuviera un fallo, no
+  #  puede tocar lo que vigila.
+  #
+  #  Están bajo el perfil "respaldo": no arrancan hasta que pongas
+  #  COMPOSE_PROFILES=respaldo en .env. Así el devcontainer funciona desde
+  #  el primer día, antes de configurar rclone, sin sidecars reiniciándose
+  #  en bucle porque no encuentran el remoto.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  sync-claude:
+    image: rclone/rclone:latest
+    profiles: ["respaldo"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/watch.sh"]
+    volumes:
+      - ./watch.sh:/watch.sh:ro
+      - claude-config:/origen:ro
+      - ${HOME}/.config/rclone:/config/rclone:ro
+    # ${HOME}, nunca "~": compose no expande la virgulilla y buscaría un
+    # directorio llamado "~" dentro de .devcontainer/.
+    #
+    # required: false para que la ausencia del archivo no impida arrancar.
+    # Y la contraseña NO se declara además en `environment:`: ahí tiene
+    # precedencia sobre env_file, así que si la variable no estuviera en la
+    # shell, compose la interpolaría como cadena vacía y PISARÍA el valor
+    # bueno. Un mecanismo, no dos.
+    env_file:
+      - path: ${HOME}/.config/rclone/devcontainer.env
+        required: false
+    environment:
+      NOMBRE: "claude"
+      DESTINO: "${CRYPT_REMOTE:-crypt}:claude"
+      INTERVALO: "30"
+      MAX_INTERVAL: "900"
+
+  sync-workspace:
+    image: rclone/rclone:latest
+    profiles: ["respaldo"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/watch.sh"]
+    volumes:
+      - ./watch.sh:/watch.sh:ro
+      - ./filtros.txt:/filtros.txt:ro
+      - ..:/origen:ro
+      - ${HOME}/.config/rclone:/config/rclone:ro
+    env_file:
+      - path: ${HOME}/.config/rclone/devcontainer.env
+        required: false
+    environment:
+      NOMBRE: "workspace"
+      DESTINO: "${CRYPT_REMOTE:-crypt}:workspace"
+      # Más espaciado que el resto: el código cambia en ráfagas (un build,
+      # un `npm install`) y no tiene sentido subir en mitad de una.
+      INTERVALO: "120"
+      MAX_INTERVAL: "3600"
+      RCLONE_FILTERS: "/filtros.txt"
+
+  sync-knowledge:
+    image: rclone/rclone:latest
+    profiles: ["respaldo"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/watch.sh"]
+    volumes:
+      - ./watch.sh:/watch.sh:ro
+      # Solo los markdown. El índice SQLite (basic-memory-index) NO se
+      # respalda: se reconstruye con `basic-memory sync`, y copiarlo en
+      # caliente es la forma habitual de restaurar una base corrupta.
+      - basic-memory:/origen:ro
+      - ${HOME}/.config/rclone:/config/rclone:ro
+    env_file:
+      - path: ${HOME}/.config/rclone/devcontainer.env
+        required: false
+    environment:
+      NOMBRE: "knowledge"
+      DESTINO: "${CRYPT_REMOTE:-crypt}:knowledge"
+      INTERVALO: "60"
+      MAX_INTERVAL: "1800"
+
+  sync-history:
+    image: rclone/rclone:latest
+    profiles: ["respaldo"]
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/watch.sh"]
+    volumes:
+      - ./watch.sh:/watch.sh:ro
+      - bash-history:/origen:ro
+      - ${HOME}/.config/rclone:/config/rclone:ro
+    env_file:
+      - path: ${HOME}/.config/rclone/devcontainer.env
+        required: false
+    environment:
+      NOMBRE: "historial"
+      # Sidecar propio en vez de colgar del de Claude: el historial debe
+      # poder leerlo cualquier agente (Codex, OpenCode), no solo Claude.
+      DESTINO: "${CRYPT_REMOTE:-crypt}:historial"
+      INTERVALO: "120"
+      MAX_INTERVAL: "3600"
+
 # ───────────────────────────────────────────────────────────────────────────
 #  Volúmenes.
 #
