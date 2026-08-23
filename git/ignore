@@ -1,0 +1,33 @@
+# gitignore GLOBAL del usuario.
+#
+# Aplica a TODOS los repositorios del container, no a uno concreto. Para
+# reglas de un proyecto usa el .gitignore de ese repositorio, que viaja con
+# él y también le sirve a quien lo clone.
+#
+# Aquí va solo lo que es ruido en CUALQUIER repo: basura del sistema
+# operativo, del editor, y archivos que nunca deben subirse a ningún sitio.
+#
+# Se edita como un archivo normal y se commitea. No hay que reconstruir la
+# imagen: el container lo lee desde ~/.dotfiles.
+
+# ── Sistema operativo ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editores ───────────────────────────────────────────────────────────────
+*.swp
+*.swo
+*~
+
+# ── Secretos ───────────────────────────────────────────────────────────────
+# Red de seguridad, no la única defensa: lo que de verdad evita el accidente
+# es no escribir secretos dentro del repo.
+.env
+.env.*
+!.env.example
+
+# ── Ruido de herramientas ──────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# Configuración local de agentes: es de esta máquina, no del proyecto.
+.claude/settings.local.json

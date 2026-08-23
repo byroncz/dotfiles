@@ -1,0 +1,38 @@
+# Configuración de git VERSIONADA: preferencias que quieres iguales en toda
+# máquina y en todo container.
+#
+# El container no usa este archivo directamente: lo incluye desde
+# ~/.config/git/config, que vive en un volumen. Ese reparto es a propósito:
+#
+#   este archivo (repo)      preferencias -> con historia, iguales en todas partes
+#   ~/.config/git/config     identidad    -> propia de cada máquina, sin versionar
+#
+# Por eso user.name y user.email NO van aquí: cambian según dónde trabajes y
+# no tiene sentido versionarlos.
+#
+# core.excludesFile tampoco: lo apunta post-create.sh, que es quien sabe en
+# qué ruta acabó el clon de los dotfiles.
+
+[init]
+	defaultBranch = main
+
+[pull]
+	# Sin esto git avisa en cada pull de que no ha elegido estrategia.
+	# `--ff-only` falla en vez de fabricar un merge automático a tus espaldas.
+	ff = only
+
+[push]
+	# Crea la rama remota con el mismo nombre sin tener que escribir
+	# `--set-upstream origin <rama>` la primera vez.
+	autoSetupRemote = true
+
+[diff]
+	# Detecta archivos movidos o renombrados en vez de mostrarlos como uno
+	# borrado y otro nuevo.
+	renames = copies
+
+[core]
+	# El repo del cliente se monta por bind y suele llegar con otro owner que
+	# el usuario del container; sin esto git se niega a operar. La lista de
+	# rutas concretas la añade post-create.sh (safe.directory).
+	fileMode = false

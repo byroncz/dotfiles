@@ -76,6 +76,10 @@ services:
       # basic-memory 0.22.1 (config.py: resolve_data_dir / BASIC_MEMORY_HOME).
       BASIC_MEMORY_HOME: "/home/${USERNAME:-vscode}/basic-memory"
       BASIC_MEMORY_CONFIG_DIR: "/home/${USERNAME:-vscode}/.basic-memory"
+      # Repo de dotfiles a clonar en ~/.dotfiles (gitignore global, config de
+      # git, y más adelante nvim). Vacío = el container usa los valores por
+      # defecto de git. Ver .env.example.
+      DOTFILES_REPO: "${DOTFILES_REPO:-}"
 
     # Puertos de la aplicación del proyecto. Con compose, `forwardPorts` y
     # `appPort` de devcontainer.json se ignoran: los puertos van aquí.

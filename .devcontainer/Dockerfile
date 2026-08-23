@@ -79,27 +79,14 @@ RUN mkdir -p "/home/$USERNAME/.claude" \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory \
  && chmod 700 "/home/$USERNAME/.claude"
 
-# Semilla de la config global de git dentro de su volumen:
-#   ~/.config/git/ignore -> gitignore GLOBAL (el del home, no el de cada repo)
-#   ~/.config/git/config -> config global
-RUN printf '%s\n' \
-      '# gitignore global del usuario (~/.config/git/ignore).' \
-      '# Aplica a TODOS los repos del container y persiste en su volumen.' \
-      '# Para reglas de un repo concreto usa el .gitignore de ese repo.' \
-      '' \
-      '.DS_Store' \
-      '*.swp' \
-      '.env' \
-      '.env.*' \
-      '!.env.example' \
-      '.ipynb_checkpoints/' \
-      '.claude/settings.local.json' \
-      > "/home/$USERNAME/.config/git/ignore" \
- && printf '%s\n' \
-      '[core]' \
-      "  excludesFile = /home/$USERNAME/.config/git/ignore" \
-      > "/home/$USERNAME/.config/git/config" \
- && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME/.config"
+# El gitignore global y las preferencias de git NO se hornean aquí: viven
+# versionados en el repo de dotfiles (carpeta git/) y post-create.sh los
+# clona en ~/.dotfiles. Hornearlos obligaba a editar este Dockerfile y
+# reconstruir la imagen para añadir una regla, y lo que se editara dentro
+# del container acababa en un volumen sin historia que nadie versionaba.
+#
+# En ~/.config/git (volumen) solo queda lo que es de ESTA máquina: la
+# identidad (user.name, user.email) y el include hacia el config versionado.
 
 USER $USERNAME
 ENV HOME="/home/${USERNAME}"

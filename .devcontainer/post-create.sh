@@ -36,11 +36,38 @@ if [ -f "${HOME_DIR}/.claude.json" ] && [ ! -e "${CLAUDE_DIR}/.claude.json" ]; t
   echo "[claude] ~/.claude.json movido dentro del volumen persistente"
 fi
 
-# ── 3. git: config global y gitignore GLOBAL ────────────────────────────────
-touch "$GIT_GLOBAL_CONFIG" "$GIT_GLOBAL_IGNORE" 2>/dev/null
+# ── 3. dotfiles versionados (git ahora; nvim más adelante) ──────────────────
+# El template se copia por proyecto como .devcontainer/ solo, así que una
+# carpeta hermana del repo de dotfiles NO viaja con él. Por eso se clona
+# dentro del container, en ~/.dotfiles: nunca dentro del repo del cliente,
+# que no tiene por qué cargar con la configuración personal de nadie.
+DOTFILES_DIR="${HOME_DIR}/.dotfiles"
 
-# Fusiona una sola vez lo que haya quedado fuera del volumen (p. ej. el
-# ~/.gitconfig que el IDE copia del host). El marcador evita duplicados.
+if [ -f /workspace/git/ignore ]; then
+  # El propio workspace ES el repo de dotfiles (este repo). Se usa tal cual:
+  # así se puede editar la config y verla aplicada sin clonar ni pushear.
+  DOTFILES_DIR=/workspace
+  echo "[dotfiles] el workspace es el repo de dotfiles"
+elif [ -n "${DOTFILES_REPO:-}" ]; then
+  if [ -d "${DOTFILES_DIR}/.git" ]; then
+    git -C "$DOTFILES_DIR" pull --ff-only -q 2>/dev/null \
+      && echo "[dotfiles] actualizados desde ${DOTFILES_REPO}" \
+      || echo "[dotfiles] no pude actualizar, uso la copia local"
+  else
+    git clone -q --depth 1 "$DOTFILES_REPO" "$DOTFILES_DIR" 2>/dev/null \
+      && echo "[dotfiles] clonados en ${DOTFILES_DIR}" \
+      || echo "[dotfiles] clone de ${DOTFILES_REPO} falló (¿repo privado sin credenciales?)"
+  fi
+else
+  echo "[dotfiles] DOTFILES_REPO sin definir: se usa la config de git por defecto"
+fi
+
+# ── 3b. git ─────────────────────────────────────────────────────────────────
+touch "$GIT_GLOBAL_CONFIG" 2>/dev/null
+
+# Identidad que el IDE copia del host: se fusiona una sola vez en el volumen.
+# El gitignore ya NO se fusiona: es un archivo versionado del repo y meterle
+# contenido del host lo dejaría modificado en cada arranque.
 merge_once() {
   local src="$1" dst="$2" label="$3" sum marker
   [ -f "$src" ] || return 0
@@ -52,12 +79,27 @@ merge_once() {
   fi
   mv "$src" "${src}.pre-volume"
 }
-merge_once "${HOME_DIR}/.gitconfig"        "$GIT_GLOBAL_CONFIG" "merged-from-gitconfig"
-merge_once "${HOME_DIR}/.gitignore_global" "$GIT_GLOBAL_IGNORE" "merged-from-gitignore-global"
+merge_once "${HOME_DIR}/.gitconfig" "$GIT_GLOBAL_CONFIG" "merged-from-gitconfig"
 
-if [ "$(git config --global core.excludesFile 2>/dev/null)" != "$GIT_GLOBAL_IGNORE" ]; then
-  git config --global --replace-all core.excludesFile "$GIT_GLOBAL_IGNORE" \
-    && echo "[git] core.excludesFile -> ${GIT_GLOBAL_IGNORE}"
+if [ -f "${DOTFILES_DIR}/git/ignore" ]; then
+  GIT_GLOBAL_IGNORE="${DOTFILES_DIR}/git/ignore"
+  # Lo apunta post-create y no el config versionado porque la ruta del clon
+  # solo se conoce aquí (~/.dotfiles o /workspace, según el caso).
+  if [ "$(git config --global core.excludesFile 2>/dev/null)" != "$GIT_GLOBAL_IGNORE" ]; then
+    git config --global --replace-all core.excludesFile "$GIT_GLOBAL_IGNORE" \
+      && echo "[git] core.excludesFile -> ${GIT_GLOBAL_IGNORE}"
+  fi
+fi
+
+# Preferencias versionadas por include, no por copia: así un cambio en el repo
+# se aplica en el siguiente arranque sin fusiones ni duplicados. La identidad
+# se queda en el volumen, que es de esta máquina y no se versiona.
+if [ -f "${DOTFILES_DIR}/git/config" ]; then
+  if ! git config --global --get-all include.path 2>/dev/null \
+       | grep -qxF "${DOTFILES_DIR}/git/config"; then
+    git config --global --add include.path "${DOTFILES_DIR}/git/config" \
+      && echo "[git] include.path -> ${DOTFILES_DIR}/git/config"
+  fi
 fi
 
 # Marca /workspace como seguro: el bind mount suele traer otro owner que el
@@ -75,10 +117,17 @@ if [ -d "${CLAUDE_DIR}/projects" ]; then
   echo "[claude] conversaciones persistidas: $(find "${CLAUDE_DIR}/projects" -name '*.jsonl' 2>/dev/null | wc -l)"
 fi
 echo "[git] config global: ${GIT_GLOBAL_CONFIG} (identidad: $(git config --global user.email 2>/dev/null || echo 'sin configurar'))"
-echo "[git] gitignore global: ${GIT_GLOBAL_IGNORE} ($(grep -cvE '^\s*(#|$)' "$GIT_GLOBAL_IGNORE" 2>/dev/null || echo 0) reglas)"
+if [ -f "$GIT_GLOBAL_IGNORE" ]; then
+  echo "[git] gitignore global: ${GIT_GLOBAL_IGNORE} ($(grep -cvE '^\s*(#|$)' "$GIT_GLOBAL_IGNORE" 2>/dev/null || echo 0) reglas)"
+else
+  echo "[git] gitignore global: sin configurar (no hay dotfiles disponibles)"
+fi
 
 # ── 5. Extensiones del IDE ──────────────────────────────────────────────────
-chmod +x .devcontainer/*.sh 2>/dev/null
+# Sin `chmod +x` sobre .devcontainer/: eso escribe a través del bind mount y
+# deja el repo del proyecto con archivos modificados nada más arrancar, lo que
+# en un repo de cliente es ruido que alguien acaba commiteando sin querer.
+# Además es innecesario: `bash script.sh` no requiere el bit de ejecución.
 bash .devcontainer/install-extensions.sh || echo "[ext] instalación incompleta, continuo"
 
 # ── 6. Hook del proyecto ────────────────────────────────────────────────────
