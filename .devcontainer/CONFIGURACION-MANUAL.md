@@ -1,7 +1,7 @@
 # Configuración manual
 
-Todo lo que el template **no puede** hacer por ti: crear la cuenta de Google
-Drive, autorizar por OAuth, generar las claves de cifrado y guardarlas donde
+Todo lo que el template **no puede** hacer por ti: conectar el almacenamiento
+remoto, autorizar por OAuth, generar las claves de cifrado y guardarlas donde
 sobrevivan a un formateo. Son pasos de una sola vez por máquina.
 
 El resto —contenedores, volúmenes, sidecars de respaldo— es automático y está
@@ -10,7 +10,7 @@ en [`README.md`](README.md).
 > **Léelo entero antes de ejecutar nada.** Hay un punto sin retorno: si
 > pierdes la contraseña del remoto `crypt`, los datos respaldados son
 > **matemáticamente irrecuperables**. No hay soporte, ni recuperación, ni
-> "olvidé mi contraseña". Ni Google ni nadie puede leerlos, que es justo lo
+> "olvidé mi contraseña". Ni el proveedor ni nadie puede leerlos, que es justo
 > que queremos y justo lo que hace que perderlos sea definitivo.
 
 ---
@@ -22,7 +22,7 @@ en [`README.md`](README.md).
 | Docker (OrbStack o Docker Desktop) | Lo ejecuta todo | `docker version` |
 | Terminal con **OSC 52** | Copiar al portapapeles del Mac desde dentro del contenedor | Kitty, WezTerm, Ghostty, Alacritty |
 | **Nerd Font** *(opcional)* | Iconos de Neovim/LazyVim. Solo si pones `NERD_FONT=true` en `.env` | `brew install --cask font-jetbrains-mono-nerd-font` |
-| Cuenta de Google con Drive | Destino del respaldo | — |
+| Cuenta de Dropbox (o B2/R2) | Destino del respaldo | — |
 
 **No hace falta instalar rclone.** Todo corre en contenedores efímeros a
 través de [`rclone-setup.sh`](rclone-setup.sh).
@@ -44,23 +44,41 @@ Los tres van a NordPass. Los dos primeros van **además en papel**.
 
 ---
 
-## Paso 1 — Crear el remoto `gdrive` (OAuth)
+## Paso 1 — Conectar el almacenamiento
 
 ```bash
 cd .devcontainer
 ./rclone-setup.sh config
 ```
 
-Se abre la sesión interactiva de rclone dentro de un contenedor. Responde:
+Se abre la sesión interactiva de rclone dentro de un contenedor.
+
+### Qué proveedor
+
+| Proveedor | Fricción | Ojo con |
+|---|---|---|
+| **Dropbox** (documentado aquí) | Baja: `client_id` en blanco y listo | 2 GB en el plan gratuito |
+| **Backblaze B2 / Cloudflare R2** | La más baja: **sin OAuth**, solo dos claves | No es un "drive" de consumo |
+| **Google Drive** | Alta | Su `client_id` compartido **se retira durante 2026**: obliga a crear una app propia en Google Cloud Console |
+
+> **Por qué no Google por defecto.** rclone avisa al configurarlo: el
+> `client_id` compartido deja de funcionar en 2026, así que hay que crear una
+> app propia (proyecto en Cloud Console, habilitar la API, pantalla de
+> consentimiento y **publicarla** — si se queda en "Prueba", Google caduca el
+> token cada 7 días y el respaldo muere en silencio cada semana).
+>
+> Y el argumento habitual a favor de un drive de consumo —"así miro mis
+> archivos desde la web"— aquí no aplica: va todo cifrado, la web solo enseña
+> nombres ilegibles.
+
+### Dropbox
 
 ```
 n) New remote
-name> gdrive
-Storage> drive                    (Google Drive)
-client_id>                        (vacío: usa el de rclone, sirve de sobra)
+name> dropbox
+Storage> dropbox
+client_id>                        (vacío: aquí SÍ es correcto)
 client_secret>                    (vacío)
-scope> 1                          (drive — acceso completo)
-service_account_file>             (vacío)
 Edit advanced config? n
 Use web browser to automatically authenticate? y
 ```
@@ -72,28 +90,30 @@ contenedor) y escribirá algo así:
 Please go to the following link: http://127.0.0.1:53682/auth?state=...
 ```
 
-**Abre ese enlace tú, en el navegador del Mac.** Autoriza la cuenta. Google
-redirige a `127.0.0.1:53682`, el script tiene montado un puente hasta el
-contenedor y rclone recoge el token solo.
+**Abre ese enlace tú, en el navegador del Mac.** Autoriza. La redirección
+vuelve al contenedor y rclone recoge el token solo.
 
 > **Por qué hace falta el puente.** rclone escucha su callback en la
 > *loopback del contenedor*, mientras que `docker run -p` publica sobre
-> `eth0`. Sin un `socat` que una las dos, la redirección de Google muere en
-> el navegador y el `rclone config` se queda esperando un código que nunca
-> llega. `rclone-setup.sh` lo monta por ti; verificado con rclone v1.75.0
-> sobre OrbStack.
+> `eth0`. Sin un `socat` que una las dos, la redirección muere en el navegador
+> y el `rclone config` se queda esperando un código que nunca llega.
+> `rclone-setup.sh` lo monta por ti; verificado con rclone v1.75.0 sobre
+> OrbStack.
 
-Termina con `Configure this as a Shared Drive? n` y `y) Yes this is OK`.
+Termina con `y) Yes this is OK`.
 
----
+> **Si el token acaba en algún sitio donde no debe** (un pegado en un chat, una
+> captura, un log), revócalo en
+> [dropbox.com/account/connected_apps](https://www.dropbox.com/account/connected_apps)
+> y repite este paso. Cuesta treinta segundos.
 
 ## Paso 2 — Crear el remoto `crypt` (uno por cliente)
 
 **Un crypt por cliente**, con contraseña y salt propios. Así el respaldo de un
 cliente no se puede descifrar con las claves de otro, aunque los dos vivan en
-la misma cuenta de Drive.
+la misma cuenta.
 
-Esto es lo que quedará en Drive, con `<cliente>` y `<proyecto>` legibles y
+Esto es lo que quedará en el remoto, con `<cliente>` y `<proyecto>` legibles y
 todo lo de dentro cifrado:
 
 ```
@@ -110,12 +130,12 @@ acme/                       <- legible
 Un remoto crypt por cada carpeta legible. **Dos son del cliente y se crean
 una sola vez; dos son del proyecto y se repiten en cada proyecto nuevo:**
 
-| Remoto | Carpeta en Drive | Cuándo |
+| Remoto | Carpeta en el remoto | Cuándo |
 |---|---|---|
-| `crypt-<cliente>-claude` | `gdrive:<cliente>/claude` | una vez por cliente |
-| `crypt-<cliente>-knowledge` | `gdrive:<cliente>/knowledge` | una vez por cliente |
-| `crypt-<cliente>-<proyecto>-workspace` | `gdrive:<cliente>/<proyecto>/workspace` | por proyecto |
-| `crypt-<cliente>-<proyecto>-historial` | `gdrive:<cliente>/<proyecto>/historial` | por proyecto |
+| `crypt-<cliente>-claude` | `dropbox:<cliente>/claude` | una vez por cliente |
+| `crypt-<cliente>-knowledge` | `dropbox:<cliente>/knowledge` | una vez por cliente |
+| `crypt-<cliente>-<proyecto>-workspace` | `dropbox:<cliente>/<proyecto>/workspace` | por proyecto |
+| `crypt-<cliente>-<proyecto>-historial` | `dropbox:<cliente>/<proyecto>/historial` | por proyecto |
 
 Los nombres no se configuran en ningún sitio: los sidecars los derivan de
 `CLIENTE` y `PROYECTO` del `.env`. Por eso esos dos valores deben ser
@@ -129,14 +149,14 @@ identificadores simples, sin espacios ni acentos.
 > porque `sync` borra en destino lo que no está en origen.
 
 > **Por qué un remoto por carpeta.** Lo que escribes en `remote>` es ruta
-> normal de Drive y se ve **en claro**; todo lo que el crypt guarda por debajo
+> normal del remoto y se ve **en claro**; todo lo que el crypt guarda por debajo
 > se cifra. Un nombre solo es legible si hay un crypt anclado justo ahí.
 >
-> El precio es que quien acceda a tu Drive ve los nombres de cliente y
+> El precio es que quien acceda a tu cuenta ve los nombres de cliente y
 > proyecto, aunque no pueda leer nada. Si eso te incomoda, usa identificadores
 > neutros (`c1/p1`) y apunta la equivalencia en NordPass.
 
-Las carpetas **no hay que crearlas en Drive**: se crean solas en la primera
+Las carpetas **no hay que crearlas a mano**: se crean solas en la primera
 subida.
 
 Empieza por el primero, en la misma sesión de `rclone config`:
@@ -145,7 +165,7 @@ Empieza por el primero, en la misma sesión de `rclone config`:
 n) New remote
 name> crypt-<cliente>-claude               <- <cliente> = CLIENTE en .env
 Storage> crypt
-remote> gdrive:<cliente>/claude            <- esta ruta se ve EN CLARO
+remote> dropbox:<cliente>/claude           <- esta ruta se ve EN CLARO
 filename_encryption> 1                     (standard: cifra también los nombres)
 directory_name_encryption> 1               (true)
 ```
@@ -168,7 +188,12 @@ n) No, leave this optional password blank
 y/g/n> g
 Bits> 128
 Use this password? y
+
+Edit advanced config? n                    <- n: los valores por defecto valen
 ```
+
+> Si contestas `y` a la config avanzada, rclone te pasea por una docena de
+> opciones que no necesitas tocar. Se sale pulsando Enter en todas.
 
 **Usa `g` en las dos.** Una contraseña inventada por una persona tiene mucha
 menos entropía real que 128 bits aleatorios, y aquí no hay nada que ganar
@@ -210,7 +235,7 @@ Cuando tengas los cuatro, sal con `q) Quit config`. Comprueba:
 ./rclone-setup.sh check
 ```
 
-Debe listar `gdrive:` y los cuatro `crypt-<cliente>-*:`.
+Debe listar `dropbox:` y los cuatro `crypt-<cliente>-*:`.
 
 ### Al empezar un proyecto nuevo del MISMO cliente
 
@@ -218,8 +243,8 @@ Dos remotos más, con las claves de ese cliente (opción `y`, pegando los
 valores de NordPass):
 
 ```
-crypt-<cliente>-<proyecto2>-workspace   -> gdrive:<cliente>/<proyecto2>/workspace
-crypt-<cliente>-<proyecto2>-historial   -> gdrive:<cliente>/<proyecto2>/historial
+crypt-<cliente>-<proyecto2>-workspace   -> dropbox:<cliente>/<proyecto2>/workspace
+crypt-<cliente>-<proyecto2>-historial   -> dropbox:<cliente>/<proyecto2>/historial
 ```
 
 Los de `claude` y `knowledge` ya existen y se reutilizan tal cual: sus
@@ -257,7 +282,7 @@ aquí no existe un botón de "recuperar cuenta".
 Sin este paso, cualquiera con acceso de lectura a tu Mac se lleva el respaldo
 entero. El archivo guarda la contraseña del crypt "ofuscada" con una clave
 **estática y pública** —está en el código fuente de rclone, es reversible en
-un segundo— y el token OAuth de Google ni siquiera eso: va en claro.
+un segundo— y el token OAuth del proveedor ni siquiera eso: va en claro.
 
 En una sesión de `./rclone-setup.sh config`:
 
@@ -277,7 +302,7 @@ Comprueba:
 ./rclone-setup.sh check
 ```
 
-Debe decir `OK: cifrado` y listar `gdrive:` y `crypt-<cliente>:`.
+Debe decir `OK: cifrado` y listar `dropbox:` y `crypt-<cliente>:`.
 
 ---
 
@@ -320,7 +345,7 @@ más adelante sin leer esto:
 ## Paso 6 — Prueba de restauración (no es opcional)
 
 Un respaldo que nunca se ha restaurado no es un respaldo: es una carpeta con
-ruido en Google Drive. Este paso es el único que demuestra que el sistema
+ruido en la nube. Este paso es el único que demuestra que el sistema
 funciona.
 
 ```bash
@@ -329,7 +354,7 @@ funciona.
 
 Arranca una sesión de rclone con un directorio de configuración **vacío y
 temporal**, que ignora por completo tu `rclone.conf`. Ahí reconstruyes
-`gdrive` (OAuth otra vez) y el crypt, y listas el contenido.
+`dropbox` (OAuth otra vez) y los crypt, y listas el contenido.
 
 **Las reglas del simulacro:**
 
@@ -346,14 +371,14 @@ Repítelo cada pocos meses, y sin falta después de cambiar cualquier clave.
 
 ---
 
-## Lo que verás en Google Drive
+## Lo que verás en el remoto
 
 Carpetas y archivos con nombres como `qmt3nk8h1s5v...`. **Es correcto.** Con
 `filename_encryption: standard` se cifran también los nombres, de modo que ni
-Google ni nadie con acceso a la cuenta puede deducir a qué cliente pertenece
+el proveedor ni nadie con acceso a la cuenta puede deducir a qué cliente pertenece
 un archivo, cómo se llama o de qué trata.
 
-El corolario incómodo: **la interfaz web de Drive no te sirve para recuperar
+El corolario incómodo: **la interfaz web del proveedor no te sirve para recuperar
 nada**. La única vista legible pasa por rclone con las claves. Es exactamente
 el motivo del paso 6.
 

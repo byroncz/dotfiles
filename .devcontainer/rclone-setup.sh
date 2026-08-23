@@ -35,7 +35,11 @@ _inner_script() {
 set -e
 if ! command -v socat >/dev/null 2>&1; then apk add -q socat; fi
 IP="$(ip -4 addr show eth0 | awk '/inet /{print $2}' | cut -d/ -f1)"
-socat "TCP-LISTEN:53682,fork,reuseaddr,bind=${IP}" TCP:127.0.0.1:53682 &
+# stderr a /dev/null: en cuanto rclone recibe el código cierra su servidor,
+# y el navegador suele mandar una conexión más (el favicon). socat la
+# intenta reenviar y escupe "Connection refused", que parece un fallo grave
+# y no lo es: para entonces la autenticación ya ha terminado bien.
+socat "TCP-LISTEN:53682,fork,reuseaddr,bind=${IP}" TCP:127.0.0.1:53682 2>/dev/null &
 sleep 1
 exec rclone "$@"
 INNER
