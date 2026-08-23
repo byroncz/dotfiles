@@ -36,6 +36,13 @@ services:
       # que no dependa del nombre del directorio local (Problema 9b).
       - ..:/workspace:cached
 
+      # VOLUMEN, nunca un bind del ~/.claude del host. Montar el directorio
+      # del host es el antipatrón que este template existe para evitar: todos
+      # los proyectos acaban compartiendo login, historial y .claude.json, el
+      # contexto de un cliente aparece en la sesión de otro, y el devcontainer
+      # deja de ser reproducible porque depende del estado del portátil.
+      # Aislado y vacío al empezar: cuesta un /login por cliente, y a cambio
+      # lo que se respalda a rclone es solo de este cliente.
       - claude-config:/home/${USERNAME:-vscode}/.claude
       - git-home:/home/${USERNAME:-vscode}/.config/git
       - bash-history:/commandhistory
