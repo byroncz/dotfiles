@@ -93,13 +93,37 @@ Termina con `Configure this as a Shared Drive? n` y `y) Yes this is OK`.
 cliente no se puede descifrar con las claves de otro, aunque los dos vivan en
 la misma cuenta de Drive.
 
-En la misma sesión de `rclone config`:
+Son **cuatro** remotos crypt, uno por volumen respaldado, que comparten las
+mismas claves pero apuntan a carpetas distintas:
+
+| Remoto | Carpeta en Drive |
+|---|---|
+| `crypt-<cliente>-claude` | `gdrive:respaldo-<cliente>/claude` |
+| `crypt-<cliente>-workspace` | `gdrive:respaldo-<cliente>/workspace` |
+| `crypt-<cliente>-knowledge` | `gdrive:respaldo-<cliente>/knowledge` |
+| `crypt-<cliente>-historial` | `gdrive:respaldo-<cliente>/historial` |
+
+> **Por qué cuatro y no uno.** Lo que escribes en `remote>` es una ruta normal
+> de Drive y se ve **en claro**; todo lo que el crypt guarda por debajo se
+> cifra. Con un solo crypt, las cuatro subcarpetas quedarían cifradas y en
+> Drive verías cuatro nombres ilegibles sin saber cuál es cuál. Con uno por
+> volumen, la carpeta de arriba es legible y el contenido sigue cifrado: si un
+> día tienes que recuperar un volumen concreto, sabes a dónde ir.
+>
+> El precio es que alguien con acceso a tu Drive ve el nombre del cliente y
+> las cuatro categorías, aunque no pueda leer nada. Si eso te incomoda, usa un
+> identificador neutro (`respaldo-c1`) y apunta la equivalencia en NordPass.
+
+Las carpetas **no hay que crearlas en Drive**: se crean solas en la primera
+subida.
+
+Empieza por el primero, en la misma sesión de `rclone config`:
 
 ```
 n) New remote
-name> crypt-<cliente>                      <- el mismo valor que CLIENTE en .env
+name> crypt-<cliente>-claude               <- <cliente> = CLIENTE en .env
 Storage> crypt
-remote> gdrive:respaldo-<cliente>          <- carpeta destino DENTRO de gdrive
+remote> gdrive:respaldo-<cliente>/claude   <- esta ruta se ve EN CLARO
 filename_encryption> 1                     (standard: cifra también los nombres)
 directory_name_encryption> 1               (true)
 ```
@@ -135,9 +159,42 @@ recordándola de memoria: va a vivir en un gestor de contraseñas de todos modos
 > termine y cifres el `rclone.conf`, recuperarlos requiere la contraseña del
 > `.conf`; y si esa también se pierde, se acabó.
 
-Repite este paso por cada cliente: `crypt-otrocliente` → `gdrive:respaldo-otrocliente`.
+### Los otros tres remotos
 
-Sal con `q) Quit config`.
+Repite `n) New remote` tres veces más, cambiando solo el nombre y la carpeta
+(`-workspace`, `-knowledge`, `-historial`).
+
+**Con una diferencia importante:** en estos tres, cuando pregunte por la
+contraseña y el salt, elige **`y) Yes, type in my own password`** y pega
+**los mismos valores** que generaste en el primero.
+
+```
+y/g/q> y
+Enter the password:            <- pega la contraseña del primer crypt
+y/g/n> y
+Enter the password:            <- pega el salt del primer crypt
+```
+
+Así los cuatro comparten un único juego de claves: un secreto que guardar, no
+cuatro. Si generas claves nuevas en cada uno acabarás con ocho secretos y la
+probabilidad de perder uno se multiplica.
+
+> No uses `rclone config create ... password=...` para acelerar esto: la
+> contraseña quedaría en el historial del shell en texto plano.
+
+Cuando tengas los cuatro, sal con `q) Quit config`. Comprueba:
+
+```bash
+./rclone-setup.sh check
+```
+
+Debe listar `gdrive:` y los cuatro `crypt-<cliente>-*:`.
+
+### Otros clientes
+
+Cada cliente lleva su propio juego de cuatro remotos y **sus propias claves**,
+generadas de nuevo con `g`. Ese es el punto: el respaldo de un cliente no se
+puede descifrar con las claves de otro.
 
 ---
 

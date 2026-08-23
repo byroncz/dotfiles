@@ -128,7 +128,8 @@ services:
         required: false
     environment:
       NOMBRE: "claude"
-      DESTINO: "${CRYPT_REMOTE:-crypt}:claude"
+      DESTINO: "${CRYPT_PREFIX:-crypt}-claude:datos"
+      DESTINO_VERSIONES: "${CRYPT_PREFIX:-crypt}-claude:versiones"
       INTERVALO: "30"
       MAX_INTERVAL: "900"
 
@@ -147,7 +148,8 @@ services:
         required: false
     environment:
       NOMBRE: "workspace"
-      DESTINO: "${CRYPT_REMOTE:-crypt}:workspace"
+      DESTINO: "${CRYPT_PREFIX:-crypt}-workspace:datos"
+      DESTINO_VERSIONES: "${CRYPT_PREFIX:-crypt}-workspace:versiones"
       # Más espaciado que el resto: el código cambia en ráfagas (un build,
       # un `npm install`) y no tiene sentido subir en mitad de una.
       INTERVALO: "120"
@@ -171,7 +173,8 @@ services:
         required: false
     environment:
       NOMBRE: "knowledge"
-      DESTINO: "${CRYPT_REMOTE:-crypt}:knowledge"
+      DESTINO: "${CRYPT_PREFIX:-crypt}-knowledge:datos"
+      DESTINO_VERSIONES: "${CRYPT_PREFIX:-crypt}-knowledge:versiones"
       INTERVALO: "60"
       MAX_INTERVAL: "1800"
 
@@ -191,7 +194,8 @@ services:
       NOMBRE: "historial"
       # Sidecar propio en vez de colgar del de Claude: el historial debe
       # poder leerlo cualquier agente (Codex, OpenCode), no solo Claude.
-      DESTINO: "${CRYPT_REMOTE:-crypt}:historial"
+      DESTINO: "${CRYPT_PREFIX:-crypt}-historial:datos"
+      DESTINO_VERSIONES: "${CRYPT_PREFIX:-crypt}-historial:versiones"
       INTERVALO: "120"
       MAX_INTERVAL: "3600"
 

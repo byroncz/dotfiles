@@ -5,8 +5,10 @@
 #  Un solo script para TODOS los sidecars de respaldo: lo que cambia entre
 #  uno y otro son estas variables, no el código.
 #
-#    NOMBRE          etiqueta para los logs                     (obligatoria)
-#    DESTINO         remoto rclone de destino, p. ej. crypt-x:claude
+#    NOMBRE            etiqueta para los logs                   (obligatoria)
+#    DESTINO           remoto rclone de destino, p. ej. crypt-x:datos
+#    DESTINO_VERSIONES dónde apartar las versiones anteriores
+#                      (por defecto: DESTINO + "-versiones")
 #    ORIGEN          directorio a vigilar                       (/origen)
 #    INTERVALO       segundos entre comprobaciones              (60)
 #    MAX_INTERVAL    sube aunque no haya cambios, cada N seg    (3600)
@@ -54,7 +56,9 @@ fi
 # sidecar sube el borrado, la copia previa sigue estando.
 sync_now() {
   motivo="$1"
-  versiones="${DESTINO}-versiones/$(date '+%Y-%m-%d_%H')"
+  # Base configurable: con un crypt por volumen, DESTINO y las versiones son
+  # dos subcarpetas hermanas dentro del MISMO crypt, no dos rutas con sufijo.
+  versiones="${DESTINO_VERSIONES:-${DESTINO}-versiones}/$(date '+%Y-%m-%d_%H')"
   log "sincronizando (${motivo}) -> ${DESTINO}"
   inicio="$(date +%s)"
   # shellcheck disable=SC2086
