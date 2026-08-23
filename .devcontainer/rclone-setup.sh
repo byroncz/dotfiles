@@ -8,7 +8,7 @@
 #
 #    ./rclone-setup.sh config        sesión interactiva de `rclone config`
 #    ./rclone-setup.sh check         estado: remotos, cifrado del .conf
-#    ./rclone-setup.sh ls <remoto>   lista un remoto (p. ej. crypt-capta:)
+#    ./rclone-setup.sh ls <remoto>   lista un remoto (p. ej. crypt-<cliente>:)
 #    ./rclone-setup.sh restore-test  simulacro de restauración en limpio
 #
 #  Los pasos y el porqué de cada uno están en CONFIGURACION-MANUAL.md.
@@ -110,7 +110,7 @@ cmd_check() {
 
 cmd_ls() {
   local remoto="${1:-}"
-  [ -n "$remoto" ] || die "uso: $0 ls <remoto:ruta>   (p. ej. crypt-capta:claude)"
+  [ -n "$remoto" ] || die "uso: $0 ls <remoto:ruta>   (p. ej. crypt-<cliente>:claude)"
   run_rclone 0 ls "$remoto"
 }
 

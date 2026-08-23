@@ -97,9 +97,9 @@ En la misma sesión de `rclone config`:
 
 ```
 n) New remote
-name> crypt-capta                          <- el nombre lleva el cliente
+name> crypt-<cliente>                      <- el mismo valor que CLIENTE en .env
 Storage> crypt
-remote> gdrive:respaldo-capta              <- carpeta destino DENTRO de gdrive
+remote> gdrive:respaldo-<cliente>          <- carpeta destino DENTRO de gdrive
 filename_encryption> 1                     (standard: cifra también los nombres)
 directory_name_encryption> 1               (true)
 ```
@@ -149,8 +149,8 @@ Antes de seguir. No después, no "luego lo apunto".
 
 | Entrada | Contenido |
 |---|---|
-| `rclone crypt-capta — password` | La contraseña del paso 2 |
-| `rclone crypt-capta — salt` | El salt del paso 2 |
+| `rclone crypt-<cliente> — password` | La contraseña del paso 2 |
+| `rclone crypt-<cliente> — salt` | El salt del paso 2 |
 | `rclone.conf — password` | La del paso 4 (aún no la tienes) |
 
 **En papel**, la contraseña y el salt de cada crypt. Guardado físicamente
@@ -185,7 +185,7 @@ Comprueba:
 ./rclone-setup.sh check
 ```
 
-Debe decir `OK: cifrado` y listar `gdrive:` y `crypt-capta:`.
+Debe decir `OK: cifrado` y listar `gdrive:` y `crypt-<cliente>:`.
 
 ---
 
@@ -247,7 +247,7 @@ temporal**, que ignora por completo tu `rclone.conf`. Ahí reconstruyes
 2. Lo ideal es hacerlo en **otra máquina**, o al menos con otro usuario de
    macOS. En tu portátil de siempre es fácil que algo funcione por una razón
    que no estarás replicando el día que importe.
-3. Al terminar, `rclone ls crypt-capta:workspace` debe devolver archivos con
+3. Al terminar, `rclone ls crypt-<cliente>:workspace` debe devolver archivos con
    nombres legibles.
 
 Repítelo cada pocos meses, y sin falta después de cambiar cualquier clave.
@@ -303,25 +303,40 @@ portátil.
 
 ---
 
-## Apéndice B — Migrar el volumen de Claude Code
+## Apéndice B — Adoptar un volumen de Claude Code que ya existía
 
-El esquema anterior guardaba la sesión de Claude Code en un volumen con otro
-nombre. El nuevo usa `claude-${CLIENTE}`. Si el volumen viejo sigue por ahí,
-cópialo **antes** de levantar el devcontainer nuevo — si no, arrancará vacío y
-pedirá `/login`:
+Este template nombra el volumen de Claude Code como `claude-${CLIENTE}`. Si en
+esa máquina ya había un devcontainer con otro esquema de nombres, su volumen
+queda huérfano: al levantar el nuevo, Docker crea uno vacío y Claude Code pide
+`/login` como si fuera la primera vez. El historial no se ha perdido — sigue en
+el volumen antiguo — pero hay que copiarlo.
+
+Localiza el volumen antiguo (el que contenga `.credentials.json`):
 
 ```bash
-# 1. Copia de seguridad primero (contiene credenciales: trátala como un secreto)
-CLAUDE_VOLUME=capta-claude-config ./claude-volume.sh backup ~/backups
+docker volume ls
+docker run --rm -v <volumen-antiguo>:/d:ro alpine:3.20 \
+  sh -c 'ls -A /d; [ -f /d/.credentials.json ] && echo "<- este es"'
+```
 
-# 2. Migración al nombre nuevo
-docker volume create claude-capta
-docker run --rm -v capta-claude-config:/src:ro -v claude-capta:/dst alpine:3.20 \
+Y cópialo, sustituyendo `<volumen-antiguo>` y `<cliente>`:
+
+```bash
+# 1. Copia de seguridad primero. Contiene credenciales: trátala como un secreto.
+CLAUDE_VOLUME=<volumen-antiguo> ./claude-volume.sh backup ~/backups
+
+# 2. Copia al nombre nuevo. El origen va en :ro, así que el volumen antiguo
+#    no se toca y siempre se puede repetir.
+docker volume create claude-<cliente>
+docker run --rm -v <volumen-antiguo>:/src:ro -v claude-<cliente>:/dst alpine:3.20 \
   sh -c 'cp -a /src/. /dst/ && chown -R 1000:1000 /dst'
 
 # 3. Comprobación: debe decir "credenciales: sí"
-CLAUDE_VOLUME=claude-capta ./claude-volume.sh info
+CLAUDE_VOLUME=claude-<cliente> ./claude-volume.sh info
 ```
+
+El `chown` a `1000:1000` no es decorativo: el contenedor corre como usuario no
+root con ese UID, y sin él Claude Code no puede escribir en su propio volumen.
 
 **No ejecutes `docker volume prune` hasta haber comprobado el paso 3.** Se
 lleva por delante cualquier volumen sin contenedor asociado, y con él el login
