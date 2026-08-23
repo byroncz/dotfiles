@@ -106,6 +106,23 @@ fi
 # usuario del container y git se niega a operar ("dubious ownership").
 git config --global --add safe.directory /workspace 2>/dev/null
 
+# ── 3c. Neovim ──────────────────────────────────────────────────────────────
+# Se ENLAZA, no se copia: así editar la config en el repo se ve en el
+# siguiente arranque de nvim, sin resincronizar nada ni arriesgar que la
+# copia del container y la del repo diverjan.
+if [ -f "${DOTFILES_DIR}/nvim/init.lua" ] && command -v nvim >/dev/null 2>&1; then
+  mkdir -p "${HOME_DIR}/.config"
+  ENLACE="${HOME_DIR}/.config/nvim"
+  if [ -L "$ENLACE" ] || [ ! -e "$ENLACE" ]; then
+    ln -sfn "${DOTFILES_DIR}/nvim" "$ENLACE"
+    echo "[nvim] ~/.config/nvim -> ${DOTFILES_DIR}/nvim"
+  else
+    # Existe y no es un enlace: alguien puso ahí una config a mano. No se
+    # pisa; se avisa.
+    echo "[nvim] AVISO: ${ENLACE} existe y no es un enlace; lo dejo como está"
+  fi
+fi
+
 # ── 4. Estado de la persistencia ────────────────────────────────────────────
 echo "[claude] CLAUDE_CONFIG_DIR=${CLAUDE_DIR}"
 if [ -e "${CLAUDE_DIR}/.credentials.json" ]; then

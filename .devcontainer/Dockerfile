@@ -2,14 +2,19 @@
 #  Template de devcontainer. Todo lo específico de un proyecto se pasa por
 #  build args desde devcontainer.json; este archivo no se toca.
 #
-#  Base por defecto: debian:bookworm-slim (~27 MB comprimido). El CLI de
-#  Claude Code se instala como binario nativo, así que NO hace falta Node.
+#  Base por defecto: debian:trixie-slim. El CLI de Claude Code se instala
+#  como binario nativo, así que NO hace falta Node.
+#
+#  Trixie y no bookworm por la glibc: bookworm trae 2.36 y muchos binarios
+#  precompilados de hoy piden 2.39 o más. El caso concreto que lo forzó fue
+#  el `tree-sitter` que instala Mason, que en bookworm falla con
+#  "version GLIBC_2.39 not found" y deja Neovim sin parsers. Trixie da 2.41.
 #
 #  Ejemplos de override en devcontainer.json -> build.args:
 #    "BASE_IMAGE": "python:3.11-slim", "PIP_PACKAGES": "boto3 pandas"
 #    "EXTRA_APT": "postgresql-client", "INSTALL_AWSCLI": "true"
 # ─────────────────────────────────────────────────────────────────────────
-ARG BASE_IMAGE=debian:bookworm-slim
+ARG BASE_IMAGE=debian:trixie-slim
 FROM ${BASE_IMAGE}
 
 ARG USERNAME=vscode
@@ -39,6 +44,40 @@ RUN if [ "$INSTALL_AWSCLI" = "true" ]; then \
       && unzip -q /tmp/awscliv2.zip -d /tmp \
       && /tmp/aws/install \
       && rm -rf /tmp/awscliv2.zip /tmp/aws ; \
+    fi
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Neovim + herramientas de edición (opcional, pero por defecto sí).
+#
+#  Del tarball oficial, NO de apt: Debian trae Neovim 0.7.2 (bookworm), muy
+#  por debajo del mínimo que pide LazyVim. El tarball son 11 MB y da 0.12.x.
+#  Tarball y no AppImage: el AppImage necesita FUSE dentro del container.
+#
+#  Cuesta unos 300 MB, casi todos de build-essential, que hace falta para
+#  compilar telescope-fzf-native y algunos parsers de treesitter. Un
+#  proyecto que no quiera nada de esto pone INSTALL_NVIM=false y se queda
+#  con la base mínima.
+# ─────────────────────────────────────────────────────────────────────────
+ARG INSTALL_NVIM=true
+ARG NVIM_VERSION=v0.12.4
+RUN if [ "$INSTALL_NVIM" = "true" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends \
+           ripgrep fd-find tmux build-essential \
+      && rm -rf /var/lib/apt/lists/* \
+      && case "$(uname -m)" in \
+           aarch64) NVARCH=arm64 ;; \
+           x86_64)  NVARCH=x86_64 ;; \
+           *) echo "arquitectura $(uname -m) sin binario oficial de Neovim" >&2; exit 1 ;; \
+         esac \
+      && curl -fsSL "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-${NVARCH}.tar.gz" \
+           -o /tmp/nvim.tar.gz \
+      && tar xzf /tmp/nvim.tar.gz -C /opt \
+      && mv "/opt/nvim-linux-${NVARCH}" /opt/nvim \
+      && ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim \
+      && rm /tmp/nvim.tar.gz \
+      # En Debian el binario se llama fdfind; telescope y LazyVim buscan `fd`.
+      && ln -s "$(command -v fdfind)" /usr/local/bin/fd ; \
     fi
 
 # Paquetes de Python (opcional; requiere una BASE_IMAGE con pip)
@@ -74,6 +113,8 @@ RUN mkdir -p "/home/$USERNAME/.claude" \
       "/home/$USERNAME/.antigravity-ide-server/extensions" \
       "/home/$USERNAME/basic-memory" \
       "/home/$USERNAME/.basic-memory" \
+      "/home/$USERNAME/.local/share/nvim" \
+      "/home/$USERNAME/.local/state/nvim" \
       /commandhistory \
  && touch /commandhistory/.bash_history \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory \

@@ -17,11 +17,12 @@ services:
       args:
         # Base por defecto: 27 MB comprimido. Cambiar solo si el proyecto
         # necesita otro runtime (p. ej. "python:3.11-slim", "node:22-slim").
-        BASE_IMAGE: "${BASE_IMAGE:-debian:bookworm-slim}"
+        BASE_IMAGE: "${BASE_IMAGE:-debian:trixie-slim}"
         USERNAME: "${USERNAME:-vscode}"
         EXTRA_APT: "${EXTRA_APT:-}"
         INSTALL_AWSCLI: "${INSTALL_AWSCLI:-false}"
         PIP_PACKAGES: "${PIP_PACKAGES:-}"
+        INSTALL_NVIM: "${INSTALL_NVIM:-true}"
 
     container_name: "${CLIENTE:-local}-${PROYECTO:-dev}"
 
@@ -61,6 +62,12 @@ services:
       - basic-memory:/home/${USERNAME:-vscode}/basic-memory
       - basic-memory-index:/home/${USERNAME:-vscode}/.basic-memory
 
+      # Plugins y estado de Neovim. NO se respaldan: se reconstruyen
+      # enteros desde nvim/ de este repo. El volumen solo evita volver a
+      # descargarlos en cada rebuild.
+      - nvim-data:/home/${USERNAME:-vscode}/.local/share/nvim
+      - nvim-state:/home/${USERNAME:-vscode}/.local/state/nvim
+
     environment:
       DISABLE_AUTOUPDATER: "1"
       # Sin esto, ~/.claude.json queda FUERA del volumen y en cada rebuild se
@@ -80,6 +87,9 @@ services:
       # git, y más adelante nvim). Vacío = el container usa los valores por
       # defecto de git. Ver .env.example.
       DOTFILES_REPO: "${DOTFILES_REPO:-}"
+      # Iconos de LazyVim. Apagado por defecto: sin la fuente instalada
+      # en la terminal se ven cuadraditos. Ver .env.example.
+      NERD_FONT: "${NERD_FONT:-false}"
 
     # Puertos de la aplicación del proyecto. Con compose, `forwardPorts` y
     # `appPort` de devcontainer.json se ignoran: los puertos van aquí.
@@ -226,3 +236,10 @@ volumes:
     name: "basic-memory-${CLIENTE:-local}"
   basic-memory-index:
     name: "basic-memory-index-${CLIENTE:-local}"
+
+  # Por proyecto, no globales: varios devcontainers pueden estar abiertos
+  # a la vez y lazy.nvim no espera que dos procesos escriban su estado.
+  nvim-data:
+    name: "nvim-data-${CLIENTE:-local}-${PROYECTO:-dev}"
+  nvim-state:
+    name: "nvim-state-${CLIENTE:-local}-${PROYECTO:-dev}"

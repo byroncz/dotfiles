@@ -114,7 +114,7 @@ python -c "import nbformat, boto3; print('stack OK')"
 
 | Volumen | Montado en | Contenido |
 |---|---|---|
-| `claude-home` | `~/.claude` | Transcripciones (`projects/*.jsonl`), `.credentials.json`, `settings.json`, `history.jsonl`, `plugins/`, `.claude.json` |
+| `claude-<cliente>` | `~/.claude` | Transcripciones (`projects/*.jsonl`), `.credentials.json`, `settings.json`, `history.jsonl`, `plugins/`, `.claude.json` |
 | `git-home` | `~/.config/git` | **gitignore global** (`ignore`) y config global de git (`config`) |
 | `<proyecto>-bash-history` | `/commandhistory` | Historial de bash |
 | `<proyecto>-ide-extensions` | `~/.antigravity-ide-server/extensions` | Extensiones de Open VSX |
@@ -143,6 +143,60 @@ Tres detalles hacen que la persistencia funcione de verdad:
 `post-create.sh` fusiona además una sola vez cualquier `~/.claude.json`,
 `~/.gitconfig` o `~/.gitignore_global` que quede fuera del volumen (por ejemplo
 el que el IDE copia del host) y deja el original como `.pre-volume`.
+
+## Neovim
+
+Neovim 0.12 con [LazyVim](https://www.lazyvim.org/), más ripgrep, fd, tmux y
+build-essential. Se instala con `INSTALL_NVIM=true` (por defecto); un proyecto
+que no lo quiera lo pone a `false` y se ahorra unos 300 MB.
+
+**Del tarball oficial, no de apt.** Debian bookworm empaqueta Neovim 0.7.2,
+años por debajo del mínimo de LazyVim. El tarball son 11 MB. Se usa tarball y
+no AppImage porque el AppImage necesita FUSE dentro del container.
+
+**La base es `debian:trixie-slim`, no bookworm.** Por la glibc: bookworm trae
+2.36 y bastantes binarios precompilados actuales piden 2.39 o más. El caso que
+lo forzó fue el `tree-sitter` que instala Mason, que en bookworm muere con
+`version GLIBC_2.39 not found` y deja Neovim sin parsers. Trixie da 2.41.
+
+### La config se enlaza, no se hornea
+
+`nvim/` vive en este repo y `post-create.sh` enlaza `~/.config/nvim` ahí.
+
+No se hornea en la imagen porque entonces cambiar un atajo obligaría a
+reconstruirla. No se copia porque la copia del container y la del repo
+divergen en cuanto editas una de las dos. Enlazada, editas el repo y lo ves en
+el siguiente arranque de `nvim`.
+
+Cuando el workspace **es** este repo, se enlaza directamente a `/workspace/nvim`.
+En cualquier otro proyecto, `post-create.sh` clona `DOTFILES_REPO` en
+`~/.dotfiles` y enlaza ahí — **nunca dentro del repo del cliente**, que no
+tiene por qué cargar con la configuración de editor de nadie.
+
+### Plugins
+
+Van a los volúmenes `nvim-data-<cliente>-<proyecto>` y `nvim-state-...`, así
+que un rebuild no los vuelve a descargar. **No se respaldan a rclone**: se
+reconstruyen enteros desde este repo con `nvim --headless "+Lazy! sync" +qa`.
+
+Son por proyecto y no globales porque puedes tener varios devcontainers
+abiertos a la vez, y lazy.nvim no espera que dos procesos escriban su estado.
+
+### Iconos
+
+`NERD_FONT=false` por defecto: los iconos de LazyVim son de Nerd Font y, sin
+la fuente instalada **y configurada en la terminal**, se ven cuadraditos. La
+funcionalidad —LSP, diagnósticos, búsqueda— es idéntica; esto es solo
+estético. Ponlo a `true` cuando tu terminal la tenga.
+
+### Portapapeles
+
+Dentro de un container no hay X ni `pbcopy`, así que `nvim/lua/config/options.lua`
+configura OSC 52: un código de escape que interpreta la propia terminal. Copiar
+funciona; pegar usa el registro interno de Neovim, porque muchas terminales
+desactivan la lectura por OSC 52 por seguridad. Requiere Kitty, WezTerm,
+Ghostty o Alacritty.
+
 
 ## Backup y restauración
 
