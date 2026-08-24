@@ -135,7 +135,9 @@ python -c "import nbformat, boto3; print('stack OK')"
 | `bash-history-<cliente>-<proyecto>` | `/commandhistory` | Historial de bash |
 | `ide-extensions-<cliente>-<proyecto>` | `~/.antigravity-ide-server/extensions` | Extensiones de Open VSX |
 | `basic-memory-<cliente>` | `~/basic-memory` | Knowledge acumulado sobre el cliente |
+| `basic-memory-index-<cliente>` | `~/.basic-memory` | Índice SQLite y `config.json` de Basic Memory |
 | `nvim-data-…` / `nvim-state-…` | `~/.local/{share,state}/nvim` | Plugins y estado de lazy.nvim |
+| `uv-cache-<cliente>` | `~/.cache/uv` | Caché de uv e intérpretes de Python descargados |
 
 `claude-<cliente>` va por **cliente**, no por proyecto ni global: los
 transcripts de un cliente no deben acabar en el respaldo cifrado de otro. El
@@ -161,6 +163,92 @@ Tres detalles hacen que la persistencia funcione de verdad:
 `provision/post-create.sh` fusiona además una sola vez cualquier `~/.claude.json`,
 `~/.gitconfig` o `~/.gitignore_global` que quede fuera del volumen (por ejemplo
 el que el IDE copia del host) y deja el original como `.pre-volume`.
+
+## Ecosistema de agentes
+
+Cinco herramientas, cada una tras su build arg, todas a `true` por defecto.
+Un proyecto que no las quiera las apaga en `.env` y no paga ni un byte.
+
+| Build arg | Instala | Cuesta |
+|---|---|---|
+| `INSTALL_UV` | `uv` (Astral) | ~35 MB |
+| `INSTALL_BASIC_MEMORY` | `basic-memory` + servidor MCP | ~150 MB (trae su propio Python) |
+| `INSTALL_OPENSPEC` | `openspec` (`@fission-ai/openspec`) | Node 22, ~120 MB, compartidos |
+| `INSTALL_BACKLOG` | `backlog` (`backlog.md`) | — |
+| `INSTALL_NOTION_MCP` | `@notionhq/notion-mcp-server` | — |
+
+Las tres últimas vienen por npm y arrastran Node, que **solo se instala si
+alguna de las tres está a `true`**. Apagadas las tres, no hay Node en la imagen.
+
+### Python con uv, no con `PIP_PACKAGES`
+
+**`uv` sustituye a `PIP_PACKAGES`**, que se mantiene solo por compatibilidad y
+no debería usarse en proyectos nuevos.
+
+El motivo no es la velocidad: es que `PIP_PACKAGES` **exige una `BASE_IMAGE`
+con pip**. Instalar un paquete de Python obligaba a cambiar la imagen base
+entera a `python:3.11-slim`, lo que a su vez fija la versión de Python para
+todo el container. `uv` se trae su propio intérprete, así que funciona sobre la
+base mínima de 27 MB y cada proyecto elige su versión de Python sin tocar nada
+más:
+
+```bash
+uv venv --python 3.12          # se descarga el intérprete si no está
+uv pip install pandas boto3
+uv run script.py               # sin activar el venv
+```
+
+Dos rutas van a un volumen, las dos declaradas explícitas en el compose:
+
+- `UV_CACHE_DIR` → `~/.cache/uv`, las ruedas y fuentes descargadas.
+- `UV_PYTHON_INSTALL_DIR` → `~/.cache/uv/python`, los **intérpretes**. Por
+  defecto aterrizarían en `~/.local/share/uv/python`, que no es un volumen: se
+  perdía un CPython de 60 MB en cada rebuild.
+
+Ese volumen (`uv-cache-<cliente>`) **no se respalda**: es reconstruible por
+definición, se vuelve a llenar descargando. Va por cliente y no por proyecto
+porque uv sí está pensado para que varios procesos compartan caché.
+
+### Basic Memory
+
+Conocimiento en markdown, local, fuera de `~/.claude` a propósito: es del
+proyecto, no del agente, y Codex u OpenCode deben poder leer el mismo
+directorio. Se declara como servidor MCP en [`mcp/servers.json`](mcp/servers.json).
+
+`provision/post-create.sh` registra el proyecto en el primer arranque. Dos
+cosas que conviene saber antes de tocarlo:
+
+- El proyecto **no puede llamarse `main`**. Ese es el nombre implícito por
+  defecto y `project add main` cortocircuita: escribe `config.json`, devuelve
+  «already exists» y nunca inserta en el índice SQLite. El estado queda partido
+  —la config dice que existe, la base dice que no hay ninguno— y ni `add` ni
+  `remove` lo arreglan, porque cada uno consulta una mitad distinta. El
+  template usa `conocimiento`.
+- La fuente de verdad es `basic-memory tool list-projects` (pregunta a la API),
+  **no** `basic-memory project list` (lee `config.json`). Con el estado partido,
+  el segundo muestra el proyecto y todo parece correcto.
+
+El índice se reconstruye con `basic-memory reindex`; `basic-memory sync` ya no
+existe en 0.23. `basic-memory status` y `basic-memory doctor` dicen si el
+índice y los archivos coinciden.
+
+### OpenSpec y Backlog.md
+
+> **Sus artefactos van en el repo del CLIENTE, no en este template.**
+
+`openspec init` crea `openspec/` y `backlog init` crea `backlog/` **en el
+directorio donde los ejecutes**. Ejecutados en `/workspace` de un proyecto,
+esas carpetas son del proyecto: se versionan en su repo, y las revisa y
+commitea quien trabaja ahí. Este template solo instala los binarios; no trae
+ni debe traer un `openspec/` o un `backlog/` propio.
+
+### Notion
+
+El servidor MCP oficial queda **instalado pero sin configurar**: sin token, sin
+workspace y sin permisos. Está declarado en `mcp/servers.json` con
+`"enabled": false`, así que no se genera en ninguna config de MCP hasta que
+alguien lo active a conciencia. El token, cuando llegue, va **fuera del repo**,
+como el resto de los secretos.
 
 ## Neovim
 

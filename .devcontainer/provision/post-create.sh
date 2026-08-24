@@ -4,6 +4,7 @@
 #    1. Permisos de los volúmenes persistentes
 #    2. Estado de Claude Code dentro de su volumen
 #    3. git: config global y gitignore GLOBAL dentro de su volumen
+#    3d. Basic Memory: registrar el proyecto de conocimiento
 #    4. Resumen de la persistencia en el log de creación
 #    5. Extensiones del IDE
 #    6. Hook opcional del proyecto: .devcontainer/provision/post-create.local.sh
@@ -124,6 +125,57 @@ if [ -f "${DOTFILES_DIR}/nvim/init.lua" ] && command -v nvim >/dev/null 2>&1; th
     # Existe y no es un enlace: alguien puso ahí una config a mano. No se
     # pisa; se avisa.
     echo "[nvim] AVISO: ${ENLACE} existe y no es un enlace; lo dejo como está"
+  fi
+fi
+
+# ── 3d. Basic Memory ────────────────────────────────────────────────────────
+# basic-memory 0.23 no escribe NADA hasta que existe un proyecto registrado:
+# sin esto, `write-note` falla con "Project not found" y la nota se pierde.
+#
+# Dos cosas que solo se ven ejecutándolo:
+#
+#   1. El proyecto NO se puede llamar "main". Ese es el nombre implícito por
+#      defecto, y `project add main` cortocircuita: escribe la entrada en
+#      config.json, devuelve "already exists" y NUNCA la inserta en el índice
+#      SQLite. El estado queda partido en dos —la config dice que el proyecto
+#      existe, la base dice que no hay ninguno— y a partir de ahí ni `add` ni
+#      `remove` lo arreglan, porque cada uno consulta una mitad distinta.
+#
+#   2. La fuente de verdad es `basic-memory tool list-projects`, que pregunta
+#      a la API, y NO `basic-memory project list`, que lee config.json. Con el
+#      estado partido, `project list` muestra el proyecto y todo parece bien.
+#
+# La ruta se pasa explícita y no se deja deducir de $HOME, por la misma razón
+# que BASIC_MEMORY_HOME está en el compose: si el proyecto apuntara a otro
+# sitio, el conocimiento se escribiría fuera del volumen respaldado.
+BM_PROYECTO="conocimiento"
+if command -v basic-memory >/dev/null 2>&1; then
+  BM_HOME="${BASIC_MEMORY_HOME:-${HOME_DIR}/basic-memory}"
+  mkdir -p "$BM_HOME"
+
+  # ¿Ya hay un proyecto apuntando a BM_HOME? Se pregunta a la API.
+  bm_registrado() {
+    basic-memory tool list-projects 2>/dev/null | python3 -c '
+import json,sys
+try: d = json.load(sys.stdin)
+except Exception: sys.exit(1)
+sys.exit(0 if any(p.get("path") == sys.argv[1] for p in d.get("projects", [])) else 1)
+' "$BM_HOME"
+  }
+
+  if bm_registrado; then
+    echo "[basic-memory] proyecto ya registrado -> ${BM_HOME}"
+  else
+    basic-memory project add "$BM_PROYECTO" "$BM_HOME" >/dev/null 2>&1
+    basic-memory project default "$BM_PROYECTO" >/dev/null 2>&1
+    if bm_registrado; then
+      echo "[basic-memory] proyecto '${BM_PROYECTO}' -> ${BM_HOME}"
+    else
+      # No se silencia: sin proyecto, todo lo que escriba un agente se pierde.
+      echo "[basic-memory] AVISO: no pude registrar '${BM_PROYECTO}' en ${BM_HOME}."
+      echo "[basic-memory]        el índice puede estar inconsistente; se reconstruye con:"
+      echo "[basic-memory]        rm -f \"${BASIC_MEMORY_CONFIG_DIR:-${HOME_DIR}/.basic-memory}\"/config.json"
+    fi
   fi
 fi
 

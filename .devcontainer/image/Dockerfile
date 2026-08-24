@@ -85,6 +85,90 @@ RUN if [ "$INSTALL_NVIM" = "true" ]; then \
       && ln -s "$(command -v fdfind)" /usr/local/bin/fd ; \
     fi
 
+# ─────────────────────────────────────────────────────────────────────────
+#  uv — gestor de paquetes y de intérpretes de Python (Astral).
+#
+#  SUSTITUYE a PIP_PACKAGES, que sigue existiendo solo por compatibilidad:
+#  PIP_PACKAGES exige una BASE_IMAGE con pip (python:3.11-slim y similares),
+#  mientras que uv se trae su propio intérprete y funciona sobre la base
+#  mínima de 27 MB. Ver README, "Python con uv".
+#
+#  Se instala en /usr/local/bin para que lo vean todos los usuarios, y NO en
+#  ~/.local/bin, que no es un volumen y se perdería en cada rebuild igual.
+#
+#  UV_CACHE_DIR apunta a un volumen (ver docker-compose.yml). La caché de uv
+#  es reconstruible por definición, así que ese volumen NO se respalda: se
+#  vuelve a llenar descargando. Lo que evita es pagar la descarga otra vez
+#  en cada rebuild, que es todo lo que se le pide.
+# ─────────────────────────────────────────────────────────────────────────
+ARG INSTALL_UV=true
+RUN if [ "$INSTALL_UV" = "true" ]; then \
+      curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_UNMANAGED_INSTALL=/usr/local/bin sh \
+      && uv --version ; \
+    fi
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Basic Memory — base de conocimiento local (markdown + grafo) y servidor
+#  MCP. Se instala con `uv tool`, no con pip: así trae su propio Python y no
+#  obliga a cambiar la BASE_IMAGE.
+#
+#  Las tres rutas van a /opt y el lanzador a /usr/local/bin porque esto se
+#  instala como root, antes de que exista el usuario. El CONOCIMIENTO no vive
+#  aquí: vive en ~/basic-memory, que sí es un volumen y sí se respalda.
+#
+#  El intérprete va FIJO y no al gusto de uv. Sin `--python`, uv coge el más
+#  nuevo que encuentra y la instalación revienta compilando `pybars3` (una
+#  dependencia de basic-memory) con "NameError: name 'os' is not defined":
+#  su setup.py es antiguo y no sobrevive al setuptools de Python 3.13+.
+#  Fijarlo aquí hace además que el build sea reproducible en el tiempo, en
+#  vez de romperse solo el día que Astral publique un Python nuevo.
+# ─────────────────────────────────────────────────────────────────────────
+ARG INSTALL_BASIC_MEMORY=true
+ARG BASIC_MEMORY_PYTHON=3.12
+RUN export UV_TOOL_DIR=/opt/uv/tools \
+           UV_TOOL_BIN_DIR=/usr/local/bin \
+           UV_PYTHON_INSTALL_DIR=/opt/uv/python; \
+    if [ "$INSTALL_BASIC_MEMORY" = "true" ]; then \
+      if ! command -v uv >/dev/null 2>&1; then \
+        echo "INSTALL_BASIC_MEMORY=true requiere INSTALL_UV=true" >&2; exit 1; \
+      fi \
+      && uv tool install --quiet --python "$BASIC_MEMORY_PYTHON" basic-memory \
+      && basic-memory --version ; \
+    fi
+
+# ─────────────────────────────────────────────────────────────────────────
+#  Herramientas de agente que se distribuyen por npm:
+#
+#    openspec (@fission-ai/openspec)  desarrollo dirigido por especificación
+#    backlog.md                       gestión de tareas en markdown, en el repo
+#    @notionhq/notion-mcp-server      servidor MCP oficial de Notion
+#
+#  Node NO está en la base y solo se instala si alguna de las tres se pide:
+#  son ~120 MB que un proyecto que no las use no tiene por qué pagar.
+#
+#  Ojo: sus ARTEFACTOS (openspec/, backlog/) van en el repo del CLIENTE, no
+#  en este template. Aquí solo se instala el binario. Ver README.
+# ─────────────────────────────────────────────────────────────────────────
+ARG INSTALL_OPENSPEC=true
+ARG INSTALL_BACKLOG=true
+ARG INSTALL_NOTION_MCP=true
+ARG NODE_MAJOR=22
+RUN set -eu; \
+    PKGS=""; \
+    if [ "$INSTALL_OPENSPEC"   = "true" ]; then PKGS="$PKGS @fission-ai/openspec"; fi; \
+    if [ "$INSTALL_BACKLOG"    = "true" ]; then PKGS="$PKGS backlog.md"; fi; \
+    if [ "$INSTALL_NOTION_MCP" = "true" ]; then PKGS="$PKGS @notionhq/notion-mcp-server"; fi; \
+    if [ -n "$PKGS" ]; then \
+      if ! command -v node >/dev/null 2>&1; then \
+        curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+        && apt-get install -y --no-install-recommends nodejs \
+        && rm -rf /var/lib/apt/lists/*; \
+      fi; \
+      npm install -g --no-fund --no-audit $PKGS; \
+      npm cache clean --force; \
+    fi
+
 # Paquetes de Python (opcional; requiere una BASE_IMAGE con pip)
 RUN if [ -n "$PIP_PACKAGES" ]; then pip install --no-cache-dir $PIP_PACKAGES ; fi
 
@@ -124,6 +208,7 @@ RUN mkdir -p "/home/$USERNAME/.claude" \
       "/home/$USERNAME/.basic-memory" \
       "/home/$USERNAME/.local/share/nvim" \
       "/home/$USERNAME/.local/state/nvim" \
+      "/home/$USERNAME/.cache/uv" \
       /commandhistory \
  && touch /commandhistory/.bash_history \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory \
@@ -151,6 +236,18 @@ ENV PATH="/home/${USERNAME}/.local/bin:${PATH}"
 # también para escritura (Problemas 11 y 12).
 ENV CLAUDE_CONFIG_DIR="/home/${USERNAME}/.claude"
 ENV GIT_CONFIG_GLOBAL="/home/${USERNAME}/.config/git/config"
+
+# Caché de uv dentro de su volumen. Sin esto uv la pondría en ~/.cache/uv
+# igualmente, pero explícito es mejor: si algo cambia $HOME (un `sudo -i`,
+# un cron) la caché se partiría en dos sin que nadie lo note.
+ENV UV_CACHE_DIR="/home/${USERNAME}/.cache/uv"
+
+# Los intérpretes que uv descarga (`uv venv --python 3.12`) van DENTRO del
+# volumen de caché. Por defecto aterrizan en ~/.local/share/uv/python, que no
+# es un volumen: se perdían enteros en cada rebuild y había que volver a
+# bajar un CPython de 60 MB. Van con la caché y no en un volumen propio
+# porque son exactamente igual de reconstruibles: se rebajan y ya.
+ENV UV_PYTHON_INSTALL_DIR="/home/${USERNAME}/.cache/uv/python"
 
 # Terminal mejorada (prompt con rama de git, venv y exit code; historial
 # grande; completado; aliases). ASCII-safe, sin Nerd Fonts (Problema 10).

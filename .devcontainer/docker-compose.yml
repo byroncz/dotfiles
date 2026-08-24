@@ -23,6 +23,11 @@ services:
         INSTALL_AWSCLI: "${INSTALL_AWSCLI:-false}"
         PIP_PACKAGES: "${PIP_PACKAGES:-}"
         INSTALL_NVIM: "${INSTALL_NVIM:-true}"
+        INSTALL_UV: "${INSTALL_UV:-true}"
+        INSTALL_BASIC_MEMORY: "${INSTALL_BASIC_MEMORY:-true}"
+        INSTALL_OPENSPEC: "${INSTALL_OPENSPEC:-true}"
+        INSTALL_BACKLOG: "${INSTALL_BACKLOG:-true}"
+        INSTALL_NOTION_MCP: "${INSTALL_NOTION_MCP:-true}"
 
     container_name: "${CLIENTE:-local}-${PROYECTO:-dev}"
 
@@ -53,7 +58,7 @@ services:
       #   ~/basic-memory   los markdown. Es el conocimiento real, no se puede
       #                    regenerar, y por eso SÍ entra en el respaldo cifrado.
       #   ~/.basic-memory  el índice SQLite y la config. Se reconstruye entero
-      #                    desde los markdown con `basic-memory sync`, así que
+      #                    desde los markdown con `basic-memory reindex`, así que
       #                    NO se respalda: copiar un SQLite vivo mientras se
       #                    escribe es la forma habitual de acabar restaurando
       #                    una base corrupta.
@@ -67,6 +72,11 @@ services:
       # descargarlos en cada rebuild.
       - nvim-data:/home/${USERNAME:-vscode}/.local/share/nvim
       - nvim-state:/home/${USERNAME:-vscode}/.local/state/nvim
+
+      # Caché de uv (ruedas y fuentes descargadas). NO se respalda: es
+      # reconstruible por definición, se vuelve a llenar descargando. El
+      # volumen solo evita pagar la descarga otra vez en cada rebuild.
+      - uv-cache:/home/${USERNAME:-vscode}/.cache/uv
 
     environment:
       DISABLE_AUTOUPDATER: "1"
@@ -83,6 +93,13 @@ services:
       # basic-memory 0.22.1 (config.py: resolve_data_dir / BASIC_MEMORY_HOME).
       BASIC_MEMORY_HOME: "/home/${USERNAME:-vscode}/basic-memory"
       BASIC_MEMORY_CONFIG_DIR: "/home/${USERNAME:-vscode}/.basic-memory"
+      # Igual que arriba: explícita para que un $HOME distinto no parta la
+      # caché en dos sin que nadie lo note.
+      UV_CACHE_DIR: "/home/${USERNAME:-vscode}/.cache/uv"
+      # Dentro de la caché a propósito: los intérpretes que uv descarga son
+      # tan reconstruibles como las ruedas. Por defecto irían a
+      # ~/.local/share/uv/python, fuera de todo volumen, y se perderían.
+      UV_PYTHON_INSTALL_DIR: "/home/${USERNAME:-vscode}/.cache/uv/python"
       # Repo de dotfiles a clonar en ~/.dotfiles (gitignore global, config de
       # git, y más adelante nvim). Vacío = el container usa los valores por
       # defecto de git. Ver .env.example.
@@ -191,7 +208,7 @@ services:
     volumes:
       - ./backup/watch.sh:/watch.sh:ro
       # Solo los markdown. El índice SQLite (basic-memory-index) NO se
-      # respalda: se reconstruye con `basic-memory sync`, y copiarlo en
+      # respalda: se reconstruye con `basic-memory reindex`, y copiarlo en
       # caliente es la forma habitual de restaurar una base corrupta.
       - basic-memory:/origen:ro
       - ${HOME}/.config/rclone:/config/rclone
@@ -260,3 +277,10 @@ volumes:
     name: "nvim-data-${CLIENTE:-local}-${PROYECTO:-dev}"
   nvim-state:
     name: "nvim-state-${CLIENTE:-local}-${PROYECTO:-dev}"
+
+  # Por CLIENTE y no por proyecto, al revés que nvim: uv sí está pensado para
+  # que varios procesos compartan caché (usa bloqueo de archivos), y así los
+  # proyectos de un mismo cliente se reaprovechan las descargas. Es caché:
+  # perderlo entero no cuesta más que volver a bajarlo.
+  uv-cache:
+    name: "uv-cache-${CLIENTE:-local}"
