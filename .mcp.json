@@ -1,0 +1,12 @@
+{
+  "_generado": "generado por .devcontainer/provision/generar-mcp.py — no editar, edita .devcontainer/mcp/servers.json",
+  "mcpServers": {
+    "basic-memory": {
+      "command": "basic-memory",
+      "args": [
+        "mcp"
+      ],
+      "env": {}
+    }
+  }
+}

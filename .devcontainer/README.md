@@ -6,7 +6,7 @@ instaladas automáticamente. **No está atado a ningún runtime**: Python, Node,
 Go o lo que haga falta se añade por proyecto sin tocar los archivos del
 template.
 
-El diagnóstico completo del entorno está en [`docs/AGENTS.md`](docs/AGENTS.md).
+El diagnóstico completo del entorno está en [`docs/DIAGNOSTICO.md`](docs/DIAGNOSTICO.md).
 La configuración de una sola vez del respaldo cifrado está en
 [`docs/CONFIGURACION-MANUAL.md`](docs/CONFIGURACION-MANUAL.md).
 
@@ -22,6 +22,7 @@ dónde y cuándo se ejecuta cada cosa.
 | [`provision/`](provision/) | **Dentro** del dev container | `post-create.sh`, `install-extensions.sh`, `bash-enhancements.sh` |
 | [`backup/`](backup/) | Sidecars rclone + host | `watch.sh`, `filtros.txt`, `rclone-setup.sh` |
 | [`bin/`](bin/) | Host, a mano | `claude-volume.sh` |
+| [`mcp/`](mcp/) | Leído en **provision** | `servers.json`, el origen único de los servidores MCP |
 | [`docs/`](docs/) | — | Diagnóstico y configuración manual |
 
 Lo que suele cambiar por proyecto **no está en ninguno de esos scripts**, sino
@@ -347,7 +348,10 @@ esté en uso por un container existente — haz `backup` antes de limpiar.
 | **`provision/`** | |
 | `provision/post-create.sh` | Permisos, migraciones al volumen, `core.excludesFile`, nvim, extensiones, hook del proyecto |
 | `provision/install-extensions.sh` | Extensiones desde Open VSX (Problemas 3-7) |
+| `provision/generar-mcp.py` | Genera `.mcp.json` y `~/.codex/config.toml` desde `mcp/servers.json` |
 | `provision/bash-enhancements.sh` | Prompt informativo, historial, aliases, completado (Problema 10) |
+| **`mcp/`** | |
+| `mcp/servers.json` | **Origen único** de los servidores MCP. Se edita aquí; los de cada agente se generan |
 | **`backup/`** | |
 | `backup/watch.sh` | Entrypoint compartido de los 4 sidecars: `inotifywait` + debounce + `rclone sync` versionado |
 | `backup/filtros.txt` | Filtros rclone del sidecar `sync-workspace` |
@@ -355,5 +359,5 @@ esté en uso por un container existente — haz `backup` antes de limpiar.
 | **`bin/`** | |
 | `bin/claude-volume.sh` | `info` / `create` / `backup` / `restore` de los volúmenes, desde el host |
 | **`docs/`** | |
-| `docs/AGENTS.md` | Guía de diagnóstico del entorno completo |
+| `docs/DIAGNOSTICO.md` | Guía de diagnóstico del entorno completo (Problemas 1-12) |
 | `docs/CONFIGURACION-MANUAL.md` | Los pasos de una sola vez del respaldo cifrado (Dropbox, crypt, OAuth) |

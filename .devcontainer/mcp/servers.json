@@ -1,0 +1,39 @@
+{
+  "_comentario": [
+    "ORIGEN ÚNICO de los servidores MCP. Este archivo se edita a mano; los",
+    "de cada agente se GENERAN desde aquí y no se editan nunca:",
+    "",
+    "    mcp/servers.json  ->  /workspace/.mcp.json        (Claude Code)",
+    "                      ->  ~/.codex/config.toml        (Codex)",
+    "",
+    "Lo genera provision/generar-mcp.py, llamado por post-create.sh en cada",
+    "arranque. Declarar un servidor dos veces, una por agente, es como los dos",
+    "acaban divergiendo: se arregla un comando en uno, nadie toca el otro, y el",
+    "fallo aparece semanas después en el agente que nadie estaba mirando.",
+    "",
+    "Los dos generados están IGNORADOS por el gitignore global (git/ignore):",
+    "son artefactos, y el repo en el que aterrizan es el del cliente.",
+    "",
+    "SIN SECRETOS AQUÍ. Este archivo se versiona. Un servidor que necesite",
+    "token se declara con \"enabled\": false y su variable en \"env_desde\": el",
+    "generador la lee del entorno al arrancar y, si no está, deja el servidor",
+    "fuera en vez de escribir una credencial vacía que falle en silencio."
+  ],
+
+  "servers": {
+    "basic-memory": {
+      "enabled": true,
+      "command": "basic-memory",
+      "args": ["mcp"],
+      "descripcion": "Conocimiento local en markdown. Los datos viven en ~/basic-memory, que es un volumen respaldado, no dentro de ~/.claude: son del proyecto, no del agente."
+    },
+
+    "notion": {
+      "enabled": false,
+      "command": "notion-mcp-server",
+      "args": [],
+      "env_desde": ["NOTION_TOKEN"],
+      "descripcion": "Servidor MCP oficial de Notion. INSTALADO PERO SIN CONFIGURAR a propósito: sin token, sin workspace y sin permisos. La integración con el flujo de GitOps (nombrado de ramas, mensajes de commit, comentarios de PR) es una decisión aparte que no se toma aquí. Para activarlo: pon el token en un archivo fuera del repo, expórtalo como NOTION_TOKEN y cambia enabled a true."
+    }
+  }
+}

@@ -5,6 +5,7 @@
 #    2. Estado de Claude Code dentro de su volumen
 #    3. git: config global y gitignore GLOBAL dentro de su volumen
 #    3d. Basic Memory: registrar el proyecto de conocimiento
+#    3e. MCP: generar .mcp.json y ~/.codex/config.toml desde mcp/servers.json
 #    4. Resumen de la persistencia en el log de creación
 #    5. Extensiones del IDE
 #    6. Hook opcional del proyecto: .devcontainer/provision/post-create.local.sh
@@ -177,6 +178,19 @@ sys.exit(0 if any(p.get("path") == sys.argv[1] for p in d.get("projects", [])) e
       echo "[basic-memory]        rm -f \"${BASIC_MEMORY_CONFIG_DIR:-${HOME_DIR}/.basic-memory}\"/config.json"
     fi
   fi
+fi
+
+# ── 3e. Configuración de MCP, generada desde un origen único ────────────────
+# mcp/servers.json es el único sitio donde se declara un servidor MCP. De ahí
+# salen .mcp.json (Claude Code) y ~/.codex/config.toml (Codex), con los mismos
+# servidores y los mismos comandos porque los genera la misma pasada.
+#
+# Los dos son ARTEFACTOS y están en el gitignore global (git/ignore): el repo
+# donde aterriza .mcp.json es el del cliente, y arrancar el devcontainer no
+# puede dejárselo sucio.
+if command -v python3 >/dev/null 2>&1; then
+  WORKSPACE_DIR="${WORKSPACE_DIR:-$(pwd)}" \
+    python3 "${SCRIPT_DIR}/generar-mcp.py" || echo "[mcp] generación incompleta, continuo"
 fi
 
 # ── 4. Estado de la persistencia ────────────────────────────────────────────

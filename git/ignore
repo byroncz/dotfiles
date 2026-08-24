@@ -31,3 +31,10 @@ Thumbs.db
 
 # Configuración local de agentes: es de esta máquina, no del proyecto.
 .claude/settings.local.json
+
+# Configuración de MCP GENERADA por el devcontainer desde
+# .devcontainer/mcp/servers.json. Aquí y no en el .gitignore de cada
+# proyecto: el repo donde aterriza suele ser el del cliente, que no tiene por
+# qué cargar con una regla para un artefacto de nuestro template. Editarlos a
+# mano no sirve de nada, se regeneran en el siguiente arranque.
+.mcp.json
