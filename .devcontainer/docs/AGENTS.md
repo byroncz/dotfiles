@@ -91,6 +91,16 @@ Las extensiones se instalan descargando VSIXs desde Open VSX y extrayéndolos en
 1. **`.devcontainer/provision/install-extensions.sh`** (script de instalación)
 2. Llamarlo desde **`postCreateCommand`** en `devcontainer.json`
 3. Volumen persistente montado en `/home/vscode/.antigravity-ide-server/extensions`
+4. **`python3`, `curl` y `unzip` en la imagen** (`image/Dockerfile`)
+
+> **`python3` no es opcional.** El script lo usa para parsear la API de Open
+> VSX y para escribir `extensions.json`. `debian:*-slim` **no** lo trae, así
+> que el apt base instala `python3-minimal` (11 MB); `json` está incluido.
+>
+> Sin él no se instala ninguna extensión. El script lo comprueba al arrancar y
+> aborta con un mensaje claro — antes el fallo se disfrazaba de
+> `"not on Open VSX, skipping"` en cada extensión, que apunta al sitio
+> equivocado y cuesta un rato descartar.
 
 **Contenido de `install-extensions.sh`:**
 

@@ -16,6 +16,17 @@ ARCH=$(uname -m)
 PLATFORM="linux-x64"
 [ "$ARCH" = "aarch64" ] && PLATFORM="linux-arm64"
 
+# Todo el script depende de python3 (parsear la API, escribir extensions.json).
+# Sin esta comprobación su ausencia se manifestaba como "not on Open VSX" en
+# cada extensión, que apunta al sitio equivocado. Lo instala image/Dockerfile.
+for dep in python3 curl unzip; do
+  command -v "$dep" >/dev/null 2>&1 || {
+    echo "[ext] ERROR: falta '${dep}' en la imagen; no se instala ninguna extensión." >&2
+    echo "[ext]        Añádelo al apt base de image/Dockerfile (o a EXTRA_APT)." >&2
+    exit 1
+  }
+done
+
 mkdir -p "$EXTENSIONS_DIR"
 [ -f "$EXTENSIONS_JSON" ] || echo "[]" > "$EXTENSIONS_JSON"
 
@@ -48,9 +59,12 @@ install_vsix() {
   if [ -n "$pinned" ]; then
     version="$pinned"
   else
+    # Sin `2>/dev/null`: si esto falla queremos ver por qué. Antes lo silenciaba
+    # y cualquier error (incluida la falta de python3) se reportaba como
+    # "not on Open VSX", que es engañoso.
     version=$(curl -sf "https://open-vsx.org/api/${publisher}/${name}" \
-      | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])" 2>/dev/null) || {
-      echo "[ext] WARN: ${extid} not on Open VSX, skipping"
+      | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])") || {
+      echo "[ext] WARN: no se pudo resolver la versión de ${extid} en Open VSX, skipping"
       return 0
     }
   fi

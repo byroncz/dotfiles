@@ -28,10 +28,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Herramientas mínimas para que el container sea usable y para que funcionen
 # el CLI de Claude Code, git y el instalador de extensiones.
+#
+# python3-minimal (11 MB) no es opcional: provision/install-extensions.sh lo
+# usa para parsear la API de Open VSX y para escribir extensions.json. Sin él
+# NINGUNA extensión se instala. La variante -minimal basta: solo hace falta
+# `json`, que sí trae.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl wget git unzip zip jq less procps sudo \
-      bash-completion locales ${EXTRA_APT} \
+      python3-minimal bash-completion locales ${EXTRA_APT} \
  && sed -i 's/^# *\(en_US.UTF-8\)/\1/' /etc/locale.gen && locale-gen \
  && rm -rf /var/lib/apt/lists/*
 
