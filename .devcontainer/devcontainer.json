@@ -46,5 +46,5 @@
     }
   },
 
-  "postCreateCommand": "bash .devcontainer/post-create.sh"
+  "postCreateCommand": "bash .devcontainer/provision/post-create.sh"
 }

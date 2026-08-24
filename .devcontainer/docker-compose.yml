@@ -13,7 +13,7 @@ services:
   dev:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: image/Dockerfile
       args:
         # Base por defecto: 27 MB comprimido. Cambiar solo si el proyecto
         # necesita otro runtime (p. ej. "python:3.11-slim", "node:22-slim").
@@ -133,7 +133,7 @@ services:
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/watch.sh"]
     volumes:
-      - ./watch.sh:/watch.sh:ro
+      - ./backup/watch.sh:/watch.sh:ro
       - claude-config:/origen:ro
       # El origen va en :ro; la CONFIG no puede. Los tokens OAuth caducan
       # (4 h en Dropbox) y rclone guarda el renovado en rclone.conf. En :ro
@@ -166,8 +166,8 @@ services:
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/watch.sh"]
     volumes:
-      - ./watch.sh:/watch.sh:ro
-      - ./filtros.txt:/filtros.txt:ro
+      - ./backup/watch.sh:/watch.sh:ro
+      - ./backup/filtros.txt:/filtros.txt:ro
       - ..:/origen:ro
       - ${HOME}/.config/rclone:/config/rclone
     env_file:
@@ -189,7 +189,7 @@ services:
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/watch.sh"]
     volumes:
-      - ./watch.sh:/watch.sh:ro
+      - ./backup/watch.sh:/watch.sh:ro
       # Solo los markdown. El índice SQLite (basic-memory-index) NO se
       # respalda: se reconstruye con `basic-memory sync`, y copiarlo en
       # caliente es la forma habitual de restaurar una base corrupta.
@@ -211,7 +211,7 @@ services:
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/watch.sh"]
     volumes:
-      - ./watch.sh:/watch.sh:ro
+      - ./backup/watch.sh:/watch.sh:ro
       - bash-history:/origen:ro
       - ${HOME}/.config/rclone:/config/rclone
     env_file:

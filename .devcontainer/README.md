@@ -1,12 +1,36 @@
 # Template de devcontainer
 
-Base mínima (`debian:bookworm-slim`, **27 MB** comprimido) con Claude Code
+Base mínima (`debian:trixie-slim`, **30 MB** comprimido) con Claude Code
 persistente entre rebuilds, terminal usable y extensiones de Antigravity
 instaladas automáticamente. **No está atado a ningún runtime**: Python, Node,
 Go o lo que haga falta se añade por proyecto sin tocar los archivos del
 template.
 
-El diagnóstico completo del entorno está en [`AGENTS.md`](AGENTS.md).
+El diagnóstico completo del entorno está en [`docs/AGENTS.md`](docs/AGENTS.md).
+La configuración de una sola vez del respaldo cifrado está en
+[`docs/CONFIGURACION-MANUAL.md`](docs/CONFIGURACION-MANUAL.md).
+
+## Estructura
+
+El folder está ordenado por **fase del pipeline**: mirando la carpeta se sabe
+dónde y cuándo se ejecuta cada cosa.
+
+| Carpeta | Se ejecuta | Contiene |
+|---|---|---|
+| *(raíz)* | Host, al levantar | `devcontainer.json`, `docker-compose.yml`, `.env` — los tres ficheros que las herramientas exigen en una ruta fija |
+| [`image/`](image/) | En el **build** de Docker | `Dockerfile` y el hook `extras/build.sh` |
+| [`provision/`](provision/) | **Dentro** del dev container | `post-create.sh`, `install-extensions.sh`, `bash-enhancements.sh` |
+| [`backup/`](backup/) | Sidecars rclone + host | `watch.sh`, `filtros.txt`, `rclone-setup.sh` |
+| [`bin/`](bin/) | Host, a mano | `claude-volume.sh` |
+| [`docs/`](docs/) | — | Diagnóstico y configuración manual |
+
+Lo que suele cambiar por proyecto **no está en ninguno de esos scripts**, sino
+en `.env` (ver `.env.example`) y en `docker-compose.yml`.
+
+> Las rutas de `COPY` del `Dockerfile` son relativas al **build context**
+> (`.devcontainer/`), no al fichero: por eso llevan prefijo (`image/extras/`,
+> `provision/bash-enhancements.sh`). El `.dockerignore` es una allow-list — si
+> añades un `COPY`, decláralo también ahí.
 
 ## Uso
 
@@ -25,45 +49,43 @@ Tres niveles, de menos a más invasivo. **Ninguno requiere editar el
 `Dockerfile`**, así que el template se puede actualizar entero copiándolo otra
 vez encima.
 
-### 1. Build args en `devcontainer.json`
+### 1. Build args en `.env`
 
-```jsonc
-"build": {
-  "dockerfile": "Dockerfile",
-  "context": ".",
-  "args": {
-    "BASE_IMAGE": "python:3.11-slim",     // cualquier imagen Debian/Ubuntu
-    "USERNAME": "vscode",
-    "EXTRA_APT": "postgresql-client libpq-dev",
-    "PIP_PACKAGES": "boto3 pandas nbformat",
-    "INSTALL_AWSCLI": "true"
-  }
-}
+Los args ya no viven en `devcontainer.json`: `docker-compose.yml` los toma del
+`.env` hermano, que **no se versiona**. Copia `.env.example` y edítalo.
+
+```bash
+# .devcontainer/.env
+BASE_IMAGE=python:3.11-slim          # cualquier imagen Debian/Ubuntu
+USERNAME=vscode
+EXTRA_APT=postgresql-client libpq-dev
+PIP_PACKAGES=boto3 pandas nbformat
+INSTALL_AWSCLI=true
 ```
 
 | Arg | Para qué | Por defecto |
 |---|---|---|
-| `BASE_IMAGE` | Imagen base. Cualquiera basada en Debian/Ubuntu con `apt-get` | `debian:bookworm-slim` |
+| `BASE_IMAGE` | Imagen base. Cualquiera basada en Debian/Ubuntu con `apt-get` | `debian:trixie-slim` |
 | `USERNAME` | Usuario no-root; se crea solo si la base no lo trae | `vscode` |
 | `EXTRA_APT` | Paquetes apt adicionales, separados por espacios | `""` |
 | `PIP_PACKAGES` | Paquetes pip (requiere una base con `pip`) | `""` |
 | `INSTALL_AWSCLI` | Instala AWS CLI v2 | `false` |
 
-Bases habituales y su tamaño comprimido: `debian:bookworm-slim` 27 MB ·
+Bases habituales y su tamaño comprimido: `debian:trixie-slim` 30 MB ·
 `python:3.11-slim` 43 MB · `node:22-slim` 76 MB · `ubuntu:24.04` 28 MB.
 
 ### 2. Hooks del proyecto
 
-Tres archivos opcionales dentro de `.devcontainer/`. Si no existen, no pasa
-nada; si existen, el template los ejecuta:
+Tres archivos opcionales. Si no existen, no pasa nada; si existen, el template
+los ejecuta. Cada uno vive en la carpeta de su fase:
 
 | Archivo | Cuándo | Para qué |
 |---|---|---|
-| `extras/build.sh` | En el **build**, como root | Lo que los args no cubren: Node sin cambiar de base, Terraform, un repo apt propio, compilar algo |
-| `post-create.local.sh` | Tras crear el container, como usuario | Migraciones, seeds, `npm install`, sanity checks del stack |
-| `extensions.local.sh` | Al instalar extensiones | Lista de extensiones del proyecto; usa `install_vsix <publisher> <name> [versión]` |
+| `image/extras/build.sh` | En el **build**, como root | Lo que los args no cubren: Node sin cambiar de base, Terraform, un repo apt propio, compilar algo |
+| `provision/post-create.local.sh` | Tras crear el container, como usuario | Migraciones, seeds, `npm install`, sanity checks del stack |
+| `provision/extensions.local.sh` | Al instalar extensiones | Lista de extensiones del proyecto; usa `install_vsix <publisher> <name> [versión]` |
 
-Ejemplo de `extras/build.sh` para tener Node sin dejar `debian:bookworm-slim`:
+Ejemplo de `image/extras/build.sh` para tener Node sin dejar `debian:trixie-slim`:
 
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
@@ -76,28 +98,22 @@ rm -rf /var/lib/apt/lists/*
 `BASE_IMAGE` acepta cualquier imagen con `apt-get` (Debian/Ubuntu y derivadas:
 `python:*-slim`, `node:*-slim`, `golang:*-bookworm`, `eclipse-temurin:*-jdk-jammy`).
 Con bases Alpine o RedHat el template no funciona tal cual — habría que
-cambiar el gestor de paquetes en el `Dockerfile`.
+cambiar el gestor de paquetes en `image/Dockerfile`.
 
 Si la base ya trae un usuario con UID 1000 (por ejemplo `node`), el template lo
 detecta y no intenta crearlo; pon ese nombre en `USERNAME` y en `remoteUser`.
 
 ### Ejemplo completo: proyecto Python + AWS + Jupyter
 
-```jsonc
-// devcontainer.json
-"build": {
-  "dockerfile": "Dockerfile",
-  "context": ".",
-  "args": {
-    "BASE_IMAGE": "python:3.11-slim",
-    "INSTALL_AWSCLI": "true",
-    "PIP_PACKAGES": "boto3 nbformat nbconvert jupyterlab ipykernel pandas pyarrow"
-  }
-}
+```bash
+# .devcontainer/.env
+BASE_IMAGE=python:3.11-slim
+INSTALL_AWSCLI=true
+PIP_PACKAGES=boto3 nbformat nbconvert jupyterlab ipykernel pandas pyarrow
 ```
 
 ```bash
-# .devcontainer/extensions.local.sh
+# .devcontainer/provision/extensions.local.sh
 install_vsix ms-python  python
 install_vsix ms-toolsai jupyter
 install_vsix ms-toolsai vscode-jupyter-cell-tags
@@ -105,7 +121,7 @@ install_vsix amazonwebservices aws-toolkit-vscode
 ```
 
 ```bash
-# .devcontainer/post-create.local.sh
+# .devcontainer/provision/post-create.local.sh
 aws --version
 python -c "import nbformat, boto3; print('stack OK')"
 ```
@@ -116,13 +132,15 @@ python -c "import nbformat, boto3; print('stack OK')"
 |---|---|---|
 | `claude-<cliente>` | `~/.claude` | Transcripciones (`projects/*.jsonl`), `.credentials.json`, `settings.json`, `history.jsonl`, `plugins/`, `.claude.json` |
 | `git-home` | `~/.config/git` | **gitignore global** (`ignore`) y config global de git (`config`) |
-| `<proyecto>-bash-history` | `/commandhistory` | Historial de bash |
-| `<proyecto>-ide-extensions` | `~/.antigravity-ide-server/extensions` | Extensiones de Open VSX |
+| `bash-history-<cliente>-<proyecto>` | `/commandhistory` | Historial de bash |
+| `ide-extensions-<cliente>-<proyecto>` | `~/.antigravity-ide-server/extensions` | Extensiones de Open VSX |
+| `basic-memory-<cliente>` | `~/basic-memory` | Knowledge acumulado sobre el cliente |
+| `nvim-data-…` / `nvim-state-…` | `~/.local/{share,state}/nvim` | Plugins y estado de lazy.nvim |
 
-`claude-home` y `git-home` **no llevan el nombre del proyecto**: son
-compartidos por todos los devcontainers de la máquina, así que el login de
-Claude Code y el gitignore global se hacen una sola vez. Para aislarlos por
-proyecto, anteponer `${localWorkspaceFolderBasename}-` en `mounts`.
+`claude-<cliente>` va por **cliente**, no por proyecto ni global: los
+transcripts de un cliente no deben acabar en el respaldo cifrado de otro. El
+precio es un `/login` por cliente, no uno por proyecto. `git-home` sí es global.
+Los nombres exactos los fija la sección `volumes:` de `docker-compose.yml`.
 
 Tres detalles hacen que la persistencia funcione de verdad:
 
@@ -135,12 +153,12 @@ Tres detalles hacen que la persistencia funcione de verdad:
    el `.gitignore` de cada repositorio, que viaja en el propio repo. Git
    prefiere `~/.gitconfig` sobre `~/.config/git/config`, así que sin esta
    variable el archivo efectivo queda fuera del volumen. Verificado con git 2.43.
-3. **Los mount points se pre-crean en el `Dockerfile`** con el owner del
+3. **Los mount points se pre-crean en `image/Dockerfile`** con el owner del
    usuario. Docker crea el directorio de un montaje como `root:root` si no
    existe en la imagen; creándolo antes, el volumen nombrado hereda el
    ownership correcto la primera vez que se monta.
 
-`post-create.sh` fusiona además una sola vez cualquier `~/.claude.json`,
+`provision/post-create.sh` fusiona además una sola vez cualquier `~/.claude.json`,
 `~/.gitconfig` o `~/.gitignore_global` que quede fuera del volumen (por ejemplo
 el que el IDE copia del host) y deja el original como `.pre-volume`.
 
@@ -161,7 +179,7 @@ lo forzó fue el `tree-sitter` que instala Mason, que en bookworm muere con
 
 ### La config se enlaza, no se hornea
 
-`nvim/` vive en este repo y `post-create.sh` enlaza `~/.config/nvim` ahí.
+`nvim/` vive en este repo y `provision/post-create.sh` enlaza `~/.config/nvim` ahí.
 
 No se hornea en la imagen porque entonces cambiar un atajo obligaría a
 reconstruirla. No se copia porque la copia del container y la del repo
@@ -169,7 +187,7 @@ divergen en cuanto editas una de las dos. Enlazada, editas el repo y lo ves en
 el siguiente arranque de `nvim`.
 
 Cuando el workspace **es** este repo, se enlaza directamente a `/workspace/nvim`.
-En cualquier otro proyecto, `post-create.sh` clona `DOTFILES_REPO` en
+En cualquier otro proyecto, `provision/post-create.sh` clona `DOTFILES_REPO` en
 `~/.dotfiles` y enlaza ahí — **nunca dentro del repo del cliente**, que no
 tiene por qué cargar con la configuración de editor de nadie.
 
@@ -200,16 +218,16 @@ Ghostty o Alacritty.
 
 ## Backup y restauración
 
-`claude-volume.sh` se ejecuta **en el host**:
+`bin/claude-volume.sh` se ejecuta **en el host**:
 
 ```bash
-./claude-volume.sh info                     # credenciales, nº de transcripciones, tamaño
-./claude-volume.sh backup ~/backups         # tarball con timestamp
-./claude-volume.sh restore ~/backups/claude-home-20260822-193000.tar.gz
-CLAUDE_VOLUME=git-home ./claude-volume.sh info
+./bin/claude-volume.sh info                 # credenciales, nº de transcripciones, tamaño
+./bin/claude-volume.sh backup ~/backups     # tarball con timestamp
+./bin/claude-volume.sh restore ~/backups/claude-self-20260822-193000.tar.gz
+CLAUDE_VOLUME=git-home ./bin/claude-volume.sh info
 ```
 
-El tarball de `claude-home` incluye `.credentials.json`: trátalo como un
+El tarball de `claude-<cliente>` incluye `.credentials.json`: trátalo como un
 secreto. `docker volume prune` se lleva por delante cualquier volumen que no
 esté en uso por un container existente — haz `backup` antes de limpiar.
 
@@ -220,7 +238,7 @@ esté en uso por un container existente — haz `backup` antes de limpiar.
   ya hace.
 - **CLI de Claude Code nativo en vez de npm**: evita arrastrar Node (~76 MB de
   base + toolchain) en proyectos que no lo usan. Quien necesite Node lo añade
-  con `BASE_IMAGE` o `extras/build.sh`.
+  con `BASE_IMAGE` o `image/extras/build.sh`.
 - **`/workspace` fijo con bind explícito** en vez de
   `/workspaces/${localWorkspaceFolderBasename}`: evita que el `postCreateCommand`
   falle cuando el directorio local tiene espacios o mayúsculas (Problema 9b).
@@ -231,11 +249,23 @@ esté en uso por un container existente — haz `backup` antes de limpiar.
 
 | Archivo | Para qué |
 |---|---|
-| `devcontainer.json` | Volúmenes, build args, `CLAUDE_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` |
-| `Dockerfile` | Base parametrizable, usuario, mount points, CLI de Claude, terminal |
-| `post-create.sh` | Permisos, migraciones al volumen, `core.excludesFile`, extensiones, hook del proyecto |
-| `install-extensions.sh` | Extensiones desde Open VSX (Problemas 3-7) |
-| `bash-enhancements.sh` | Prompt informativo, historial, aliases, completado (Problema 10) |
-| `claude-volume.sh` | `info` / `create` / `backup` / `restore` de los volúmenes, desde el host |
-| `extras/build.sh` | Hook de build del proyecto (vacío en el template) |
-| `AGENTS.md` | Guía de diagnóstico del entorno completo |
+| `devcontainer.json` | Solo apunta al compose: servicio, `workspaceFolder`, `remoteUser`, `postCreateCommand` |
+| `docker-compose.yml` | Servicio `dev`, volúmenes, env vars de persistencia y los 4 sidecars de respaldo |
+| `.env` / `.env.example` | Lo que cambia por proyecto: `CLIENTE`, `PROYECTO`, build args, `COMPOSE_PROFILES` |
+| `.dockerignore` | Allow-list del build context: solo entra lo que el `Dockerfile` COPYa |
+| **`image/`** | |
+| `image/Dockerfile` | Base parametrizable, usuario, mount points, CLI de Claude, terminal |
+| `image/extras/build.sh` | Hook de build del proyecto (vacío en el template) |
+| **`provision/`** | |
+| `provision/post-create.sh` | Permisos, migraciones al volumen, `core.excludesFile`, nvim, extensiones, hook del proyecto |
+| `provision/install-extensions.sh` | Extensiones desde Open VSX (Problemas 3-7) |
+| `provision/bash-enhancements.sh` | Prompt informativo, historial, aliases, completado (Problema 10) |
+| **`backup/`** | |
+| `backup/watch.sh` | Entrypoint compartido de los 4 sidecars: `inotifywait` + debounce + `rclone sync` versionado |
+| `backup/filtros.txt` | Filtros rclone del sidecar `sync-workspace` |
+| `backup/rclone-setup.sh` | `config` / `check` / `ls` / `restore-test` de rclone, desde el host y sin instalarlo |
+| **`bin/`** | |
+| `bin/claude-volume.sh` | `info` / `create` / `backup` / `restore` de los volúmenes, desde el host |
+| **`docs/`** | |
+| `docs/AGENTS.md` | Guía de diagnóstico del entorno completo |
+| `docs/CONFIGURACION-MANUAL.md` | Los pasos de una sola vez del respaldo cifrado (Dropbox, crypt, OAuth) |

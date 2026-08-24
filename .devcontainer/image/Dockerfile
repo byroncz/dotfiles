@@ -83,10 +83,14 @@ RUN if [ "$INSTALL_NVIM" = "true" ]; then \
 # Paquetes de Python (opcional; requiere una BASE_IMAGE con pip)
 RUN if [ -n "$PIP_PACKAGES" ]; then pip install --no-cache-dir $PIP_PACKAGES ; fi
 
-# Hook de build del proyecto: extras/build.sh. El template lo trae vacío; un
-# proyecto lo sobrescribe para instalar lo que los args no cubren (Node,
-# Terraform, un repo apt propio...). Ver extras/build.sh.
-COPY extras/ /tmp/extras/
+# Hook de build del proyecto: image/extras/build.sh. El template lo trae vacío;
+# un proyecto lo sobrescribe para instalar lo que los args no cubren (Node,
+# Terraform, un repo apt propio...). Ver image/extras/build.sh.
+#
+# Las rutas de COPY son relativas al build CONTEXT (.devcontainer/), no a este
+# fichero: por eso llevan el prefijo de carpeta aunque el Dockerfile viva en
+# image/.
+COPY image/extras/ /tmp/extras/
 RUN if [ -f /tmp/extras/build.sh ]; then bash /tmp/extras/build.sh ; fi \
  && rm -rf /tmp/extras
 
@@ -145,6 +149,6 @@ ENV GIT_CONFIG_GLOBAL="/home/${USERNAME}/.config/git/config"
 
 # Terminal mejorada (prompt con rama de git, venv y exit code; historial
 # grande; completado; aliases). ASCII-safe, sin Nerd Fonts (Problema 10).
-COPY --chown=${USER_UID}:${USER_GID} bash-enhancements.sh "/home/${USERNAME}/.bash_enhancements.sh"
+COPY --chown=${USER_UID}:${USER_GID} provision/bash-enhancements.sh "/home/${USERNAME}/.bash_enhancements.sh"
 RUN printf '\n# devcontainer bash enhancements\n[ -f "$HOME/.bash_enhancements.sh" ] && . "$HOME/.bash_enhancements.sh"\n' \
       >> "/home/${USERNAME}/.bashrc"

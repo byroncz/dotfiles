@@ -6,10 +6,14 @@
 #    3. git: config global y gitignore GLOBAL dentro de su volumen
 #    4. Resumen de la persistencia en el log de creación
 #    5. Extensiones del IDE
-#    6. Hook opcional del proyecto: .devcontainer/post-create.local.sh
+#    6. Hook opcional del proyecto: .devcontainer/provision/post-create.local.sh
 #  Nunca rompe el arranque: sin `set -e`, termina siempre en 0.
 # ─────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+
+# Los scripts hermanos se resuelven desde aquí, no desde el CWD: así mover
+# provision/ a otro sitio no vuelve a romper las llamadas.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 USER_NAME="$(id -un)"
 HOME_DIR="${HOME:-/home/${USER_NAME}}"
@@ -145,14 +149,14 @@ fi
 # deja el repo del proyecto con archivos modificados nada más arrancar, lo que
 # en un repo de cliente es ruido que alguien acaba commiteando sin querer.
 # Además es innecesario: `bash script.sh` no requiere el bit de ejecución.
-bash .devcontainer/install-extensions.sh || echo "[ext] instalación incompleta, continuo"
+bash "${SCRIPT_DIR}/install-extensions.sh" || echo "[ext] instalación incompleta, continuo"
 
 # ── 6. Hook del proyecto ────────────────────────────────────────────────────
 # Todo lo específico del proyecto (migraciones, seeds, sanity checks) va aquí
 # en vez de tocar este archivo; así el template se puede actualizar entero.
-if [ -f .devcontainer/post-create.local.sh ]; then
+if [ -f "${SCRIPT_DIR}/post-create.local.sh" ]; then
   echo "[post-create] ejecutando post-create.local.sh del proyecto"
-  bash .devcontainer/post-create.local.sh || echo "[post-create] post-create.local.sh falló, continuo"
+  bash "${SCRIPT_DIR}/post-create.local.sh" || echo "[post-create] post-create.local.sh falló, continuo"
 fi
 
 exit 0

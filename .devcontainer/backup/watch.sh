@@ -39,7 +39,7 @@ morir() { log "ERROR: $*"; exit 1; }
 REMOTO="${DESTINO%%:*}"
 if ! rclone listremotes 2>/dev/null | grep -qx "${REMOTO}:"; then
   log "el remoto '${REMOTO}:' no existe en la configuración de rclone."
-  log "¿Has hecho ya la configuración manual? Ver CONFIGURACION-MANUAL.md."
+  log "¿Has hecho ya la configuración manual? Ver docs/CONFIGURACION-MANUAL.md."
   morir "sin remoto no hay respaldo"
 fi
 

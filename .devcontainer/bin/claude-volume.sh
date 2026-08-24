@@ -1,22 +1,34 @@
 #!/usr/bin/env bash
-# Gestión de los volúmenes Docker persistentes del devcontainer:
-#   claude-home -> ~/.claude (conversaciones, credenciales, settings,
-#                          plugins, .claude.json)
-#   git-home    -> ~/.config/git (config global y gitignore GLOBAL del home)
-#   ${PROYECTO}-bash-history  -> /commandhistory (historial de bash)
+# Gestión de los volúmenes Docker persistentes del devcontainer. Los nombres
+# reales los define la sección `volumes:` de ../docker-compose.yml:
+#   claude-${CLIENTE}                    -> ~/.claude (conversaciones,
+#                                           credenciales, settings, plugins,
+#                                           .claude.json)
+#   git-home                             -> ~/.config/git (config global y
+#                                           gitignore GLOBAL del home)
+#   bash-history-${CLIENTE}-${PROYECTO}  -> /commandhistory
+#   basic-memory-${CLIENTE}              -> ~/basic-memory (knowledge)
+#   ide-extensions-${CLIENTE}-${PROYECTO}, nvim-data-*, nvim-state-*
 #
 # Se ejecuta EN EL HOST (no dentro del container).
 #
-#   ./claude-volume.sh info                 estado del volumen
-#   ./claude-volume.sh create               crea el volumen si no existe
-#   ./claude-volume.sh backup [destino]     tarball con timestamp
-#   ./claude-volume.sh restore <tarball>    restaura (SOBRESCRIBE)
+#   ./bin/claude-volume.sh info                 estado del volumen
+#   ./bin/claude-volume.sh create               crea el volumen si no existe
+#   ./bin/claude-volume.sh backup [destino]     tarball con timestamp
+#   ./bin/claude-volume.sh restore <tarball>    restaura (SOBRESCRIBE)
 #
-# Volumen por defecto: claude-home (debe coincidir con devcontainer.json).
-# Para operar sobre otro:  CLAUDE_VOLUME=git-home ./claude-volume.sh info
+# Por defecto opera sobre claude-${CLIENTE}, leyendo CLIENTE del .env hermano
+# (compose lo interpola igual). Para operar sobre otro:
+#   CLAUDE_VOLUME=git-home ./bin/claude-volume.sh info
 set -euo pipefail
 
-VOLUME="${CLAUDE_VOLUME:-claude-home}"
+# El .env no está en el entorno del host: hay que leerlo para reconstruir el
+# nombre del volumen exactamente como lo hace compose.
+ENV_FILE="$(cd "$(dirname "$0")/.." && pwd)/.env"
+# shellcheck disable=SC1090
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+VOLUME="${CLAUDE_VOLUME:-claude-${CLIENTE:-local}}"
 HELPER_IMAGE="${HELPER_IMAGE:-alpine:3.20}"
 
 die() { echo "error: $*" >&2; exit 1; }

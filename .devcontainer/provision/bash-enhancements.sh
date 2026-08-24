@@ -14,7 +14,7 @@ export HISTTIMEFORMAT='%F %T  '
 shopt -s histappend cmdhist
 
 # Historial persistente entre rebuilds: /commandhistory es un volumen Docker
-# (ver devcontainer.json). Si no está montado, se usa el ~/.bash_history normal.
+# (ver docker-compose.yml). Si no está montado, se usa el ~/.bash_history normal.
 [ -d /commandhistory ] && export HISTFILE=/commandhistory/.bash_history
 
 # ── Quality-of-life shell options ───────────────────────────────────────────

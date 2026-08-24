@@ -88,7 +88,7 @@ Las extensiones se instalan descargando VSIXs desde Open VSX y extrayéndolos en
 
 **Archivos necesarios:**
 
-1. **`.devcontainer/install-extensions.sh`** (script de instalación)
+1. **`.devcontainer/provision/install-extensions.sh`** (script de instalación)
 2. Llamarlo desde **`postCreateCommand`** en `devcontainer.json`
 3. Volumen persistente montado en `/home/vscode/.antigravity-ide-server/extensions`
 
@@ -343,7 +343,7 @@ docker exec -u vscode <container> mkdir -p /home/vscode/.antigravity-ide-server/
 ```
 
 ### Solución
-Pre-crear el directorio en el **Dockerfile** con ownership correcto. Docker nunca cambia el ownership del padre de un mount point — solo lo crea si no existe. Si ya existe con el owner correcto, el volumen se monta sin tocar el padre:
+Pre-crear el directorio en **`image/Dockerfile`** con ownership correcto. Docker nunca cambia el ownership del padre de un mount point — solo lo crea si no existe. Si ya existe con el owner correcto, el volumen se monta sin tocar el padre:
 
 ```dockerfile
 # En el RUN de mount targets, incluir el directorio padre del volumen:
@@ -373,7 +373,7 @@ En `devcontainer.json`:
 ]
 ```
 
-El `postCreateCommand` ejecuta `install-extensions.sh`, que detecta extensiones ya instaladas (`if [ -d "$extdir" ]`) y las salta. Solo descarga las que faltan.
+El `postCreateCommand` ejecuta `provision/install-extensions.sh`, que detecta extensiones ya instaladas (`if [ -d "$extdir" ]`) y las salta. Solo descarga las que faltan.
 
 ---
 
@@ -466,17 +466,17 @@ La imagen base (`python:3.11-slim`, Debian) trae bash minimal. El `~/.bashrc` de
 oh-my-zsh / starship añaden dependencias y, sobre todo, los temas powerline **requieren Nerd Fonts** en el terminal integrado del IDE — si la fuente no las tiene, el prompt se ve roto (cuadritos). Solución adoptada: **bash mejorado, ASCII-safe, cero dependencias externas** (solo el paquete `bash-completion` de apt). Funciona con cualquier fuente.
 
 ### Solución
-1. **`.devcontainer/bash-enhancements.sh`** — script sourceado desde `~/.bashrc`. Aporta:
+1. **`.devcontainer/provision/bash-enhancements.sh`** — script sourceado desde `~/.bashrc`. Aporta:
    - Prompt con código de salida del último comando, `user@host`, cwd, **venv de Python** y **rama de git con marcador `*` de dirty** (función propia con `git symbolic-ref`, sin depender de `git-prompt.sh`).
    - Historial grande, deduplicado, compartido entre sesiones (`history -a` en cada prompt), con timestamp.
    - `shopt`: `globstar`, `autocd`, `cdspell`, `checkwinsize`.
    - Colores y aliases (`ll`, `gs`, `gl`, `gd`, `..`, etc.).
    - Carga directa de `git-completion` como fallback si el loader de bash-completion no está.
 
-2. **Dockerfile** — añadir `bash-completion` a las deps de apt y conectar el script:
+2. **`image/Dockerfile`** — añadir `bash-completion` a las deps de apt y conectar el script:
    ```dockerfile
    # en el apt-get install: ... bash-completion ...
-   COPY --chown=${USER_UID}:${USER_GID} bash-enhancements.sh /home/vscode/.bash_enhancements.sh
+   COPY --chown=${USER_UID}:${USER_GID} provision/bash-enhancements.sh /home/vscode/.bash_enhancements.sh
    RUN printf '\n# devcontainer bash enhancements\n[ -f "$HOME/.bash_enhancements.sh" ] && . "$HOME/.bash_enhancements.sh"\n' \
        >> /home/vscode/.bashrc
    ```
@@ -485,7 +485,7 @@ oh-my-zsh / starship añaden dependencias y, sobre todo, los temas powerline **r
 
 ### Aplicar en vivo sin rebuild
 ```bash
-cp /workspace/.devcontainer/bash-enhancements.sh ~/.bash_enhancements.sh
+cp /workspace/.devcontainer/provision/bash-enhancements.sh ~/.bash_enhancements.sh
 grep -q .bash_enhancements.sh ~/.bashrc || \
   printf '\n[ -f "$HOME/.bash_enhancements.sh" ] && . "$HOME/.bash_enhancements.sh"\n' >> ~/.bashrc
 source ~/.bashrc   # o simplemente abrir una terminal nueva
@@ -535,7 +535,7 @@ ls -a /tmp/cfg   # .claude.json, backups/, ...
 ls -a /tmp/home  # vacío
 ```
 
-**3. Pre-crear el mount point en el `Dockerfile`** con el owner correcto (misma regla del Problema 7b). Un volumen nombrado vacío hereda contenido y ownership del directorio de la imagen la primera vez que se monta:
+**3. Pre-crear el mount point en `image/Dockerfile`** con el owner correcto (misma regla del Problema 7b). Un volumen nombrado vacío hereda contenido y ownership del directorio de la imagen la primera vez que se monta:
 
 ```dockerfile
 RUN mkdir -p "/home/${USERNAME}/.claude" \
@@ -603,7 +603,7 @@ Hay una trampa añadida: git prefiere `~/.gitconfig` sobre `~/.config/git/config
 
 Comprobado en git 2.43: con `GIT_CONFIG_GLOBAL` fijado, `git config --global core.excludesFile <ruta>` escribe en ese archivo y **no** crea `~/.gitconfig`.
 
-**3. Semilla en el `Dockerfile`** (un volumen vacío copia el contenido de la imagen la primera vez que se monta), y **fusión de lo que quede fuera** en `post-create.sh`: si aparecen `~/.gitconfig` o `~/.gitignore_global` (copiados del host o heredados de un container anterior), se anexan una sola vez al archivo del volumen — con un marcador que evita duplicados — y el original se renombra a `*.pre-volume`.
+**3. Semilla en `image/Dockerfile`** (un volumen vacío copia el contenido de la imagen la primera vez que se monta), y **fusión de lo que quede fuera** en `provision/post-create.sh`: si aparecen `~/.gitconfig` o `~/.gitignore_global` (copiados del host o heredados de un container anterior), se anexan una sola vez al archivo del volumen — con un marcador que evita duplicados — y el original se renombra a `*.pre-volume`.
 
 ### Diagnóstico
 ```bash
@@ -624,66 +624,39 @@ docker exec <container> sh -c 'cd /tmp && rm -rf t && mkdir t && cd t && git ini
 ### Ojo con estos casos
 - El volumen `git-home` es de este proyecto. Para una sola identidad y un solo gitignore global en toda la máquina, usar un nombre común en todos los devcontainers.
 - El gitignore global **no** sustituye al `.gitignore` del repo: las reglas que el equipo debe compartir van en el repo; las personales, aquí.
-- `core.excludesFile` con una ruta fuera del volumen (por ejemplo `~/.gitignore_global`) rompe la persistencia aunque el volumen esté montado; `post-create.sh` la reapunta al archivo del volumen.
+- `core.excludesFile` con una ruta fuera del volumen (por ejemplo `~/.gitignore_global`) rompe la persistencia aunque el volumen esté montado; `provision/post-create.sh` la reapunta al archivo del volumen.
 
 ---
 
 ## Configuración final de referencia
 
-### `devcontainer.json` completo
+### Dónde vive cada cosa
 
-Es el `devcontainer.json` del template (ver `README.md` para adaptarlo a cada
-proyecto):
+El template migró a Docker Compose. `devcontainer.json` ya **no** describe la
+imagen: los volúmenes, las env vars y los build args viven en
+[`../docker-compose.yml`](../docker-compose.yml) y en `.env`. Los ficheros
+reales son la referencia; aquí solo el reparto:
 
-```json
-{
-  "name": "${localWorkspaceFolderBasename}",
-  "build": {
-    "dockerfile": "Dockerfile",
-    "context": ".",
-    "args": {
-      "BASE_IMAGE": "debian:bookworm-slim",
-      "USERNAME": "vscode",
-      "EXTRA_APT": "",
-      "INSTALL_AWSCLI": "false",
-      "PIP_PACKAGES": ""
-    }
-  },
-  "runArgs": ["--name", "${localWorkspaceFolderBasename}-dev"],
-  "remoteUser": "vscode",
-  "workspaceFolder": "/workspace",
-
-  "mounts": [
-    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "source=claude-home,target=/home/vscode/.claude,type=volume",
-    "source=git-home,target=/home/vscode/.config/git,type=volume",
-    "source=${localWorkspaceFolderBasename}-bash-history,target=/commandhistory,type=volume",
-    "source=${localWorkspaceFolderBasename}-ide-extensions,target=/home/vscode/.antigravity-ide-server/extensions,type=volume"
-  ],
-
-  "containerEnv": {
-    "DISABLE_AUTOUPDATER": "1",
-    "CLAUDE_CONFIG_DIR": "/home/vscode/.claude",
-    "GIT_CONFIG_GLOBAL": "/home/vscode/.config/git/config"
-  },
-
-  "postCreateCommand": "bash .devcontainer/post-create.sh"
-}
-```
+| Fichero | Qué define |
+|---|---|
+| [`../devcontainer.json`](../devcontainer.json) | `dockerComposeFile`, `service: dev`, `workspaceFolder: /workspace`, `remoteUser`, `shutdownAction: none`, `postCreateCommand` |
+| [`../docker-compose.yml`](../docker-compose.yml) | Servicio `dev`, binds y volúmenes nombrados, `CLAUDE_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, los 4 sidecars de respaldo |
+| `../.env` | `CLIENTE`, `PROYECTO`, `BASE_IMAGE`, `USERNAME`, `EXTRA_APT`, `INSTALL_AWSCLI`, `PIP_PACKAGES`, `INSTALL_NVIM`, `NERD_FONT`, `COMPOSE_PROFILES` |
 
 Notas sobre esta configuración:
 
-- **`workspaceFolder` fijo `/workspace`** con bind explícito de `${localWorkspaceFolder}`: elimina de raíz el Problema 9b (nombres con espacios o mayúsculas).
-- **Imagen base parametrizable** (`BASE_IMAGE`): el template no ata el proyecto a ningún runtime. Por defecto `debian:bookworm-slim` (27 MB comprimido, frente a 336 MB de `devcontainers/base:bookworm`), y el CLI de Claude Code se instala como **binario nativo**, sin Node.
-- **`claude-home` y `git-home` sin prefijo de proyecto**: un solo login y un solo gitignore global para todos los devcontainers de la máquina. Los volúmenes de historial y extensiones sí van por proyecto.
-- **Ningún nombre usa `${devcontainerId}`**: ese ID cambia al editar `devcontainer.json` y con él se "pierde" el volumen anterior (sigue existiendo, pero ya no se monta).
-- **Hooks del proyecto**: `extras/build.sh` (build), `post-create.local.sh` (tras crear el container) y `extensions.local.sh` (lista de extensiones). Permiten adaptar el template sin editarlo.
+- **`workspaceFolder` fijo `/workspace`** con bind explícito de `..`: elimina de raíz el Problema 9b (nombres con espacios o mayúsculas).
+- **`shutdownAction: none`** es obligatorio: el valor por defecto (`stopCompose`) pararía los sidecars de respaldo al cerrar el devcontainer, que es justo cuando más falta hacen.
+- **Imagen base parametrizable** (`BASE_IMAGE`): el template no ata el proyecto a ningún runtime. Por defecto `debian:trixie-slim` (30 MB comprimido, frente a 336 MB de `devcontainers/base`), y el CLI de Claude Code se instala como **binario nativo**, sin Node.
+- **`claude-<cliente>` va por cliente, no por proyecto**: los transcripts de un cliente no deben acabar en el respaldo cifrado de otro. `git-home` sí es global: un solo gitignore global para toda la máquina.
+- **Ningún nombre usa `${devcontainerId}`**: ese ID cambia al editar `devcontainer.json` y con él se "pierde" el volumen anterior (sigue existiendo, pero ya no se monta). Por eso todos los volúmenes llevan `name:` explícito.
+- **Hooks del proyecto**: `image/extras/build.sh` (build), `provision/post-create.local.sh` (tras crear el container) y `provision/extensions.local.sh` (lista de extensiones). Permiten adaptar el template sin editarlo.
 
 ### Orden de operaciones en cada rebuild
 
 1. `devcontainer up --workspace-folder /ruta --remove-existing-container`
 2. Docker crea el container con el nombre fijo y monta los volúmenes
-3. `postCreateCommand` ejecuta `post-create.sh`:
+3. `postCreateCommand` ejecuta `provision/post-create.sh`:
    - `mkdir -p` + `chown` → garantiza permisos en los volúmenes de `.claude`, de git y de extensiones
    - migra al volumen `~/.claude.json`, `~/.gitconfig` y `~/.gitignore_global` si venían de fuera
    - reapunta `core.excludesFile` al gitignore global del volumen y marca `/workspace` como `safe.directory`
@@ -695,7 +668,7 @@ Notas sobre esta configuración:
 ### Ejecutar el script sin rebuild (fix rápido en container corriendo)
 
 ```bash
-docker exec -u vscode <nombre-container> bash /workspaces/proyecto/.devcontainer/install-extensions.sh
+docker exec -u vscode <nombre-container> bash /workspace/.devcontainer/provision/install-extensions.sh
 ```
 Luego hacer "Developer: Reload Window" en Antigravity.
 
@@ -714,7 +687,7 @@ Luego hacer "Developer: Reload Window" en Antigravity.
    ```
    Si el engine requerido es mayor a `1.107.0`, buscar versión anterior compatible (ver Problema 6).
 
-3. Añadir al final de `install-extensions.sh`:
+3. Añadir al final de `provision/install-extensions.sh`:
    ```bash
    install_vsix publisher name           # sin pin → última versión
    install_vsix publisher name X.Y.Z    # con pin → versión específica

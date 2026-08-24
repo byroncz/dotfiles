@@ -1,0 +1,11 @@
+# El build context es .devcontainer/ entero (docker-compose.yml: `context: .`).
+# Sin este fichero viajarían al daemon en cada build los ~70 KB de docs, los
+# scripts de host y el .env real (con nombres de cliente y proyecto).
+#
+# Allow-list, no deny-list: por defecto no entra nada, y lo que el Dockerfile
+# necesita se declara explícitamente. Si añades un COPY nuevo, añádelo también
+# aquí. Es deliberado: así nada se cuela por olvido.
+
+*
+!image/
+!provision/bash-enhancements.sh

@@ -6,12 +6,12 @@
 #  efímero (rclone/rclone:latest). Lo único que queda en el host es el
 #  archivo de configuración, en ~/.config/rclone/rclone.conf, cifrado.
 #
-#    ./rclone-setup.sh config        sesión interactiva de `rclone config`
-#    ./rclone-setup.sh check         estado: remotos, cifrado del .conf
-#    ./rclone-setup.sh ls <remoto>   lista un remoto (p. ej. crypt-<cliente>:)
-#    ./rclone-setup.sh restore-test  simulacro de restauración en limpio
+#    ./backup/rclone-setup.sh config        sesión interactiva de `rclone config`
+#    ./backup/rclone-setup.sh check         estado: remotos, cifrado del .conf
+#    ./backup/rclone-setup.sh ls <remoto>   lista un remoto (p. ej. crypt-<cliente>:)
+#    ./backup/rclone-setup.sh restore-test  simulacro de restauración en limpio
 #
-#  Los pasos y el porqué de cada uno están en CONFIGURACION-MANUAL.md.
+#  Los pasos y el porqué de cada uno están en docs/CONFIGURACION-MANUAL.md.
 #  Lee ese documento antes de ejecutar nada de aquí.
 # ───────────────────────────────────────────────────────────────────────────
 set -euo pipefail

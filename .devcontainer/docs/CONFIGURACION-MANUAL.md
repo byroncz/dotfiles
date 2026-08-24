@@ -25,7 +25,8 @@ en [`README.md`](README.md).
 | Cuenta de Dropbox (o B2/R2) | Destino del respaldo | — |
 
 **No hace falta instalar rclone.** Todo corre en contenedores efímeros a
-través de [`rclone-setup.sh`](rclone-setup.sh).
+través de [`backup/rclone-setup.sh`](../backup/rclone-setup.sh).
+Todos los comandos de este documento se ejecutan desde `.devcontainer/`.
 
 ---
 
@@ -48,7 +49,7 @@ Los tres van a NordPass. Los dos primeros van **además en papel**.
 
 ```bash
 cd .devcontainer
-./rclone-setup.sh config
+./backup/rclone-setup.sh config
 ```
 
 Se abre la sesión interactiva de rclone dentro de un contenedor.
@@ -97,7 +98,7 @@ vuelve al contenedor y rclone recoge el token solo.
 > *loopback del contenedor*, mientras que `docker run -p` publica sobre
 > `eth0`. Sin un `socat` que una las dos, la redirección muere en el navegador
 > y el `rclone config` se queda esperando un código que nunca llega.
-> `rclone-setup.sh` lo monta por ti; verificado con rclone v1.75.0 sobre
+> `backup/rclone-setup.sh` lo monta por ti; verificado con rclone v1.75.0 sobre
 > OrbStack.
 
 Termina con `y) Yes this is OK`.
@@ -210,7 +211,7 @@ recordándola de memoria: va a vivir en un gestor de contraseñas de todos modos
 Sal con `q) Quit config`. Comprueba:
 
 ```bash
-./rclone-setup.sh check
+./backup/rclone-setup.sh check
 ```
 
 ### Proyectos nuevos del mismo cliente
@@ -249,7 +250,7 @@ entero. El archivo guarda la contraseña del crypt "ofuscada" con una clave
 **estática y pública** —está en el código fuente de rclone, es reversible en
 un segundo— y el token OAuth del proveedor ni siquiera eso: va en claro.
 
-En una sesión de `./rclone-setup.sh config`:
+En una sesión de `./backup/rclone-setup.sh config`:
 
 ```
 s) Set configuration password
@@ -264,7 +265,7 @@ de la tabla anterior).
 Comprueba:
 
 ```bash
-./rclone-setup.sh check
+./backup/rclone-setup.sh check
 ```
 
 Debe decir `OK: cifrado` y listar `dropbox:` y `crypt-<cliente>:`.
@@ -314,7 +315,7 @@ ruido en la nube. Este paso es el único que demuestra que el sistema
 funciona.
 
 ```bash
-./rclone-setup.sh restore-test
+./backup/rclone-setup.sh restore-test
 ```
 
 Arranca una sesión de rclone con un directorio de configuración **vacío y

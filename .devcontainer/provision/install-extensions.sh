@@ -97,7 +97,7 @@ install_vsix() {
 
 # ─────────────────────────────────────────────────────────────────────────
 #  Extensiones. La base del template instala solo Claude Code; cada proyecto
-#  añade las suyas en .devcontainer/extensions.local.sh, que se sourcea al
+#  añade las suyas en .devcontainer/provision/extensions.local.sh, que se sourcea al
 #  final y puede usar install_vsix igual que aquí. Así el template se puede
 #  actualizar entero sin perder la lista del proyecto.
 #
