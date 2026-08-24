@@ -110,6 +110,17 @@ services:
   #  Todos montan su origen en :ro. Aunque watch.sh tuviera un fallo, no
   #  puede tocar lo que vigila.
   #
+  #  UN SOLO remoto crypt por cliente, `crypt-<CLIENTE>`, anclado en
+  #  backups/devcontainers/<cliente>. Todo lo que cuelga de ahí va cifrado,
+  #  nombres de carpeta incluidos.
+  #
+  #  Antes había un crypt por cada carpeta que se quería leer sin descifrar,
+  #  y eso hacía que añadir un volumen nuevo costara una sesión de
+  #  `rclone config`: un coste que crecía con cada volumen. Ahora un volumen
+  #  nuevo es solo una subruta más dentro del mismo crypt, sin tocar rclone.
+  #  El precio, aceptado a conciencia: en Dropbox solo se lee el nombre del
+  #  cliente; qué hay dentro solo se ve descifrando con las claves.
+  #
   #  Están bajo el perfil "respaldo": no arrancan hasta que pongas
   #  COMPOSE_PROFILES=respaldo en .env. Así el devcontainer funciona desde
   #  el primer día, antes de configurar rclone, sin sidecars reiniciándose
@@ -144,8 +155,8 @@ services:
         required: false
     environment:
       NOMBRE: "claude"
-      DESTINO: "crypt-${CLIENTE:-local}-claude:datos"
-      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}-claude:versiones"
+      DESTINO: "crypt-${CLIENTE:-local}:claude/datos"
+      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}:claude/versiones"
       INTERVALO: "30"
       MAX_INTERVAL: "900"
 
@@ -164,8 +175,8 @@ services:
         required: false
     environment:
       NOMBRE: "workspace"
-      DESTINO: "crypt-${CLIENTE:-local}-${PROYECTO:-dev}-workspace:datos"
-      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}-${PROYECTO:-dev}-workspace:versiones"
+      DESTINO: "crypt-${CLIENTE:-local}:${PROYECTO:-dev}/workspace/datos"
+      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}:${PROYECTO:-dev}/workspace/versiones"
       # Más espaciado que el resto: el código cambia en ráfagas (un build,
       # un `npm install`) y no tiene sentido subir en mitad de una.
       INTERVALO: "120"
@@ -189,8 +200,8 @@ services:
         required: false
     environment:
       NOMBRE: "knowledge"
-      DESTINO: "crypt-${CLIENTE:-local}-knowledge:datos"
-      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}-knowledge:versiones"
+      DESTINO: "crypt-${CLIENTE:-local}:knowledge/datos"
+      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}:knowledge/versiones"
       INTERVALO: "60"
       MAX_INTERVAL: "1800"
 
@@ -210,8 +221,8 @@ services:
       NOMBRE: "historial"
       # Sidecar propio en vez de colgar del de Claude: el historial debe
       # poder leerlo cualquier agente (Codex, OpenCode), no solo Claude.
-      DESTINO: "crypt-${CLIENTE:-local}-${PROYECTO:-dev}-historial:datos"
-      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}-${PROYECTO:-dev}-historial:versiones"
+      DESTINO: "crypt-${CLIENTE:-local}:${PROYECTO:-dev}/historial/datos"
+      DESTINO_VERSIONES: "crypt-${CLIENTE:-local}:${PROYECTO:-dev}/historial/versiones"
       INTERVALO: "120"
       MAX_INTERVAL: "3600"
 

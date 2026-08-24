@@ -109,65 +109,66 @@ Termina con `y) Yes this is OK`.
 
 ## Paso 2 — Crear el remoto `crypt` (uno por cliente)
 
-**Un crypt por cliente**, con contraseña y salt propios. Así el respaldo de un
-cliente no se puede descifrar con las claves de otro, aunque los dos vivan en
-la misma cuenta.
+**Un solo crypt por cliente**, con contraseña y salt propios. Todos los
+volúmenes de ese cliente cuelgan de él como subrutas, así que **añadir un
+volumen o un proyecto nuevo no requiere volver a tocar rclone**.
 
-Esto es lo que quedará en el remoto, con `<cliente>` y `<proyecto>` legibles y
-todo lo de dentro cifrado:
+Esto es lo que quedará en el remoto:
 
 ```
-acme/                       <- legible
-├── claude/                 <- legible
-│   └── 7hq3n8k2.../           cifrado
-├── knowledge/              <- legible
-└── tienda-web/             <- legible
-    ├── workspace/          <- legible
-    │   └── mv91xz4b.../       cifrado
-    └── historial/          <- legible
+backups/
+└── devcontainers/
+    ├── self/                 <- legible: el cliente
+    │   └── 7hq3n8k2.../         cifrado: todo lo demás
+    └── acme/                 <- legible
+        └── mv91xz4b.../         cifrado
 ```
 
-Un remoto crypt por cada carpeta legible. **Dos son del cliente y se crean
-una sola vez; dos son del proyecto y se repiten en cada proyecto nuevo:**
+Y esto es lo que hay dentro, visible solo con las claves:
+
+```
+claude/datos          claude/versiones
+knowledge/datos       knowledge/versiones
+<proyecto>/workspace/datos    <proyecto>/workspace/versiones
+<proyecto>/historial/datos    <proyecto>/historial/versiones
+```
 
 | Remoto | Carpeta en el remoto | Cuándo |
 |---|---|---|
-| `crypt-<cliente>-claude` | `dropbox:<cliente>/claude` | una vez por cliente |
-| `crypt-<cliente>-knowledge` | `dropbox:<cliente>/knowledge` | una vez por cliente |
-| `crypt-<cliente>-<proyecto>-workspace` | `dropbox:<cliente>/<proyecto>/workspace` | por proyecto |
-| `crypt-<cliente>-<proyecto>-historial` | `dropbox:<cliente>/<proyecto>/historial` | por proyecto |
+| `crypt-<cliente>` | `dropbox:backups/devcontainers/<cliente>` | **una vez por cliente** |
 
-Los nombres no se configuran en ningún sitio: los sidecars los derivan de
-`CLIENTE` y `PROYECTO` del `.env`. Por eso esos dos valores deben ser
-identificadores simples, sin espacios ni acentos.
+El nombre no se configura en ningún sitio: los sidecars lo derivan de
+`CLIENTE`. Por eso ese valor debe ser un identificador simple, sin espacios ni
+acentos.
 
-> **Por qué la ruta está partida así.** Refleja el alcance real de cada
-> volumen. `claude` y `knowledge` son **del cliente**: los comparten todos sus
-> proyectos, así que colgarlos de un proyecto los duplicaría. `workspace` e
-> `historial` son **del proyecto**, y ahí el error sería el contrario: dos
-> proyectos apuntando a la misma carpeta se destruirían el respaldo mutuamente,
-> porque `sync` borra en destino lo que no está en origen.
-
-> **Por qué un remoto por carpeta.** Lo que escribes en `remote>` es ruta
-> normal del remoto y se ve **en claro**; todo lo que el crypt guarda por debajo
-> se cifra. Un nombre solo es legible si hay un crypt anclado justo ahí.
+> **Por qué solo el cliente queda legible.** Lo que escribes en `remote>` es
+> ruta normal del proveedor y se ve **en claro**; todo lo que el crypt guarda
+> por debajo se cifra. Un nombre solo es legible si hay un crypt anclado justo
+> ahí — y cada anclaje cuesta una sesión de `rclone config`.
 >
-> El precio es que quien acceda a tu cuenta ve los nombres de cliente y
-> proyecto, aunque no pueda leer nada. Si eso te incomoda, usa identificadores
-> neutros (`c1/p1`) y apunta la equivalencia en NordPass.
+> Hacer legibles también las subcarpetas obligaba a crear un crypt por cada
+> una, y ese coste crecía con cada volumen y cada proyecto. Con el anclaje en
+> el cliente basta configurar una vez y no volver.
+>
+> El precio es que en el navegador de archivos solo distingues **de qué
+> cliente** es cada respaldo. Para ver qué contiene hace falta rclone con las
+> claves — que es como se recupera de todos modos.
+>
+> Si el nombre del cliente es sensible, usa un identificador neutro (`c1`) y
+> apunta la equivalencia en NordPass.
 
 Las carpetas **no hay que crearlas a mano**: se crean solas en la primera
 subida.
 
-Empieza por el primero, en la misma sesión de `rclone config`:
+En la misma sesión de `rclone config`:
 
 ```
 n) New remote
-name> crypt-<cliente>-claude               <- <cliente> = CLIENTE en .env
+name> crypt-<cliente>                          <- <cliente> = CLIENTE en .env
 Storage> crypt
-remote> dropbox:<cliente>/claude           <- esta ruta se ve EN CLARO
-filename_encryption> 1                     (standard: cifra también los nombres)
-directory_name_encryption> 1               (true)
+remote> dropbox:backups/devcontainers/<cliente>   <- esta ruta se ve EN CLARO
+filename_encryption> 1                         (standard: cifra los nombres)
+directory_name_encryption> 1                   (true)
 ```
 
 Y aquí viene lo que importa:
@@ -206,57 +207,21 @@ recordándola de memoria: va a vivir en un gestor de contraseñas de todos modos
 > termine y cifres el `rclone.conf`, recuperarlos requiere la contraseña del
 > `.conf`; y si esa también se pierde, se acabó.
 
-### Los otros tres remotos
-
-Repite `n) New remote` tres veces más, cambiando solo el nombre y la carpeta
-según la tabla de arriba.
-
-**Con una diferencia importante:** en estos tres, cuando pregunte por la
-contraseña y el salt, elige **`y) Yes, type in my own password`** y pega
-**los mismos valores** que generaste en el primero.
-
-```
-y/g/q> y
-Enter the password:            <- pega la contraseña del primer crypt
-y/g/n> y
-Enter the password:            <- pega el salt del primer crypt
-```
-
-Así los cuatro comparten un único juego de claves: un secreto que guardar, no
-cuatro. Si generas claves nuevas en cada uno acabarás con ocho secretos y la
-probabilidad de perder uno se multiplica.
-
-> No uses `rclone config create ... password=...` para acelerar esto: la
-> contraseña quedaría en el historial del shell en texto plano.
-
-Cuando tengas los cuatro, sal con `q) Quit config`. Comprueba:
+Sal con `q) Quit config`. Comprueba:
 
 ```bash
 ./rclone-setup.sh check
 ```
 
-Debe listar `dropbox:` y los cuatro `crypt-<cliente>-*:`.
+### Proyectos nuevos del mismo cliente
 
-### Al empezar un proyecto nuevo del MISMO cliente
-
-Dos remotos más, con las claves de ese cliente (opción `y`, pegando los
-valores de NordPass):
-
-```
-crypt-<cliente>-<proyecto2>-workspace   -> dropbox:<cliente>/<proyecto2>/workspace
-crypt-<cliente>-<proyecto2>-historial   -> dropbox:<cliente>/<proyecto2>/historial
-```
-
-Los de `claude` y `knowledge` ya existen y se reutilizan tal cual: sus
-volúmenes son del cliente, no del proyecto.
+No hay nada que hacer. El sidecar del proyecto nuevo escribirá en
+`crypt-<cliente>:<proyecto-nuevo>/workspace/` y la carpeta se crea sola.
 
 ### Otros clientes
 
-Cada cliente lleva sus propios remotos y **sus propias claves**, generadas de
-nuevo con `g`. Ese es el punto: el respaldo de un cliente no se puede
-descifrar con las claves de otro.
-
----
+Un crypt más, con **claves nuevas** generadas con `g`. Ese es el punto: el
+respaldo de un cliente no se puede descifrar con las claves de otro.
 
 ## Paso 3 — Guardar los secretos
 
@@ -266,8 +231,8 @@ Antes de seguir. No después, no "luego lo apunto".
 
 | Entrada | Contenido |
 |---|---|
-| `rclone crypt-<cliente> — password` | La contraseña del paso 2 |
-| `rclone crypt-<cliente> — salt` | El salt del paso 2 |
+| `rclone crypt <cliente> — password` | La contraseña del paso 2 |
+| `rclone crypt <cliente> — salt` | El salt del paso 2 |
 | `rclone.conf — password` | La del paso 4 (aún no la tienes) |
 
 **En papel**, la contraseña y el salt de cada crypt. Guardado físicamente
@@ -354,7 +319,7 @@ funciona.
 
 Arranca una sesión de rclone con un directorio de configuración **vacío y
 temporal**, que ignora por completo tu `rclone.conf`. Ahí reconstruyes
-`dropbox` (OAuth otra vez) y los crypt, y listas el contenido.
+`dropbox` (OAuth otra vez) y el crypt, y listas el contenido.
 
 **Las reglas del simulacro:**
 
@@ -364,8 +329,10 @@ temporal**, que ignora por completo tu `rclone.conf`. Ahí reconstruyes
 2. Lo ideal es hacerlo en **otra máquina**, o al menos con otro usuario de
    macOS. En tu portátil de siempre es fácil que algo funcione por una razón
    que no estarás replicando el día que importe.
-3. Al terminar, `rclone ls crypt-<cliente>:workspace` debe devolver archivos con
-   nombres legibles.
+3. El propio script lista el remoto y te dice cuántos archivos recuperó con
+   nombres legibles. Si dice SIMULACRO FALLIDO, las claves que guardaste no
+   son las buenas: arréglalo mientras todavía puedas resubir con claves
+   nuevas.
 
 Repítelo cada pocos meses, y sin falta después de cambiar cualquier clave.
 
