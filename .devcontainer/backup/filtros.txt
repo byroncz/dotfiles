@@ -39,6 +39,25 @@
 - .ipynb_checkpoints/**
 - .terraform/**
 
+# ── Worktrees de git (preparado, NO activo) ────────────────────────────────
+# Un agente por worktree multiplica el respaldo: N worktrees son N copias
+# completas del código, y `rclone sync` las sube todas.
+#
+# Estas reglas están listas pero COMENTADAS a propósito, porque activarlas
+# tiene un coste que hay que aceptar a conciencia: un worktree contiene
+# cambios sin commitear que no existen en ningún otro sitio, exactamente lo
+# mismo que hace que .git sí se respalde. Excluirlo entero los pierde.
+#
+# Lo que NO hace falta activar: las carpetas regenerables de dentro de un
+# worktree (node_modules, dist, __pycache__...) ya están cubiertas, porque
+# las reglas de arriba no van ancladas y rclone las aplica a cualquier
+# profundidad. Lo único que duplica un worktree es el código en sí.
+#
+# Descoméntalas cuando el número de worktrees haga que el respaldo tarde más
+# de lo aceptable, y ajusta la ruta a la que uses de verdad:
+# - .worktrees/**
+# - worktrees/**
+
 # ── Ruido ──────────────────────────────────────────────────────────────────
 - *.log
 - *.tmp

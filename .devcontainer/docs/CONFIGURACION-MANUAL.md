@@ -119,9 +119,9 @@ Esto es lo que quedará en el remoto:
 ```
 backups/
 └── devcontainers/
-    ├── self/                 <- legible: el cliente
+    ├── cliente-a/            <- legible: el cliente
     │   └── 7hq3n8k2.../         cifrado: todo lo demás
-    └── acme/                 <- legible
+    └── cliente-b/            <- legible
         └── mv91xz4b.../         cifrado
 ```
 

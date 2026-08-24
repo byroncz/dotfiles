@@ -312,7 +312,7 @@ Ghostty o Alacritty.
 ```bash
 ./bin/claude-volume.sh info                 # credenciales, nº de transcripciones, tamaño
 ./bin/claude-volume.sh backup ~/backups     # tarball con timestamp
-./bin/claude-volume.sh restore ~/backups/claude-self-20260822-193000.tar.gz
+./bin/claude-volume.sh restore ~/backups/claude-<cliente>-20260822-193000.tar.gz
 CLAUDE_VOLUME=git-home ./bin/claude-volume.sh info
 ```
 
