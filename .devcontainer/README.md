@@ -170,16 +170,28 @@ el que el IDE copia del host) y deja el original como `.pre-volume`.
 Cinco herramientas, cada una tras su build arg, todas a `true` por defecto.
 Un proyecto que no las quiera las apaga en `.env` y no paga ni un byte.
 
-| Build arg | Instala | Cuesta |
+| Build arg | Instala | Capa medida |
 |---|---|---|
-| `INSTALL_UV` | `uv` (Astral) | ~35 MB |
-| `INSTALL_BASIC_MEMORY` | `basic-memory` + servidor MCP | ~150 MB (trae su propio Python) |
-| `INSTALL_OPENSPEC` | `openspec` (`@fission-ai/openspec`) | Node 22, ~120 MB, compartidos |
-| `INSTALL_BACKLOG` | `backlog` (`backlog.md`) | — |
-| `INSTALL_NOTION_MCP` | `@notionhq/notion-mcp-server` | — |
+| `INSTALL_UV` | `uv` (Astral) | 50 MB |
+| `INSTALL_BASIC_MEMORY` | `basic-memory` + servidor MCP | **1,05 GB** |
+| `INSTALL_OPENSPEC` | `openspec` (`@fission-ai/openspec`) | 400 MB entre las tres |
+| `INSTALL_BACKLOG` | `backlog` (`backlog.md`) | (Node 22 + 172 MB de paquetes) |
+| `INSTALL_NOTION_MCP` | `@notionhq/notion-mcp-server` | |
+
+Las cifras están **medidas** con `docker history`, no estimadas. Con las cinco
+apagadas (y `INSTALL_NVIM=false`) la imagen son 801 MB; con todo puesto, 3,1 GB.
+
+**`INSTALL_BASIC_MEMORY` cuesta 1 GB**, mucho más de lo que sugiere una base de
+conocimiento en markdown, y conviene saberlo antes de dejarlo puesto: 95 MB son
+su propio CPython y el resto son las dependencias del venv, encabezadas por
+`litellm` (60 MB), `onnxruntime` (53 MB) y `numpy` (55 MB entre sus dos
+carpetas), que están ahí por la búsqueda semántica y sus embeddings. Un
+proyecto que solo quiera notas en markdown puede apagarlo y perder poco.
 
 Las tres últimas vienen por npm y arrastran Node, que **solo se instala si
-alguna de las tres está a `true`**. Apagadas las tres, no hay Node en la imagen.
+alguna de las tres está a `true`**. Apagadas las tres, no hay Node en la imagen
+(verificado construyendo con las cinco a `false`: ni `node` ni ninguno de los
+cinco binarios aparece).
 
 ### Python con uv, no con `PIP_PACKAGES`
 
