@@ -52,6 +52,13 @@ run_rclone() {
   _inner_script >"$tmp"; chmod +x "$tmp"
 
   local flags=(--rm -v "${CONF_DIR}:/config/rclone" -v "${tmp}:/inner.sh:ro")
+
+  # Si ya existe el archivo de secretos del paso 5, se reutiliza: es el mismo
+  # que leen los sidecars. Sin esto, con el .conf cifrado cualquier comando
+  # no interactivo se queda esperando una contraseña que nadie va a teclear.
+  if [ -f "${CONF_DIR}/devcontainer.env" ]; then
+    flags+=(--env-file "${CONF_DIR}/devcontainer.env")
+  fi
   if [ "$interactive" = "1" ]; then
     flags+=(-it -p "${AUTH_PORT}:${AUTH_PORT}")
   fi
@@ -110,6 +117,90 @@ cmd_check() {
   echo
   echo "── Remotos configurados ──"
   run_rclone 0 listremotes 2>&1 || true
+  echo
+  auditar_crypts
+}
+
+# ── Auditoría de los remotos crypt ────────────────────────────────────────
+# Existe por un fallo real: al crear un crypt, la ruta del remoto acabó
+# pegada en el prompt de la contraseña. rclone lo aceptó sin rechistar, el
+# respaldo funcionaba, y la "clave" era una cadena escrita en claro en la
+# propia estructura de carpetas del proveedor.
+#
+# El modo `g` de rclone tiene la misma trampa por otro lado: enseña la clave
+# UNA vez, en mitad de un cuestionario largo, y sigue adelante sin comprobar
+# que la copiaste. Nada avisa; el respaldo cifra igual.
+#
+# Nunca imprime los valores: solo si pasan o no las comprobaciones.
+auditar_crypts() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "── Auditoría de claves: omitida (falta python3 en el host) ──"
+    return 0
+  fi
+  echo "── Auditoría de las claves de cifrado ──"
+
+  local dump
+  dump="$(run_rclone 0 config dump 2>/dev/null)" || {
+    echo "no pude leer la configuración"; return 1; }
+
+  printf '%s' "$dump" | python3 -c '
+import json, subprocess, sys
+
+def revelar(v):
+    r = subprocess.run(["docker","run","--rm","'"$IMAGE"'","reveal",v],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+try:
+    cfg = json.load(sys.stdin)
+except Exception:
+    print("  no pude interpretar la configuración"); sys.exit(1)
+
+crypts = {k: v for k, v in cfg.items() if v.get("type") == "crypt"}
+if not crypts:
+    print("  (todavía no hay ningún remoto crypt)"); sys.exit(0)
+
+problemas = 0
+for nombre, c in sorted(crypts.items()):
+    fallos = []
+    clave = revelar(c.get("password", ""))
+    salt  = revelar(c.get("password2", ""))
+    remoto = c.get("remote", "")
+
+    if not clave:
+        fallos.append("sin contraseña")
+    else:
+        if clave == remoto:
+            fallos.append("la contraseña ES la ruta del remoto (visible en el proveedor)")
+        if remoto and (clave in remoto or remoto in clave):
+            fallos.append("la contraseña se parece a la ruta del remoto")
+        if len(clave) < 20:
+            fallos.append(f"contraseña corta ({len(clave)} caracteres; 128 bits dan ~22)")
+        if nombre in clave:
+            fallos.append("la contraseña contiene el nombre del remoto")
+    if not salt:
+        fallos.append("sin salt (password2): quedan menos bits de los que crees")
+    elif len(salt) < 20:
+        fallos.append(f"salt corto ({len(salt)} caracteres)")
+    if clave and salt and clave == salt:
+        fallos.append("contraseña y salt son iguales")
+
+    if fallos:
+        problemas += 1
+        print(f"  FALLO  {nombre}")
+        for f in fallos:
+            print(f"           - {f}")
+    else:
+        print(f"  ok     {nombre}")
+
+if problemas:
+    print()
+    print("  Una clave adivinable deja el respaldo protegido solo a medias.")
+    print("  Recrea el remoto con `g` (aleatoria, 128 bits) en contraseña Y")
+    print("  salt, guarda las dos ANTES de continuar, y vuelve a subir: los")
+    print("  datos cifrados con la clave vieja hay que reescribirlos.")
+    sys.exit(1)
+'
 }
 
 cmd_ls() {
