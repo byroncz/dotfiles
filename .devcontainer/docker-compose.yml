@@ -124,7 +124,13 @@ services:
     volumes:
       - ./watch.sh:/watch.sh:ro
       - claude-config:/origen:ro
-      - ${HOME}/.config/rclone:/config/rclone:ro
+      # El origen va en :ro; la CONFIG no puede. Los tokens OAuth caducan
+      # (4 h en Dropbox) y rclone guarda el renovado en rclone.conf. En :ro
+      # falla con "Failed to save config" y lo renueva otra vez en cada
+      # ciclo: hoy funciona porque el refresh_token aguanta, pero se rompería
+      # el día que el proveedor los rote. Y como frontera de seguridad no
+      # servía de nada: el sidecar ya tiene la contraseña del .conf.
+      - ${HOME}/.config/rclone:/config/rclone
     # ${HOME}, nunca "~": compose no expande la virgulilla y buscaría un
     # directorio llamado "~" dentro de .devcontainer/.
     #
@@ -152,7 +158,7 @@ services:
       - ./watch.sh:/watch.sh:ro
       - ./filtros.txt:/filtros.txt:ro
       - ..:/origen:ro
-      - ${HOME}/.config/rclone:/config/rclone:ro
+      - ${HOME}/.config/rclone:/config/rclone
     env_file:
       - path: ${HOME}/.config/rclone/devcontainer.env
         required: false
@@ -177,7 +183,7 @@ services:
       # respalda: se reconstruye con `basic-memory sync`, y copiarlo en
       # caliente es la forma habitual de restaurar una base corrupta.
       - basic-memory:/origen:ro
-      - ${HOME}/.config/rclone:/config/rclone:ro
+      - ${HOME}/.config/rclone:/config/rclone
     env_file:
       - path: ${HOME}/.config/rclone/devcontainer.env
         required: false
@@ -196,7 +202,7 @@ services:
     volumes:
       - ./watch.sh:/watch.sh:ro
       - bash-history:/origen:ro
-      - ${HOME}/.config/rclone:/config/rclone:ro
+      - ${HOME}/.config/rclone:/config/rclone
     env_file:
       - path: ${HOME}/.config/rclone/devcontainer.env
         required: false

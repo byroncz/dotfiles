@@ -142,16 +142,61 @@ AVISO
   local tmpconf; tmpconf="$(mktemp -d -t rclone-restore)"
   echo
   echo "Directorio de configuración temporal: ${tmpconf}"
-  echo "Reconstruye ahí los remotos 'gdrive' y el crypt, y luego prueba:"
-  echo "    rclone ls <crypt>:workspace"
+  echo "Reconstruye ahí el remoto de almacenamiento y UN crypt, con la"
+  echo "contraseña y el salt sacados de NordPass. Luego sal con 'q'."
   echo
   port_libre
   CONF_DIR="$tmpconf"   # run_rclone monta $CONF_DIR; así el simulacro no ve
                         # ni por accidente el rclone.conf real.
   run_rclone 1 config
+
+  # ── La verificación ─────────────────────────────────────────────────────
+  # Va AQUÍ y no en las manos del usuario. Antes el script abría rclone,
+  # borraba el directorio temporal al salir y daba el simulacro por hecho sin
+  # haber leído un solo archivo: te hacía repetir todo el trabajo y tiraba la
+  # única evidencia que importaba.
   echo
-  echo "Simulacro terminado. Borrando la configuración temporal."
-  rm -rf "$tmpconf"
+  local remotos
+  remotos="$(run_rclone 0 listremotes 2>/dev/null | grep -v '^$' || true)"
+  if [ -z "$remotos" ]; then
+    echo "No creaste ningún remoto: no hay nada que verificar."
+    rm -rf "$tmpconf"
+    return 1
+  fi
+
+  echo "Remotos reconstruidos:"
+  echo "$remotos" | sed 's/^/   /'
+  echo
+  printf "¿Cuál contiene los datos a recuperar? (p. ej. crypt-x-workspace:) "
+  read -r remoto
+  [ -n "$remoto" ] || { echo "cancelado"; rm -rf "$tmpconf"; return 1; }
+  case "$remoto" in *:) ;; *) remoto="${remoto}:" ;; esac
+
+  echo
+  echo "── Listando ${remoto} con las claves de NordPass ──"
+  local salida rc=0
+  salida="$(run_rclone 0 ls "$remoto" 2>&1)" || rc=$?
+  local n
+  n="$(printf '%s\n' "$salida" | grep -cE '^[[:space:]]*[0-9]+ ' || true)"
+
+  if [ "$rc" -eq 0 ] && [ "$n" -gt 0 ]; then
+    printf '%s\n' "$salida" | head -15 | sed 's/^/   /'
+    [ "$n" -gt 15 ] && echo "   ... y $((n - 15)) más"
+    echo
+    echo "SIMULACRO SUPERADO: ${n} archivos recuperados con nombres legibles,"
+    echo "usando solo lo que guardaste fuera de esta máquina."
+    rm -rf "$tmpconf"
+  else
+    printf '%s\n' "$salida" | tail -5 | sed 's/^/   /'
+    echo
+    echo "SIMULACRO FALLIDO. Puede ser un error al teclear la contraseña o el"
+    echo "salt, o una ruta de remoto distinta a la original. Si las claves de"
+    echo "NordPass no son las buenas, esos datos NO son recuperables: revísalo"
+    echo "AHORA, que todavía puedes volver a subirlos con claves nuevas."
+    echo
+    echo "La configuración temporal se conserva para que reintentes sin"
+    echo "rehacer el OAuth:  RCLONE_CONF_DIR='${tmpconf}' $0 ls ${remoto}"
+  fi
 }
 
 case "${1:-check}" in
