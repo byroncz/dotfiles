@@ -169,6 +169,26 @@ RUN set -eu; \
       npm cache clean --force; \
     fi
 
+# ─────────────────────────────────────────────────────────────────────────
+#  GNU Stow — enlaza la configuración compartida de agentes (skills, comandos)
+#  desde el repo de dotfiles al repo de trabajo. Ver provision/post-create.sh.
+#
+#  Se eligió frente a chezmoi, yadm, dotbot y home-manager por ser la única
+#  que cumple las cuatro condiciones de este caso: enlaces puros (no copias,
+#  así editar desde cualquiera de los dos lados es el MISMO archivo), destino
+#  arbitrario (`--target`, no solo $HOME), 581 KB desde apt, y `stow -D`
+#  desenlaza exactamente lo que creó. Ese último punto es lo que no da un
+#  bucle de `ln`: al quitar una skill compartida, el bucle deja el enlace
+#  roto y stow lo limpia.
+# ─────────────────────────────────────────────────────────────────────────
+ARG INSTALL_STOW=true
+RUN if [ "$INSTALL_STOW" = "true" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends stow \
+      && rm -rf /var/lib/apt/lists/* \
+      && stow --version | head -1 ; \
+    fi
+
 # Paquetes de Python (opcional; requiere una BASE_IMAGE con pip)
 RUN if [ -n "$PIP_PACKAGES" ]; then pip install --no-cache-dir $PIP_PACKAGES ; fi
 

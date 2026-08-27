@@ -6,6 +6,7 @@
 #    3. git: config global y gitignore GLOBAL dentro de su volumen
 #    3d. Basic Memory: registrar el proyecto de conocimiento
 #    3e. MCP: generar .mcp.json y ~/.codex/config.toml desde mcp/servers.json
+#    3f. Skills compartidas: enlazarlas con stow desde el repo de dotfiles
 #    4. Resumen de la persistencia en el log de creación
 #    5. Extensiones del IDE
 #    6. Hook opcional del proyecto: .devcontainer/provision/post-create.local.sh
@@ -191,6 +192,90 @@ fi
 if command -v python3 >/dev/null 2>&1; then
   WORKSPACE_DIR="${WORKSPACE_DIR:-$(pwd)}" \
     python3 "${SCRIPT_DIR}/generar-mcp.py" || echo "[mcp] generación incompleta, continuo"
+fi
+
+# ── 3f. Skills compartidas de agentes, enlazadas desde los dotfiles ─────────
+# Origen: <dotfiles>/claude/skills/  ->  destino: <workspace>/.claude/skills/
+#
+# ENLACES, no copias: editar la skill desde el repo de trabajo y editarla desde
+# el repo de dotfiles son la misma operación sobre el mismo archivo. Una copia
+# se quedaría atrás en cuanto alguien tocara el otro lado.
+#
+# Se usa stow y no un bucle de `ln` por una razón concreta: `stow -R` desenlaza
+# antes de volver a enlazar, así una skill borrada del repo de dotfiles
+# desaparece del repo de trabajo. Un bucle de `ln` dejaría el enlace roto.
+#
+# EL `mkdir -p` DEL DESTINO NO ES OPCIONAL. Si `.claude/skills/` no existe,
+# stow "pliega" el árbol y enlaza el DIRECTORIO ENTERO en vez de cada skill:
+#
+#   sin el mkdir ->  .claude/skills   -> <dotfiles>/claude/skills   (mal)
+#   con el mkdir ->  .claude/skills/a -> <dotfiles>/claude/skills/a (bien)
+#
+# Con el directorio plegado, `openspec init` escribiría sus skills dentro del
+# repo de dotfiles y todos los proyectos compartirían las mismas. Verificado.
+DESTINO_CLAUDE="$(pwd)/.claude"
+
+# La condición es que exista el PAQUETE (<dotfiles>/claude), no que tenga
+# skills dentro. Con cero skills, `stow -R` desenlaza las que hubiera: es el
+# caso "he dejado de compartirlas todas", y saltárselo dejaría enlaces
+# huérfanos apuntando a lo que ya no existe.
+if command -v stow >/dev/null 2>&1 && [ -d "${DOTFILES_DIR}/claude" ]; then
+  mkdir -p "${DESTINO_CLAUDE}/skills"
+
+  # --ignore: el paquete es <dotfiles>/claude entero, así que sin esto su
+  # README y el .gitkeep acabarían enlazados dentro del .claude del cliente.
+  #
+  # Las regex van SIN anclas: stow añade ^ y $ por su cuenta, y escribirlas
+  # aquí produce ^^...$$, que no casa con nada. El síntoma es silencioso —el
+  # archivo se enlaza igual y stow no se queja—, así que se verificó
+  # ejecutando las dos formas: con anclas, .gitkeep aparecía en el destino.
+  if stow -R --ignore="README\.md" --ignore="\.gitkeep" \
+          -d "${DOTFILES_DIR}" -t "$DESTINO_CLAUDE" claude 2>/dev/null; then
+    N_SKILLS="$(find "${DESTINO_CLAUDE}/skills" -maxdepth 1 -type l 2>/dev/null | wc -l | tr -d ' ')"
+    echo "[skills] compartidas: ${N_SKILLS} enlazadas desde ${DOTFILES_DIR}/claude/skills"
+  else
+    # Sin silenciar: un conflicto aquí deja al agente sin las skills.
+    echo "[skills] AVISO: stow no pudo enlazar (¿un archivo real con el mismo nombre?)"
+  fi
+fi
+
+# El bloque del exclude se reescribe SIEMPRE, esté o no stow y haya o no
+# skills. Si solo se actualizara cuando hay alguna, dejar de compartirlas
+# todas conservaría las entradas muertas para siempre — el mismo fallo que
+# `stow -R` evita en los enlaces.
+#
+# Va a .git/info/exclude, que es local al clon y NO se versiona: el .gitignore
+# del cliente no se toca, que es de él y no debe cargar con artefactos de
+# nuestro template. Sin esto, arrancar el devcontainer deja su repo sucio.
+GIT_DIR_REAL="$(git rev-parse --git-dir 2>/dev/null)"
+if [ -n "$GIT_DIR_REAL" ]; then
+  mkdir -p "${GIT_DIR_REAL}/info"
+  python3 - "${GIT_DIR_REAL}/info/exclude" "${DESTINO_CLAUDE}/skills" <<'EOF' 2>/dev/null
+import pathlib, sys
+
+exclude, destino = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+INI = "# >>> skills compartidas (devcontainer) >>>"
+FIN = "# <<< skills compartidas (devcontainer) <<<"
+
+# Todo lo que no sea nuestro bloque se conserva tal cual.
+ajeno, dentro = [], False
+for linea in exclude.read_text().splitlines() if exclude.exists() else []:
+    if linea == INI:
+        dentro = True
+    elif linea == FIN:
+        dentro = False
+    elif not dentro:
+        ajeno.append(linea)
+while ajeno and not ajeno[-1].strip():
+    ajeno.pop()
+
+enlaces = sorted(p.name for p in destino.iterdir() if p.is_symlink()) if destino.is_dir() else []
+bloque = [INI] + [f".claude/skills/{n}" for n in enlaces] + [FIN] if enlaces else []
+
+nuevo = "\n".join(ajeno + bloque).strip() + "\n"
+if not exclude.exists() or exclude.read_text() != nuevo:
+    exclude.write_text(nuevo)
+EOF
 fi
 
 # ── 4. Estado de la persistencia ────────────────────────────────────────────

@@ -177,6 +177,7 @@ Un proyecto que no las quiera las apaga en `.env` y no paga ni un byte.
 | `INSTALL_OPENSPEC` | `openspec` (`@fission-ai/openspec`) | 400 MB entre las tres |
 | `INSTALL_BACKLOG` | `backlog` (`backlog.md`) | (Node 22 + 172 MB de paquetes) |
 | `INSTALL_NOTION_MCP` | `@notionhq/notion-mcp-server` | |
+| `INSTALL_STOW` | GNU Stow, para las skills compartidas | 581 KB |
 
 Las cifras están **medidas** con `docker history`, no estimadas. Con las cinco
 apagadas (y `INSTALL_NVIM=false`) la imagen son 801 MB; con todo puesto, 3,1 GB.
@@ -262,6 +263,64 @@ workspace y sin permisos. Está declarado en `mcp/servers.json` con
 `"enabled": false`, así que no se genera en ninguna config de MCP hasta que
 alguien lo active a conciencia. El token, cuando llegue, va **fuera del repo**,
 como el resto de los secretos.
+
+### Skills compartidas entre repos
+
+Las skills que quieras en **todos** los proyectos viven en el repo de dotfiles,
+bajo `claude/skills/`, y `post-create.sh` las **enlaza** dentro del repo de
+trabajo con GNU Stow:
+
+```
+<dotfiles>/claude/skills/<nombre>   ──enlace──>   <repo>/.claude/skills/<nombre>
+```
+
+Enlaces y no copias: editarla desde el repo de trabajo y editarla desde el de
+dotfiles son la misma operación sobre el mismo archivo.
+
+Lo compartido y lo local conviven en el mismo directorio, y es deliberado:
+
+```
+.claude/skills/
+├── <nombre>            -> enlace al repo de dotfiles   (compartida)
+└── openspec-propose/   directorio real del proyecto    (local)
+```
+
+Añadir una skill compartida es crear `claude/skills/<nombre>/SKILL.md` en el
+repo de dotfiles y reabrir el container. No hay que registrarla en ningún
+sitio. Quitarla es borrarla: `stow -R` desenlaza antes de enlazar, así que el
+enlace desaparece en vez de quedarse roto.
+
+**Los enlaces no ensucian el repo del cliente.** Se excluyen desde
+`.git/info/exclude`, que es local al clon y no se versiona, en un bloque
+gestionado que se reescribe en cada arranque. El `.gitignore` del proyecto no
+se toca: es suyo, y no debe cargar con artefactos de este template.
+
+#### Por qué Stow y no chezmoi, yadm, dotbot o home-manager
+
+Es el único que cumple las cuatro condiciones de este caso concreto:
+
+| | Enlaces puros | Destino arbitrario | Coste | Desenlaza lo suyo |
+|---|---|---|---|---|
+| **stow** | sí | `--target` | 581 KB, apt | `stow -D` |
+| chezmoi | no, **copia** | sí | binario | — |
+| yadm | — | solo `$HOME` | — | — |
+| dotbot | sí | sí | submódulo + Python | parcial |
+| home-manager | sí | sí | exige Nix | sí |
+
+chezmoi queda fuera por el modelo: materializa archivos reales, así que editar
+en el repo de trabajo no vuelve al de dotfiles. Tiene modo symlink, pero
+entonces es Stow con más maquinaria. yadm solo opera sobre `$HOME`, no sobre
+directorios de proyecto. home-manager pide Nix dentro de la imagen.
+
+> **Dos trampas de Stow, las dos verificadas ejecutando.**
+>
+> **Pliega directorios.** Si `.claude/skills/` no existe, enlaza el directorio
+> entero en vez de cada skill, y entonces `openspec init` escribiría sus
+> skills dentro del repo de dotfiles. Se evita con `mkdir -p` antes.
+>
+> **Ancla las regex de `--ignore` él mismo.** Escribir `^...$` produce
+> `^^...$$`, que no casa con nada — y el fallo es silencioso: el archivo se
+> enlaza igual y Stow no se queja.
 
 ## Neovim
 

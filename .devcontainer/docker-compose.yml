@@ -28,6 +28,7 @@ services:
         INSTALL_OPENSPEC: "${INSTALL_OPENSPEC:-true}"
         INSTALL_BACKLOG: "${INSTALL_BACKLOG:-true}"
         INSTALL_NOTION_MCP: "${INSTALL_NOTION_MCP:-true}"
+        INSTALL_STOW: "${INSTALL_STOW:-true}"
 
     container_name: "${CLIENTE:-local}-${PROYECTO:-dev}"
 
