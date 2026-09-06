@@ -115,6 +115,19 @@ if [ ! -d "$WS/.git" ]; then
 fi
 cd "$WS"
 
+# Modo dev: el arranque y los scripts del workspace mandan sobre los de la
+# imagen, para que un cambio en devkit/ se pruebe con `devkit recreate` sin
+# reconstruir. El guardián DEVKIT_REEXEC evita un bucle.
+if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -z "${DEVKIT_REEXEC:-}" ] \
+   && [ -f "$WS/devkit/entrypoint.sh" ] && ! cmp -s "$WS/devkit/entrypoint.sh" /opt/devkit/entrypoint.sh; then
+  log "modo dev: reiniciando con el arranque del workspace"
+  DEVKIT_REEXEC=1 exec bash "$WS/devkit/entrypoint.sh" "$@"
+fi
+SCRIPTS_DIR=/opt/devkit/scripts
+if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$WS/devkit/scripts" ]; then
+  SCRIPTS_DIR="$WS/devkit/scripts"
+fi
+
 # Enlaces del template hacia el workspace (solo si el template existe).
 if [ -d "$TEMPLATE_DIR/agents" ]; then
   mkdir -p "$WS/.claude"
@@ -143,7 +156,7 @@ if [ -n "${DEVKIT_SANDBOX_REMOTE:-}" ] && [ -r "$HOME/.config/rclone/rclone.conf
     fi
   fi
   if [ -f "$SANDBOX/.restored" ]; then
-    nohup /opt/devkit/scripts/sync-sandbox.sh "$SANDBOX" "$DEVKIT_SANDBOX_REMOTE" >"$RUN_DIR/sync.log" 2>&1 &
+    nohup bash "$SCRIPTS_DIR/sync-sandbox.sh" "$SANDBOX" "$DEVKIT_SANDBOX_REMOTE" >"$RUN_DIR/sync.log" 2>&1 &
     log "sync del sandbox activo (cada 60 s)"
   fi
 else
@@ -171,8 +184,8 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 fi
 
 # --- 8. Bucles -----------------------------------------------------------------
-if [ -n "${GH_TOKEN:-}" ] && [ -x /opt/devkit/scripts/watch-merged.sh ]; then
-  nohup /opt/devkit/scripts/watch-merged.sh >"$RUN_DIR/watch-merged.log" 2>&1 &
+if [ -n "${GH_TOKEN:-}" ] && [ -f "$SCRIPTS_DIR/watch-merged.sh" ]; then
+  nohup bash "$SCRIPTS_DIR/watch-merged.sh" >"$RUN_DIR/watch-merged.log" 2>&1 &
   log "vigilancia de PRs mergeados activa (cada 5 min)"
 fi
 
