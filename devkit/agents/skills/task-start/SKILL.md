@@ -23,8 +23,8 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    asignada, cámbiate a esa rama y continúa: es una reanudación.
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
 4. Nombre de rama: prefijo por `Tipo` (`feat/`, `fix/`, `chore/`), la Clave
-   en minúsculas no, la Clave tal cual, y un slug corto del título en
-   minúsculas con guiones. Ejemplo: `feat/DEVKIT-3-skills-del-flujo`.
+   tal cual (en mayúsculas) y un slug corto del título en minúsculas con
+   guiones. Ejemplo: `feat/DEVKIT-3-skills-del-flujo`.
 5. `git switch -c <rama>` y `git push -u origin <rama>`.
 6. Actualiza la card: `Estado` = `En progreso`, `Agente` = tu nombre
    (`claude` o `codex`), `Rama` = `https://github.com/<owner>/<repo>/tree/<rama>`.
