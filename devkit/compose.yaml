@@ -1,0 +1,80 @@
+# devkit: dos contenedores por proyecto.
+#   dev    -> donde trabajas. Sin salida directa a internet.
+#   proxy  -> único con salida, filtrada por lista blanca.
+#
+# Este archivo se copia a ~/.devkit/<proyecto>/ junto con:
+#   .env        variables de interpolación de compose (las escribe new-project.sh)
+#   devkit.env  variables que entran al contenedor (las editas tú)
+#   template/   copia del template en la versión declarada (contexto de build)
+name: devkit-${DEVKIT_PROJECT}
+
+services:
+  dev:
+    build:
+      context: ./template
+      args:
+        EXTRA_APT: ${DEVKIT_EXTRA_APT:-}
+    image: devkit:${DEVKIT_VERSION}
+    container_name: devkit-${DEVKIT_PROJECT}
+    hostname: ${DEVKIT_PROJECT}
+    init: true
+    tty: true
+    stdin_open: true
+    env_file: devkit.env
+    environment:
+      DEVKIT_PROJECT: ${DEVKIT_PROJECT}
+      DEVKIT_VERSION: ${DEVKIT_VERSION}
+      HTTP_PROXY: http://proxy:8888
+      HTTPS_PROXY: http://proxy:8888
+      NO_PROXY: localhost,127.0.0.1,proxy
+      # Puerto fijo del retorno OAuth de los servidores MCP (plugin de Notion).
+      MCP_OAUTH_CALLBACK_PORT: "54545"
+    secrets:
+      - bws_token
+    tmpfs:
+      - /run/devkit:mode=700,uid=1000,gid=1000
+    volumes:
+      - claude:/home/dev/.claude
+      - history:/commandhistory
+      - proxy-log:/var/log/devkit-proxy:ro
+    networks:
+      - internal
+    depends_on:
+      - proxy
+
+  proxy:
+    build: ./template/proxy
+    image: devkit-proxy:${DEVKIT_VERSION}
+    container_name: devkit-${DEVKIT_PROJECT}-proxy
+    init: true
+    environment:
+      DEVKIT_ALLOW_DOMAINS: ${DEVKIT_ALLOW_DOMAINS:-}
+      DEVKIT_NET_OPEN: ${DEVKIT_NET_OPEN:-0}
+    volumes:
+      - proxy-log:/var/log/tinyproxy
+    ports:
+      # Retorno OAuth de los MCP (plugin de Notion). Docker no publica puertos
+      # de contenedores que solo están en una red interna, así que entra por el
+      # proxy: Mac localhost:54545 -> proxy:54546 -> dev:54546 -> 127.0.0.1:54545
+      # dentro de dev, donde escucha Claude Code. Cada salto lo hace socat.
+      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
+    networks:
+      - internal
+      - egress
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  claude:
+    name: claude-${DEVKIT_PROJECT}
+  history:
+    name: history-${DEVKIT_PROJECT}
+  proxy-log:
+    name: proxylog-${DEVKIT_PROJECT}
+
+secrets:
+  bws_token:
+    file: ${DEVKIT_BWS_TOKEN_FILE:-~/.devkit/bws-token}
