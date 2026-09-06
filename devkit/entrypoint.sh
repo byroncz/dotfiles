@@ -94,8 +94,17 @@ fi
 # --- 4. Workspace --------------------------------------------------------------
 if [ ! -d "$WS/.git" ]; then
   if [ -n "${DEVKIT_REPO:-}" ]; then
-    log "clonando $DEVKIT_REPO"
-    git clone --quiet ${DEVKIT_REPO_REF:+--branch "$DEVKIT_REPO_REF"} "$DEVKIT_REPO" "$WS.tmp" && cp -a "$WS.tmp/." "$WS/" && rm -rf "$WS.tmp"
+    log "clonando $DEVKIT_REPO${DEVKIT_REPO_REF:+ (rama $DEVKIT_REPO_REF)}"
+    # Se clona en un temporal del usuario y se copia: /workspace puede no
+    # estar vacío (sandbox.local) y git rehúsa clonar sobre un directorio con
+    # contenido.
+    clone_tmp="$(mktemp -d)"
+    if git clone --quiet ${DEVKIT_REPO_REF:+--branch "$DEVKIT_REPO_REF"} "$DEVKIT_REPO" "$clone_tmp/repo"; then
+      cp -a "$clone_tmp/repo/." "$WS/"
+    else
+      warn "clon falló; workspace vacío"
+    fi
+    rm -rf "$clone_tmp"
   else
     warn "sin DEVKIT_REPO y sin repo en $WS: workspace vacío"
   fi
