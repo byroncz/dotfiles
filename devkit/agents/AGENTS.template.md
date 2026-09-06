@@ -26,6 +26,21 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
   lista blanca del proxy. Ejecuta `devkit-net-denied` y añádelo a
   `DEVKIT_ALLOW_DOMAINS` en `devkit.env`.
 
+## Notion y skills
+
+- Notion es el centro de tareas. Identificadores de las bases (Proyectos,
+  Tareas, Documentación) en `.claude/devkit-notion.json`. Accede con el
+  plugin oficial de Notion; si no responde, avisa al humano y no improvises.
+- Cada skill en `.claude/skills/` es un paso del flujo. Las principales:
+  `/session-start` al abrir la sesión, `/task-start` toma una card libre,
+  `/task-review` abre el PR, `/task-close` la cierra tras el merge,
+  `/task-block` cuando necesitas al humano. Lee `.claude/skills/README.md`
+  para el resto.
+- El humano decide dos cosas: mover una Épica de Backlog a Lista y aprobar
+  el PR. Todo lo demás lo haces tú, sin preguntar, siguiendo las skills.
+- En modo headless (`claude -p`) no hay quien responda: si falta algo,
+  coméntalo en la card y termina.
+
 ## Guía de redacción
 
 Aplica a todo texto que escribas: descripciones, comentarios, respuestas,

@@ -119,6 +119,7 @@ cd "$WS"
 if [ -d "$TEMPLATE_DIR/agents" ]; then
   mkdir -p "$WS/.claude"
   ln -sfn "$TEMPLATE_DIR/agents/skills" "$WS/.claude/skills"
+  ln -sfn "$TEMPLATE_DIR/agents/notion.json" "$WS/.claude/devkit-notion.json"
   [ -f "$WS/AGENTS.md" ] || sed "s/{{PROJECT}}/${DEVKIT_PROJECT:-proyecto}/g; s/{{CODE}}/${DEVKIT_PROJECT_CODE:-PROJ}/g" "$TEMPLATE_DIR/agents/AGENTS.template.md" > "$WS/AGENTS.md"
   [ -f "$WS/CLAUDE.md" ] || printf '@AGENTS.md\n' > "$WS/CLAUDE.md"
 fi

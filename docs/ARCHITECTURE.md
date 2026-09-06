@@ -462,6 +462,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Sesión interactiva con el token de Bitwarden | El asistente de primer arranque exige un login propio | Login OAuth una vez por proyecto; queda en el volumen `claude-<proyecto>`. El token de Bitwarden sirve para el modo headless |
 | Copiar direcciones largas desde tmux | Terminal.app inserta saltos de línea al copiar texto envuelto | En el Mac: `pbpaste \| tr -d ' \n' \| pbcopy` antes de pegar en Safari |
 | Ratón en Neovim y en Claude Code | Ambos capturan el ratón; la selección nativa exige apagar "Permitir informe del ratón" | Documentado en 4.4; se recomienda un atajo de teclado al menú |
+| `settings.json` niega todo `gh pr merge` | `task-review` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
 
 ## 13. Referencias
 
