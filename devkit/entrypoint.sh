@@ -56,8 +56,11 @@ if [ -s /run/secrets/bws_token ]; then
       # Tokens de una línea: se eliminan espacios y saltos pegados por error.
       [ -r "$RUN_DIR/$key" ] && printf 'export %s=%q\n' "$var" "$(tr -d '[:space:]' < "$RUN_DIR/$key")" >> "$ENV_FILE"
     done
-    if [ -r "$RUN_DIR/rclone_conf" ]; then
-      mkdir -p "$HOME/.config/rclone"; cp "$RUN_DIR/rclone_conf" "$HOME/.config/rclone/rclone.conf"; chmod 600 "$HOME/.config/rclone/rclone.conf"
+    # rclone.conf viaja en base64 en una sola línea (ver scripts/dropbox-setup.sh).
+    if [ -r "$RUN_DIR/rclone_conf_b64" ]; then
+      mkdir -p "$HOME/.config/rclone"
+      tr -d '[:space:]' < "$RUN_DIR/rclone_conf_b64" | base64 -d > "$HOME/.config/rclone/rclone.conf"
+      chmod 600 "$HOME/.config/rclone/rclone.conf"
     fi
   else
     warn "bws falló: $(cat "$RUN_DIR/bws.err")"
@@ -143,7 +146,7 @@ if [ -n "${DEVKIT_SANDBOX_REMOTE:-}" ] && [ -r "$HOME/.config/rclone/rclone.conf
     log "sync del sandbox activo (cada 60 s)"
   fi
 else
-  warn "sandbox sin respaldo: falta DEVKIT_SANDBOX_REMOTE o rclone.conf"
+  warn "sandbox sin respaldo: falta DEVKIT_SANDBOX_REMOTE o el secreto rclone_conf_b64"
 fi
 
 # --- 7. Claude -----------------------------------------------------------------
