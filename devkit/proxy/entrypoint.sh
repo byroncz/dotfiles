@@ -17,4 +17,6 @@ else
   echo "[proxy] lista blanca activa: $(wc -l < /etc/tinyproxy/allowlist) dominios" >&2
 fi
 touch /var/log/tinyproxy/tinyproxy.log; chown tinyproxy:tinyproxy /var/log/tinyproxy/tinyproxy.log
+# Retorno OAuth de MCP: lo que llega del Mac al 54546 va al contenedor dev.
+socat TCP-LISTEN:54546,fork,reuseaddr TCP:dev:54546 &
 exec tinyproxy -d -c "$conf"

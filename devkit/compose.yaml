@@ -37,11 +37,6 @@ services:
       - claude:/home/dev/.claude
       - history:/commandhistory
       - proxy-log:/var/log/devkit-proxy:ro
-    ports:
-      # Retorno OAuth de los MCP (plugin de Notion). El navegador del Mac llega a
-      # localhost:54545; Docker lo entrega al 54546 del contenedor, donde socat
-      # lo pasa al 127.0.0.1:54545 en el que escucha Claude Code.
-      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
     networks:
       - internal
     depends_on:
@@ -57,6 +52,12 @@ services:
       DEVKIT_NET_OPEN: ${DEVKIT_NET_OPEN:-0}
     volumes:
       - proxy-log:/var/log/tinyproxy
+    ports:
+      # Retorno OAuth de los MCP (plugin de Notion). Docker no publica puertos
+      # de contenedores que solo están en una red interna, así que entra por el
+      # proxy: Mac localhost:54545 -> proxy:54546 -> dev:54546 -> 127.0.0.1:54545
+      # dentro de dev, donde escucha Claude Code. Cada salto lo hace socat.
+      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
     networks:
       - internal
       - egress

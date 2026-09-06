@@ -6,8 +6,9 @@
 #   devkit attach <proyecto>    entrar a la sesión de tmux
 #   devkit stop <proyecto>      detener sin perder nada
 #   devkit down <proyecto>      destruir el contenedor (el código no committeado se pierde)
-#   devkit recreate <proyecto>  recrear el contenedor con la misma imagen: relee secretos y devkit.env
-#   devkit rebuild <proyecto>   reconstruir la imagen y recrear el contenedor
+#   devkit recreate <proyecto>  recrear los contenedores: relee secretos y devkit.env, y
+#                               reconstruye solo las capas de imagen que cambiaron
+#   devkit rebuild <proyecto>   reconstruir las imágenes desde cero y recrear
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
 #   devkit ls                   proyectos instanciados
@@ -39,8 +40,8 @@ case "$cmd" in
   attach)   attach ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && compose up -d --force-recreate && attach ;;
-  rebuild)  confirm && compose build --no-cache dev && compose up -d --force-recreate && attach ;;
+  recreate) confirm && compose up -d --build --force-recreate && attach ;;
+  rebuild)  confirm && compose build --no-cache && compose up -d --force-recreate && attach ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;
   *)        usage ;;
