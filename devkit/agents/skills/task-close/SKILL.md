@@ -11,7 +11,12 @@ Argumento: Clave. Opcional: URL del PR.
 
 1. Localiza la card. Si ya está `Hecha`, responde "ya cerrada" y termina:
    este skill se ejecuta varias veces y debe ser idempotente.
+   Si `Nivel` es Épica, no hay PR: verifica que todas sus hijas están
+   `Hecha` y salta al cierre de Épica del paso 7. Si falta alguna, responde
+   cuáles y termina.
 2. Verifica el merge: `gh pr view <url o número> --json state,mergedAt,mergeCommit,url`.
+   Si no recibiste URL, usa la propiedad `PR` de la card; si también está
+   vacía, comenta en la card que falta el PR y termina.
    Si `state` no es `MERGED`, no cierres nada; responde "PR no mergeado" y
    termina.
 3. Actualiza la card: `Estado` = `Hecha`, `Cierre` = fecha de hoy, `PR` si

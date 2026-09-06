@@ -11,8 +11,9 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 
 - Código del proyecto en Notion: `{{CODE}}`. Cada tarea es una card con
   Clave `{{CODE}}-<n>`. Las skills en `.claude/skills/` definen cada paso.
-- Una card activa por sesión. Rama `feat/{{CODE}}-<n>-slug` desde `main`,
-  PR a `main` con auto-merge. Nunca push directo a `main`. Nunca force push.
+- Una card activa por sesión. Rama `<tipo>/{{CODE}}-<n>-slug` desde `main`
+  (`feat/`, `fix/` o `chore/` según el Tipo de la card), PR a `main` con
+  auto-merge. Nunca push directo a `main`. Nunca force push.
 - Commits con Conventional Commits y la Clave como ámbito:
   `feat({{CODE}}-42): agregar carga incremental`.
 - `sandbox.local/` es un espacio de pruebas respaldado en Dropbox y fuera de
