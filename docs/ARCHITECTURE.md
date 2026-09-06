@@ -202,9 +202,9 @@ devkit/
     sync-sandbox.sh       # rclone cada minuto
     watch-merged.sh       # PRs mergeados cada cinco minutos
     net-denied.sh         # destinos bloqueados por el proxy
+  VERSION                 # la lee new-project.sh para elegir la etiqueta
+  CHANGELOG.md            # una entrada por etiqueta; la lee template-update
 new-project.sh
-VERSION
-CHANGELOG.md
 docs/ARCHITECTURE.md
 ```
 
