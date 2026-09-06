@@ -161,7 +161,8 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   if claude plugin list 2>/dev/null | grep -q '^notion@'; then
     log "plugin de Notion ya instalado"
   else
-    claude plugin marketplace update claude-plugins-official >"$RUN_DIR/plugin.log" 2>&1 || true
+    { claude plugin marketplace update claude-plugins-official \
+        || claude plugin marketplace add anthropics/claude-plugins-official; } >"$RUN_DIR/plugin.log" 2>&1 || true
     claude plugin install notion@claude-plugins-official >>"$RUN_DIR/plugin.log" 2>&1 \
       && log "plugin de Notion instalado" \
       || warn "no se pudo instalar el plugin de Notion: $(tail -1 "$RUN_DIR/plugin.log")"
