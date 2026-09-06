@@ -7,6 +7,8 @@ claude.ai
 *.claude.ai
 statsig.anthropic.com
 *.anthropic.com
+claude.com
+*.claude.com
 
 # GitHub (repos, releases, raw, API)
 github.com

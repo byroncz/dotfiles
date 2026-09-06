@@ -53,7 +53,8 @@ if [ -s /run/secrets/bws_token ]; then
       done
     for pair in "claude_oauth_token:CLAUDE_CODE_OAUTH_TOKEN" "github_token:GH_TOKEN"; do
       key="${pair%%:*}"; var="${pair##*:}"
-      [ -r "$RUN_DIR/$key" ] && printf 'export %s=%q\n' "$var" "$(cat "$RUN_DIR/$key")" >> "$ENV_FILE"
+      # Tokens de una línea: se eliminan espacios y saltos pegados por error.
+      [ -r "$RUN_DIR/$key" ] && printf 'export %s=%q\n' "$var" "$(tr -d '[:space:]' < "$RUN_DIR/$key")" >> "$ENV_FILE"
     done
     if [ -r "$RUN_DIR/rclone_conf" ]; then
       mkdir -p "$HOME/.config/rclone"; cp "$RUN_DIR/rclone_conf" "$HOME/.config/rclone/rclone.conf"; chmod 600 "$HOME/.config/rclone/rclone.conf"
