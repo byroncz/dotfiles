@@ -24,6 +24,11 @@ Convenciones comunes a todas:
 
 - Identificadores de Notion en `.claude/devkit-notion.json`. Código del
   proyecto en `AGENTS.md`.
+- Localizar una card por Clave (`DEVKIT-7`): el MCP de Notion no devuelve
+  el valor de las fórmulas, así que no filtres por `Clave`. Separa código y
+  número, y consulta Tareas con `ID` = número y `Proyecto` = la fila cuyo
+  Código es el del proyecto (`data_source_id` de `tareas` en el JSON). Al
+  escribir la Clave en ramas, commits y PRs, constrúyela tú: `<Código>-<ID>`.
 - Todo texto sigue la guía de redacción de `AGENTS.md`.
 - Idempotencia: cada skill comprueba el estado actual antes de actuar y no
   repite lo que ya está hecho.

@@ -31,6 +31,8 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 - Notion es el centro de tareas. Identificadores de las bases (Proyectos,
   Tareas, Documentación) en `.claude/devkit-notion.json`. Accede con el
   plugin oficial de Notion; si no responde, avisa al humano y no improvises.
+  Para encontrar una card por Clave, filtra por `ID` y `Proyecto`, no por
+  la fórmula `Clave`: el MCP no la devuelve. Detalle en `.claude/skills/README.md`.
 - Cada skill en `.claude/skills/` es un paso del flujo. Las principales:
   `/session-start` al abrir la sesión, `/task-start` toma una card libre,
   `/task-review` abre el PR, `/task-close` la cierra tras el merge,
