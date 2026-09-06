@@ -153,6 +153,19 @@ fi
 if [ -d "$TEMPLATE_DIR/agents" ]; then
   [ -f "$HOME/.claude/settings.json" ] || cp "$TEMPLATE_DIR/agents/settings.json" "$HOME/.claude/settings.json"
 fi
+# Reenvío del retorno OAuth: Docker entrega en la IP del contenedor (54546) y
+# Claude Code escucha en 127.0.0.1:54545. socat une ambos extremos.
+nohup socat TCP-LISTEN:54546,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:54545 >/dev/null 2>&1 &
+# Plugin oficial de Notion, por proyecto (queda en el volumen ~/.claude).
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  if claude plugin list 2>/dev/null | grep -q '^notion@'; then
+    log "plugin de Notion ya instalado"
+  else
+    claude plugin install notion@claude-plugins-official >"$RUN_DIR/plugin.log" 2>&1 \
+      && log "plugin de Notion instalado" \
+      || warn "no se pudo instalar el plugin de Notion: $(tail -1 "$RUN_DIR/plugin.log")"
+  fi
+fi
 
 # --- 8. Bucles -----------------------------------------------------------------
 if [ -n "${GH_TOKEN:-}" ] && [ -x /opt/devkit/scripts/watch-merged.sh ]; then

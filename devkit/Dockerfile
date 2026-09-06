@@ -38,7 +38,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git gnupg unzip zip jq less procps \
-      ncurses-base ncurses-term tmux zsh ripgrep fd-find openssh-client \
+      ncurses-base ncurses-term tmux zsh ripgrep fd-find openssh-client socat \
       ${EXTRA_APT} \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*

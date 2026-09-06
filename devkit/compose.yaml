@@ -27,6 +27,8 @@ services:
       HTTP_PROXY: http://proxy:8888
       HTTPS_PROXY: http://proxy:8888
       NO_PROXY: localhost,127.0.0.1,proxy
+      # Puerto fijo del retorno OAuth de los servidores MCP (plugin de Notion).
+      MCP_OAUTH_CALLBACK_PORT: "54545"
     secrets:
       - bws_token
     tmpfs:
@@ -36,8 +38,10 @@ services:
       - history:/commandhistory
       - proxy-log:/var/log/devkit-proxy:ro
     ports:
-      # Retorno OAuth de Claude Code (plugin de Notion). Solo en el Mac.
-      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54545"
+      # Retorno OAuth de los MCP (plugin de Notion). El navegador del Mac llega a
+      # localhost:54545; Docker lo entrega al 54546 del contenedor, donde socat
+      # lo pasa al 127.0.0.1:54545 en el que escucha Claude Code.
+      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
     networks:
       - internal
     depends_on:
