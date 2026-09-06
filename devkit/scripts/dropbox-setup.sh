@@ -34,17 +34,20 @@ resp="$(curl -fsS https://api.dropboxapi.com/oauth2/token \
   || { echo "Dropbox rechazó el código. Vuelve a ejecutar el script y usa un código nuevo." >&2; exit 1; }
 
 refresh="$(printf '%s' "$resp" | jq -r '.refresh_token // empty')"
-[ -n "$refresh" ] || { echo "respuesta sin refresh_token: $resp" >&2; exit 1; }
+access="$(printf '%s' "$resp" | jq -r '.access_token // empty')"
+expires_in="$(printf '%s' "$resp" | jq -r '.expires_in // 14400')"
+[ -n "$refresh" ] && [ -n "$access" ] || { echo "respuesta incompleta de Dropbox: $resp" >&2; exit 1; }
+expiry="$(date -u -d "+${expires_in} seconds" +%FT%TZ)"
 
 conf_dir="$HOME/.config/rclone"; mkdir -p "$conf_dir"
 conf="$conf_dir/rclone.conf"
-# expiry en el pasado obliga a rclone a renovar con el refresh_token al primer uso.
+# rclone exige un access_token real; cuando caduque lo renueva con refresh_token.
 cat > "$conf" <<EOF
 [dropbox]
 type = dropbox
 client_id = ${APP_KEY}
 client_secret = ${APP_SECRET}
-token = {"access_token":"","token_type":"bearer","refresh_token":"${refresh}","expiry":"2000-01-01T00:00:00Z"}
+token = {"access_token":"${access}","token_type":"bearer","refresh_token":"${refresh}","expiry":"${expiry}"}
 EOF
 chmod 600 "$conf"
 
