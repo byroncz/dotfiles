@@ -164,8 +164,12 @@ else
 fi
 
 # --- 7. Claude -----------------------------------------------------------------
+# settings.json lo gobierna el template: se sobrescribe en cada arranque para
+# que un cambio de permisos llegue sin borrar el volumen. Lo que el humano
+# permita durante una sesión va a .claude/settings.local.json del workspace.
 if [ -d "$TEMPLATE_DIR/agents" ]; then
-  [ -f "$HOME/.claude/settings.json" ] || cp "$TEMPLATE_DIR/agents/settings.json" "$HOME/.claude/settings.json"
+  mkdir -p "$HOME/.claude"
+  cp -f "$TEMPLATE_DIR/agents/settings.json" "$HOME/.claude/settings.json"
 fi
 # Reenvío del retorno OAuth: Docker entrega en la IP del contenedor (54546) y
 # Claude Code escucha en 127.0.0.1:54545. socat une ambos extremos.
