@@ -1,0 +1,44 @@
+# Lista blanca base del template. Un dominio por línea (fnmatch).
+# Los dominios de cada proyecto van en devkit.env: DEVKIT_ALLOW_DOMAINS.
+
+# Anthropic / Claude Code
+api.anthropic.com
+claude.ai
+*.claude.ai
+statsig.anthropic.com
+*.anthropic.com
+
+# GitHub (repos, releases, raw, API)
+github.com
+*.github.com
+*.githubusercontent.com
+codeload.github.com
+ghcr.io
+*.ghcr.io
+
+# Notion (MCP alojado y API)
+mcp.notion.com
+api.notion.com
+www.notion.so
+notion.so
+
+# Dropbox (API para rclone)
+api.dropboxapi.com
+content.dropboxapi.com
+notify.dropboxapi.com
+*.dropboxapi.com
+
+# Bitwarden Secrets Manager
+api.bitwarden.com
+identity.bitwarden.com
+vault.bitwarden.com
+*.bitwarden.com
+
+# Python
+pypi.org
+files.pythonhosted.org
+*.pythonhosted.org
+
+# Debian (por si un proyecto reconstruye con EXTRA_APT)
+deb.debian.org
+*.debian.org

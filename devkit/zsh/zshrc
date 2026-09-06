@@ -1,0 +1,41 @@
+# devkit: zsh mínimo. Prompt con starship, sugerencias e iluminación de
+# sintaxis desde /opt/zsh. Historial en el volumen /commandhistory.
+
+# --- Historial -------------------------------------------------------------
+HISTFILE=${HISTFILE:-/commandhistory/.zsh_history}
+HISTSIZE=100000
+SAVEHIST=100000
+setopt APPEND_HISTORY SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS
+
+# --- Comportamiento ----------------------------------------------------------
+setopt AUTO_CD INTERACTIVE_COMMENTS NO_BEEP
+bindkey -e
+autoload -Uz compinit && compinit -d "${XDG_CACHE_HOME:-$HOME/.cache}/zcompdump"
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}'
+
+# --- Secretos y variables del arranque (ver entrypoint.sh) -------------------
+[ -r /run/devkit/env ] && . /run/devkit/env
+
+# --- Herramientas ------------------------------------------------------------
+export EDITOR=nvim VISUAL=nvim PAGER=less
+export UV_PYTHON_PREFERENCE=only-managed
+command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
+command -v gh >/dev/null && eval "$(gh completion -s zsh)"
+
+alias v='nvim'
+alias g='git'
+alias gs='git status -sb'
+alias gl='git log --oneline --graph --decorate -20'
+alias ll='ls -lah --color=auto'
+alias devkit-net-denied='/opt/devkit/scripts/net-denied.sh'
+
+# --- Plugins -----------------------------------------------------------------
+[ -r /opt/zsh/zsh-autosuggestions/zsh-autosuggestions.zsh ] && . /opt/zsh/zsh-autosuggestions/zsh-autosuggestions.zsh
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+
+# --- Prompt ------------------------------------------------------------------
+eval "$(starship init zsh)"
+
+# Debe ir al final.
+[ -r /opt/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ] && . /opt/zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
