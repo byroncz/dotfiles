@@ -414,6 +414,45 @@ El script descarga el tarball de la etiqueta, construye la imagen, crea los
 volúmenes, levanta el contenedor y entra a tmux. Dentro, `dotfiles` ya es el
 workspace. En el Mac no queda ningún clon.
 
+### 10.6 Publicación de 0.1.0
+
+Etiqueta `v0.1.0` publicada el 2026-09-06 sobre `e74b770`, el commit de `main`
+que fija `devkit/VERSION` en `0.1.0` (DEVKIT-3). Es una etiqueta anotada,
+creada y empujada directo al remoto sin PR: una etiqueta no es contenido
+revisable y el ruleset de `main` no la cubre. Lo que sí pasa por PR es esta
+sección (DEVKIT-4).
+
+Comprobaciones hechas desde el contenedor del proyecto `DEVKIT`. Las tres
+consultan lo mismo que `new-project.sh` cuando corre sin `--version`:
+
+```sh
+# 1. La etiqueta existe y apunta al commit correcto.
+gh api repos/byroncz/dotfiles/git/refs/tags/v0.1.0 --jq '.object.sha'
+# 256cada… (objeto de etiqueta anotada); resuelve al commit con:
+gh api repos/byroncz/dotfiles/git/tags/256cada162d9e8e92fd33587ce60a94b69372aff --jq '.object.sha'
+# e74b770b97a644595f3df63a0e64f8612d03ee2b
+
+# 2. La versión por defecto que lee new-project.sh (línea 34).
+curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/devkit/VERSION
+# 0.1.0
+
+# 3. El tarball que arma new-project.sh (línea 35) existe y responde.
+curl -fsSLI https://github.com/byroncz/dotfiles/archive/refs/tags/v0.1.0.tar.gz
+# HTTP 200, Content-Disposition: attachment; filename=dotfiles-0.1.0.tar.gz
+```
+
+Claude Code pide aprobación humana para `curl` y en modo autónomo no hay
+quien la dé, así que 2 y 3 se verificaron con `gh api`, que llega a los
+mismos datos por el mismo proxy: `gh api -H "Accept: application/vnd.github.raw"
+"repos/byroncz/dotfiles/contents/devkit/VERSION?ref=main"` devolvió `0.1.0`
+y `gh api --silent -i https://github.com/byroncz/dotfiles/archive/refs/tags/v0.1.0.tar.gz`
+devolvió `HTTP/2.0 200 OK` con `filename=dotfiles-0.1.0.tar.gz`. Ese nombre
+importa: `new-project.sh` busca `devkit/` a profundidad 2 dentro del tarball
+(`dotfiles-0.1.0/devkit`), y ahí está.
+
+Queda pendiente, como acción manual en el Mac, instanciar el primer proyecto
+personal con el comando de 10.5.
+
 ## 11. Guía de redacción para agentes
 
 Aplica sin excepción a descripciones, comentarios, respuestas, PRs y entradas
