@@ -21,7 +21,18 @@ if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^b
 dir="$ROOT/$proj"; [ -d "$dir" ] || { echo "no existe $dir; usa new-project.sh" >&2; exit 1; }
 cd "$dir"
 compose() { docker compose --project-directory "$dir" "$@"; }
-attach() { docker exec -it "devkit-$proj" tmux new-session -A -s main; }
+attach() {
+  # El arranque tarda unos segundos (lee secretos, clona). Esperar al marcador
+  # evita abrir un shell sin las variables cargadas.
+  i=0
+  until docker exec "devkit-$proj" test -f /run/devkit/ready 2>/dev/null; do
+    i=$((i+1)); [ "$i" -gt 120 ] && { echo "el arranque no terminó en 120 s; mira 'devkit logs $proj'" >&2; return 1; }
+    [ "$i" -eq 1 ] && printf 'esperando el arranque del contenedor'
+    printf '.'; sleep 1
+  done
+  [ "$i" -gt 0 ] && echo
+  docker exec -it "devkit-$proj" tmux new-session -A -s main
+}
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
   up)       compose up -d --build && attach ;;

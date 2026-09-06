@@ -158,4 +158,6 @@ if [ -n "${GH_TOKEN:-}" ] && [ -x /opt/devkit/scripts/watch-merged.sh ]; then
 fi
 
 log "listo. Proyecto: ${DEVKIT_PROJECT:-?}  Template: ${DEVKIT_VERSION:-dev}"
+# Marcador que espera el comando devkit del host antes de abrir la sesión.
+date -u +%FT%TZ > "$RUN_DIR/ready"
 exec "$@"
