@@ -34,7 +34,9 @@
       "Bash(find:*)",
       "Bash(rg:*)",
       "Bash(fd:*)",
-      "Bash(devkit-net-denied:*)"
+      "Bash(devkit-net-denied:*)",
+      "mcp__plugin_Notion_notion",
+      "mcp__plugin_Notion_notion__*"
     ],
     "deny": [
       "Bash(git push --force:*)",

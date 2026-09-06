@@ -156,8 +156,9 @@ PRs con auto-merge y documentan al cerrar.
 
 ### 4.7 Branches y versionado
 
-- Repo `dotfiles`: solo `main` protegida y ramas `feat/DEVKIT-<n>-slug` que
-  vuelven a `main` con squash.
+- Repo `dotfiles`: solo `main` protegida y ramas `<tipo>/DEVKIT-<n>-slug`
+  (`feat/`, `fix/` o `chore/` según el Tipo de la card) que vuelven a `main`
+  con squash.
 - Sin branches de instancia. La instancia es el repo del proyecto.
 - Etiquetas `vX.Y.Z` con Semantic Versioning adaptado: PATCH y MINOR son
   reemplazo directo; MAJOR exige tocar `devkit.env` o volúmenes y el changelog
@@ -253,7 +254,7 @@ Estados: Backlog, Lista, En progreso, En revisión, Hecha, Bloqueada.
 | La Épica nace en Backlog | Humano o agente | Objetivo y criterios de aceptación fijan el alcance máximo |
 | Backlog → Lista en la Épica | Humano | Única aprobación de planificación |
 | `epic-plan` | Agente | Hijas en Lista con orden y dependencias; desglose publicado como comentario |
-| `task-start` en la primera hija libre | Agente | Rama `feat/<CLAVE>-slug` desde `main` |
+| `task-start` en la primera hija libre | Agente | Rama `<tipo>/<CLAVE>-slug` desde `main` |
 | `task-review` | Agente | PR a `main` con auto-merge armado |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
 | `watch-merged.sh` cada cinco minutos | Máquina | Lanza `task-close` headless; cierra la hija, documenta, arranca la siguiente |

@@ -9,7 +9,8 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
 
 ## Pasos
 
-1. Localiza la Épica en Tareas por su Clave. Verifica que `Nivel` es Épica y
+1. Localiza la Épica en Tareas (por `ID` y `Proyecto`, como dice el
+   `README.md` de skills). Verifica que `Nivel` es Épica y
    `Estado` es `Lista`. Si no, detente y explica por qué en una línea.
 2. Lee su Objetivo, Criterios de aceptación y Notas. Lee también el estado del
    repo: `git log --oneline -20`, estructura de directorios, `AGENTS.md`.

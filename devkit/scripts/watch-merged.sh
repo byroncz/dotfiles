@@ -31,7 +31,7 @@ while true; do
         log "PR #$num mergeado ($key): lanzando task-close"
         if claude -p "/task-close $key $url" \
              --permission-mode acceptEdits \
-             --allowedTools "Bash(gh:*)" "Bash(git:*)" "mcp__*" "Read" "Grep" "Glob" \
+             --allowedTools "Bash(gh:*)" "Bash(git:*)" "mcp__plugin_Notion_notion" "Read" "Grep" "Glob" \
              >"$RUN_DIR/task-close-$num.log" 2>&1; then
           log "task-close $key terminado: $(tail -1 "$RUN_DIR/task-close-$num.log" | cut -c1-120)"
         else

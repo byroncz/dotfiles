@@ -21,7 +21,8 @@ Sin argumentos.
 5. Detecta anomalías y lístalas:
    - Tareas (Nivel Tarea) sin `Padre` y sin `Prioridad`: huérfanas.
    - Cards en `Lista` o `En progreso` sin actividad en catorce días: inactivas.
-   - Épicas `En progreso` con todas las hijas `Hecha`: cerrar con `task-close`.
+   - Épicas `En progreso` con todas las hijas `Hecha`: cerrar con
+     `task-close <Clave de la Épica>`.
 6. Determina la siguiente card libre con el mismo criterio de `task-start`.
 
 ## Salida
