@@ -158,8 +158,8 @@ fi
 # expresiones regulares, no con un parser de TOML.
 TOML="$WS/devkit.toml"
 if [ -f "$TOML" ]; then
-  toml_python="$(sed -n 's/^python[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$TOML" | head -1)"
-  toml_template="$(sed -n 's/^template[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$TOML" | head -1)"
+  toml_python="$(sed -n 's/^python[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOML" | head -1)"
+  toml_template="$(sed -n 's/^template[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOML" | head -1)"
   if [ -n "$toml_template" ] && [ "$toml_template" != "${DEVKIT_VERSION:-dev}" ]; then
     warn "el repo pide template ${toml_template}; ejecuta \`devkit update ${DEVKIT_PROJECT:-<proyecto>}\`"
   fi

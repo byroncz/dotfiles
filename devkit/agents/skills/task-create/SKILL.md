@@ -11,8 +11,9 @@ lenguaje natural de una o varias tareas, o una Épica.
 ## Pasos
 
 1. Lee `.claude/devkit-notion.json` para obtener el `data_source_id` de
-   Tareas, y `AGENTS.md` para el código del proyecto. Busca en Proyectos la
-   fila cuyo Código coincide; su URL es la relación Proyecto.
+   Tareas, y la clave `project` de `devkit.toml` (raíz del workspace) para el
+   código del proyecto. Busca en Proyectos la fila cuyo Código coincide; su
+   URL es la relación Proyecto.
 2. Para cada tarea pedida, decide `Nivel`: Épica si agrupa varios entregables
    o exige más de un día de trabajo; Tarea si cabe en una rama de menos de un
    día. Una Tarea suelta sin Épica es válida.

@@ -23,7 +23,7 @@ con `claude -p "/nombre argumentos"`.
 Convenciones comunes a todas:
 
 - Identificadores de Notion en `.claude/devkit-notion.json`. Código del
-  proyecto en `AGENTS.md`.
+  proyecto en la clave `project` de `devkit.toml`, en la raíz del workspace.
 - Los nombres de opción de `Estado`, `Nivel`, `Tipo`, `Agente` y `Prioridad`
   (Tareas), `Estado` (Proyectos) y `Tipo` (Documentación) están en
   `.claude/devkit-notion.json`. Las skills los citan tal cual; no inventes

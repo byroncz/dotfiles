@@ -25,7 +25,7 @@ dir="$ROOT/$proj"; [ -d "$dir" ] || { echo "no existe $dir; usa new-project.sh" 
 cd "$dir"
 # devkit.toml es plano (una tabla [devkit], valores de una línea): se lee con
 # expresiones regulares, no con un parser de TOML.
-toml_field() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\\(.*\\)\".*/\\1/p" | head -1; }
+toml_field() { sed -n "s/^$1[[:space:]]*=[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -1; }
 toml_list() {
   sed -n "s/^$1[[:space:]]*=[[:space:]]*\\[\\(.*\\)\\].*/\\1/p" \
     | tr ',' '\n' | sed -E 's/^[[:space:]"]*//; s/[[:space:]"]*$//' | tr '\n' ' ' | sed 's/ *$//'

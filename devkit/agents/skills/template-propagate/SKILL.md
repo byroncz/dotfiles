@@ -5,8 +5,8 @@ description: Desde el proyecto DEVKIT, abre un PR de actualización de template 
 
 # template-propagate
 
-Solo se ejecuta en el proyecto `DEVKIT`. Si `AGENTS.md` dice otro código,
-detente.
+Solo se ejecuta en el proyecto `DEVKIT`. Si `project` en `devkit.toml` dice
+otro código, detente.
 
 ## Pasos
 
