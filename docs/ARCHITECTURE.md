@@ -156,8 +156,9 @@ PRs con auto-merge y documentan al cerrar.
 
 ### 4.7 Branches y versionado
 
-- Repo `dotfiles`: solo `main` protegida y ramas `feat/DEVKIT-<n>-slug` que
-  vuelven a `main` con squash.
+- Repo `dotfiles`: solo `main` protegida y ramas `<tipo>/DEVKIT-<n>-slug`
+  (`feat/`, `fix/` o `chore/` según el Tipo de la card) que vuelven a `main`
+  con squash.
 - Sin branches de instancia. La instancia es el repo del proyecto.
 - Etiquetas `vX.Y.Z` con Semantic Versioning adaptado: PATCH y MINOR son
   reemplazo directo; MAJOR exige tocar `devkit.env` o volúmenes y el changelog
@@ -201,9 +202,9 @@ devkit/
     sync-sandbox.sh       # rclone cada minuto
     watch-merged.sh       # PRs mergeados cada cinco minutos
     net-denied.sh         # destinos bloqueados por el proxy
+  VERSION                 # la lee new-project.sh para elegir la etiqueta
+  CHANGELOG.md            # una entrada por etiqueta; la lee template-update
 new-project.sh
-VERSION
-CHANGELOG.md
 docs/ARCHITECTURE.md
 ```
 
@@ -253,7 +254,7 @@ Estados: Backlog, Lista, En progreso, En revisión, Hecha, Bloqueada.
 | La Épica nace en Backlog | Humano o agente | Objetivo y criterios de aceptación fijan el alcance máximo |
 | Backlog → Lista en la Épica | Humano | Única aprobación de planificación |
 | `epic-plan` | Agente | Hijas en Lista con orden y dependencias; desglose publicado como comentario |
-| `task-start` en la primera hija libre | Agente | Rama `feat/<CLAVE>-slug` desde `main` |
+| `task-start` en la primera hija libre | Agente | Rama `<tipo>/<CLAVE>-slug` desde `main` |
 | `task-review` | Agente | PR a `main` con auto-merge armado |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
 | `watch-merged.sh` cada cinco minutos | Máquina | Lanza `task-close` headless; cierra la hija, documenta, arranca la siguiente |
@@ -412,6 +413,45 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 El script descarga el tarball de la etiqueta, construye la imagen, crea los
 volúmenes, levanta el contenedor y entra a tmux. Dentro, `dotfiles` ya es el
 workspace. En el Mac no queda ningún clon.
+
+### 10.6 Publicación de 0.1.0
+
+Etiqueta `v0.1.0` publicada el 2026-09-06 sobre `e74b770`, el commit de `main`
+que fija `devkit/VERSION` en `0.1.0` (DEVKIT-3). Es una etiqueta anotada,
+creada y empujada directo al remoto sin PR: una etiqueta no es contenido
+revisable y el ruleset de `main` no la cubre. Lo que sí pasa por PR es esta
+sección (DEVKIT-4).
+
+Comprobaciones hechas desde el contenedor del proyecto `DEVKIT`. Las tres
+consultan lo mismo que `new-project.sh` cuando corre sin `--version`:
+
+```sh
+# 1. La etiqueta existe y apunta al commit correcto.
+gh api repos/byroncz/dotfiles/git/refs/tags/v0.1.0 --jq '.object.sha'
+# 256cada… (objeto de etiqueta anotada); resuelve al commit con:
+gh api repos/byroncz/dotfiles/git/tags/256cada162d9e8e92fd33587ce60a94b69372aff --jq '.object.sha'
+# e74b770b97a644595f3df63a0e64f8612d03ee2b
+
+# 2. La versión por defecto que lee new-project.sh (línea 34).
+curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/devkit/VERSION
+# 0.1.0
+
+# 3. El tarball que arma new-project.sh (línea 35) existe y responde.
+curl -fsSLI https://github.com/byroncz/dotfiles/archive/refs/tags/v0.1.0.tar.gz
+# HTTP 200, Content-Disposition: attachment; filename=dotfiles-0.1.0.tar.gz
+```
+
+Claude Code pide aprobación humana para `curl` y en modo autónomo no hay
+quien la dé, así que 2 y 3 se verificaron con `gh api`, que llega a los
+mismos datos por el mismo proxy: `gh api -H "Accept: application/vnd.github.raw"
+"repos/byroncz/dotfiles/contents/devkit/VERSION?ref=main"` devolvió `0.1.0`
+y `gh api --silent -i https://github.com/byroncz/dotfiles/archive/refs/tags/v0.1.0.tar.gz`
+devolvió `HTTP/2.0 200 OK` con `filename=dotfiles-0.1.0.tar.gz`. Ese nombre
+importa: `new-project.sh` busca `devkit/` a profundidad 2 dentro del tarball
+(`dotfiles-0.1.0/devkit`), y ahí está.
+
+Queda pendiente, como acción manual en el Mac, instanciar el primer proyecto
+personal con el comando de 10.5.
 
 ## 11. Guía de redacción para agentes
 

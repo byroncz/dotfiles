@@ -16,7 +16,7 @@ detente.
    `Versión del template` distinta de la última y distinta de `dev`.
 3. Para cada proyecto, en un directorio temporal:
    - `git clone <Repo> /tmp/propagate/<nombre>` y entra.
-   - `git switch -c chore/<CÓDIGO>-template-<X.Y.Z>`.
+   - `git switch -c chore/<CÓDIGO>-0-template-<X.Y.Z>`.
    - Escribe la versión en `DEVKIT_VERSION`, commit
      `chore(<CÓDIGO>-0): actualizar template a <X.Y.Z>`, push.
    - `gh pr create --base main --title "<CÓDIGO>-0 Actualizar template a

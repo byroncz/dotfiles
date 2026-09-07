@@ -1,18 +1,23 @@
 {
-  "_comment": "Identificadores de la estructura compartida en Notion. No son secretos. Los usan las skills para consultar y escribir.",
+  "_comment": "Identificadores de la estructura compartida en Notion. No son secretos. Los usan las skills para consultar y escribir. Las listas de opciones son la referencia que las skills citan tal cual.",
   "ingenieria_page_id": "3d327957-d23d-81ed-825b-d8774fb8e6bf",
   "proyectos": {
     "database_id": "b57cf26638a847b4b9cdd2400ec38aae",
-    "data_source_id": "c8bc026e-f0f0-46b6-bc38-8aa489e1fc9b"
+    "data_source_id": "c8bc026e-f0f0-46b6-bc38-8aa489e1fc9b",
+    "estados": ["Activo", "Pausado", "Cerrado"]
   },
   "tareas": {
     "database_id": "8dfa9a8fe6064396a31b74e1a6a811c8",
     "data_source_id": "47b401a7-57d3-4382-961f-8a5fc93dab05",
     "estados": ["Backlog", "Lista", "En progreso", "En revisión", "Hecha", "Bloqueada"],
-    "niveles": ["Épica", "Tarea"]
+    "niveles": ["Épica", "Tarea"],
+    "tipos": ["feature", "bug", "chore"],
+    "agentes": ["claude", "codex", "humano"],
+    "prioridades": ["alta", "media", "baja"]
   },
   "documentacion": {
     "database_id": "8670f0a8753a4e798e7aa7ab5a9d207d",
-    "data_source_id": "7190e62d-432d-4004-ab1a-c617b822e16c"
+    "data_source_id": "7190e62d-432d-4004-ab1a-c617b822e16c",
+    "tipos": ["cambio", "decisión", "runbook"]
   }
 }
