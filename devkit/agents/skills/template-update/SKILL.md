@@ -12,7 +12,7 @@ Argumento: versión destino `X.Y.Z`.
 1. Lee la clave `template` de `devkit.toml`, en la raíz del workspace. Si ya
    es la destino, termina.
 2. Descarga el changelog del template:
-   `curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/v<X.Y.Z>/CHANGELOG.md`.
+   `curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/v<X.Y.Z>/devkit/CHANGELOG.md`.
    Extrae las entradas entre la versión actual y la destino.
 3. Si el salto es MAJOR (cambia el primer número), lee en el changelog qué
    hay que tocar fuera del template (`devkit.env`, volúmenes, secretos) y
