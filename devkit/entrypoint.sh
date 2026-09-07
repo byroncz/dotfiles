@@ -167,6 +167,9 @@ if [ -f "$TOML" ]; then
     export UV_PYTHON="$toml_python"
     log "python $toml_python vía uv"
     uv python install --quiet || warn "uv python install falló (¿sin red?)"
+    [ -f "$WS/.python-version" ] && warn "sobra $WS/.python-version; manda 'python' de devkit.toml, bórralo"
+  elif [ -f "$WS/.python-version" ]; then
+    warn "$WS/.python-version ya no se lee; declara 'python' en devkit.toml y bórralo"
   fi
 fi
 
