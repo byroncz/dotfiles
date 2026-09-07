@@ -1,5 +1,5 @@
 # Lista blanca base del template. Un dominio por línea (fnmatch).
-# Los dominios de cada proyecto van en devkit.env: DEVKIT_ALLOW_DOMAINS.
+# Los dominios de cada proyecto van en devkit.toml: domains.
 
 # Anthropic / Claude Code
 api.anthropic.com

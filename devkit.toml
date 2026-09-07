@@ -1,0 +1,3 @@
+[devkit]
+template = "dev"
+project  = "DEVKIT"

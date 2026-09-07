@@ -96,9 +96,9 @@ borraría Dropbox. Un archivo marcador impide ese orden.
 
 - Base `debian:trixie-slim`. Sin lenguaje preinstalado.
 - `uv` copiado como binario desde la imagen oficial de Astral.
-- La versión de Python la declara cada proyecto en `.python-version`, fijando
-  la serie menor, por ejemplo `3.14`. `uv python install` la instala al
-  primer arranque. Subir de serie es un commit consciente.
+- La versión de Python la declara cada proyecto en `devkit.toml` (clave
+  `python`), fijando la serie menor, por ejemplo `3.14`. `uv python install`
+  la instala al primer arranque. Subir de serie es un commit consciente.
 - Paquetes apt adicionales por parámetro de build, vacío por defecto.
 
 Por qué: separa la evolución del template de la del lenguaje. `uv` usa
@@ -211,17 +211,45 @@ docs/ARCHITECTURE.md
 ### 5.2 Repo de un proyecto
 
 ```
-DEVKIT_VERSION            # por ejemplo 1.4.0
-devkit.env                # nombre, código de Notion, puertos, dominios extra
-.python-version
+devkit.toml               # única fuente: template, project, python, apt, domains
 AGENTS.md                 # instrucciones del proyecto; importa la guía del template
 CLAUDE.md                 # una línea: @AGENTS.md
 .claude/skills -> enlace al template clonado en el contenedor
 sandbox.local/            # ignorado por git, respaldado en Dropbox
 ```
 
-En el Mac, `~/.devkit/<proyecto>/` guarda solo `compose.yaml` y
-`devkit.env`, necesarios para `docker compose`. Son configuración, no código.
+`devkit.toml` es plano: una sola tabla `[devkit]`, valores string o lista de
+strings en una línea. Se lee con expresiones regulares, no con un parser de
+TOML, porque lo leen scripts POSIX (`entrypoint.sh`, `devkit.sh`) sin esa
+dependencia.
+
+```toml
+[devkit]
+template = "0.1.0"           # versión del template (obligatorio)
+project  = "DATA"            # código del proyecto en Notion (obligatorio)
+python   = "3.13"            # opcional; el arranque exporta UV_PYTHON
+apt      = ["libpq-dev"]     # opcional; paquetes de sistema extra
+domains  = ["api.ejemplo.com"]  # opcional; dominios extra para el proxy
+```
+
+Regla de reparto entre el repo y el Mac: al repo va lo que cualquiera
+necesita para reconstruir el proyecto igual (versión del template, código de
+Notion, versión de Python, paquetes apt, dominios); al Mac va solo lo
+personal e irreproducible. En `~/.devkit/<proyecto>/`:
+
+- `devkit.env`: URL del repo, identidad git, remoto de Dropbox. Lo edita el
+  humano una vez.
+- `.env`: variables de interpolación de Compose (`DEVKIT_PROJECT`,
+  `DEVKIT_VERSION`, y `DEVKIT_EXTRA_APT`/`DEVKIT_ALLOW_DOMAINS` copiados de
+  `devkit.toml`). Es una copia derivada: `devkit.sh` la reescribe leyendo
+  `devkit.toml` del contenedor antes de `recreate`, `rebuild` o `update`; no
+  se edita a mano.
+
+Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el
+template a Python). Antes de `devkit.toml`, `DEVKIT_VERSION` y
+`.python-version` vivían como archivos sueltos y el código de Notion se
+insertaba con un placeholder en `AGENTS.md`: tres fuentes de verdad para
+datos que un proyecto declara una sola vez (DEVKIT-6).
 
 ### 5.3 Skills
 
@@ -235,7 +263,7 @@ En el Mac, `~/.devkit/<proyecto>/` guarda solo `compose.yaml` y
 | `task-close` | En revisión → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `session-start` | Inicio de sesión | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
-| `template-update` | Mantenimiento | Sube `DEVKIT_VERSION` y actualiza Notion |
+| `template-update` | Mantenimiento | Sube `template` en `devkit.toml` y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
 ## 6. Flujo de trabajo
@@ -345,17 +373,29 @@ vencimiento en la nota de cada secreto.
 
 ## 9. Versionado y propagación
 
-- El proyecto declara la versión en `DEVKIT_VERSION`.
-- Al arrancar, el contenedor clona `dotfiles` en esa etiqueta dentro de sí
-  mismo y crea enlaces simbólicos hacia el workspace. Se reconstruye en cada
-  arranque y nunca se edita.
-- El bootstrap descarga el tarball de la etiqueta para construir la imagen.
-- Al arrancar cualquier proyecto, el contenedor compara su versión con la
-  última etiqueta y avisa si hay una nueva.
-- `template-propagate`, desde `DEVKIT`, abre un PR en cada proyecto registrado
-  en Notion. El humano aprueba, el auto-merge hace el resto.
+- El proyecto declara la versión que quiere en `devkit.toml` (clave
+  `template`), dentro del repo. `.env` en el Mac guarda la versión de imagen
+  con la que Compose arrancó hoy (`DEVKIT_VERSION`): son dos cosas distintas
+  a propósito, porque `.env` tiene que existir antes de que el repo se
+  clone.
+- Al arrancar, el contenedor clona `dotfiles` en la etiqueta de `.env` dentro
+  de sí mismo y crea enlaces simbólicos hacia el workspace. Se reconstruye en
+  cada arranque y nunca se edita.
+- El bootstrap descarga el tarball de esa etiqueta para construir la imagen.
+- Al arrancar, `entrypoint.sh` compara `template` de `devkit.toml` contra
+  `DEVKIT_VERSION` de `.env` y avisa si difieren: el repo pide una versión
+  que la imagen todavía no tiene.
+- `devkit update <proyecto>`, desde el Mac, lee `template` del contenedor
+  (`docker exec ... cat /workspace/devkit.toml`), descarga esa versión,
+  actualiza `.env` y reconstruye. Así `.env` se pone al día con lo que el
+  repo ya declaraba.
+- `template-propagate`, desde `DEVKIT`, abre un PR en cada proyecto
+  registrado en Notion que cambia `template` en su `devkit.toml`. El humano
+  aprueba, el auto-merge hace el resto; `devkit update` en cada proyecto
+  aplica el cambio en el Mac.
 - Para `DEVKIT`, el clon de `dotfiles` es su workspace: ahí los cambios se
-  prueban en vivo antes de etiquetar.
+  prueban en vivo antes de etiquetar, con `template = "dev"` en su propio
+  `devkit.toml`.
 
 Descartado: bind mount del clon local con enlaces simbólicos. Rompe el host
 mínimo, elimina las versiones y no tiene radio de impacto controlado.

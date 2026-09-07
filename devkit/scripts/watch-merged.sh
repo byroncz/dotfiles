@@ -8,7 +8,8 @@ WS=/workspace
 RUN_DIR=/run/devkit
 CLOSED="$RUN_DIR/closed"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
-CODE="${DEVKIT_PROJECT_CODE:-}"
+CODE=""
+[ -f "$WS/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$WS/devkit.toml" | head -1)"
 
 cd "$WS" 2>/dev/null || exit 0
 touch "$CLOSED"

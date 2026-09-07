@@ -7,7 +7,7 @@
 #    2. Identidad git  -> antes de clonar.
 #    3. Template       -> las skills y AGENTS.md salen de aquí.
 #    4. Workspace      -> clonar el proyecto si no existe.
-#    5. Python         -> lo que declare .python-version.
+#    5. Python         -> lo que declare devkit.toml (clave `python`).
 #    6. Sandbox        -> restaurar desde Dropbox ANTES de sincronizar hacia
 #                         Dropbox. Un sync desde un directorio vacío borraría
 #                         el respaldo. El marcador .restored lo impide.
@@ -16,13 +16,20 @@
 #
 #  Variables (vienen de devkit.env vía compose):
 #    DEVKIT_PROJECT        nombre corto del proyecto (ej. devkit)
-#    DEVKIT_PROJECT_CODE   código de Notion (ej. DEVKIT)
 #    DEVKIT_REPO           URL del repo del proyecto (https://github.com/...)
 #    DEVKIT_REPO_REF       rama a clonar (opcional; por defecto la principal)
-#    DEVKIT_VERSION        etiqueta del template (ej. 0.1.0). "dev" = usar
-#                          el workspace como template (solo para DEVKIT).
+#    DEVKIT_VERSION        etiqueta de imagen que trajo compose (ej. 0.1.0).
+#                          "dev" = usar el workspace como template (solo para
+#                          DEVKIT). El repo declara su propio destino en
+#                          devkit.toml (clave `template`); si difieren, se
+#                          avisa para correr `devkit update`.
 #    GIT_USER_NAME / GIT_USER_EMAIL
 #    DEVKIT_SANDBOX_REMOTE ruta en Dropbox (ej. dropbox:devkit/sandbox.local)
+#
+#  devkit.toml (en el repo del proyecto, no en devkit.env): declara
+#  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`
+#  y `domains`. Es la única fuente de esos valores; ver docs/ARCHITECTURE.md
+#  sección 5.2.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -133,14 +140,34 @@ if [ -d "$TEMPLATE_DIR/agents" ]; then
   mkdir -p "$WS/.claude"
   ln -sfn "$TEMPLATE_DIR/agents/skills" "$WS/.claude/skills"
   ln -sfn "$TEMPLATE_DIR/agents/notion.json" "$WS/.claude/devkit-notion.json"
-  [ -f "$WS/AGENTS.md" ] || sed "s/{{PROJECT}}/${DEVKIT_PROJECT:-proyecto}/g; s/{{CODE}}/${DEVKIT_PROJECT_CODE:-PROJ}/g" "$TEMPLATE_DIR/agents/AGENTS.template.md" > "$WS/AGENTS.md"
+  if [ ! -f "$WS/devkit.toml" ]; then
+    # Proyecto nuevo sin devkit.toml aún: se crea con placeholders. project-init
+    # corrige `project`; template-update corrige `template` en el primer bump.
+    {
+      echo "[devkit]"
+      printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
+      echo 'project  = "PROJ"'
+    } > "$WS/devkit.toml"
+  fi
+  [ -f "$WS/AGENTS.md" ] || sed "s/{{PROJECT}}/${DEVKIT_PROJECT:-proyecto}/g" "$TEMPLATE_DIR/agents/AGENTS.template.md" > "$WS/AGENTS.md"
   [ -f "$WS/CLAUDE.md" ] || printf '@AGENTS.md\n' > "$WS/CLAUDE.md"
 fi
 
 # --- 5. Python -----------------------------------------------------------------
-if [ -f "$WS/.python-version" ]; then
-  log "python $(cat "$WS/.python-version") vía uv"
-  uv python install --quiet || warn "uv python install falló (¿sin red?)"
+# devkit.toml es plano (una tabla [devkit], valores de una línea): se lee con
+# expresiones regulares, no con un parser de TOML.
+TOML="$WS/devkit.toml"
+if [ -f "$TOML" ]; then
+  toml_python="$(sed -n 's/^python[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$TOML" | head -1)"
+  toml_template="$(sed -n 's/^template[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$TOML" | head -1)"
+  if [ -n "$toml_template" ] && [ "$toml_template" != "${DEVKIT_VERSION:-dev}" ]; then
+    warn "el repo pide template ${toml_template}; ejecuta \`devkit update ${DEVKIT_PROJECT:-<proyecto>}\`"
+  fi
+  if [ -n "$toml_python" ]; then
+    export UV_PYTHON="$toml_python"
+    log "python $toml_python vía uv"
+    uv python install --quiet || warn "uv python install falló (¿sin red?)"
+  fi
 fi
 
 # --- 6. Sandbox ----------------------------------------------------------------
