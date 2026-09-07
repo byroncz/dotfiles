@@ -9,23 +9,24 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 
 ## Cómo se trabaja aquí
 
-- Código del proyecto en Notion: `{{CODE}}`. Cada tarea es una card con
-  Clave `{{CODE}}-<n>`. Las skills en `.claude/skills/` definen cada paso.
-- Una card activa por sesión. Rama `<tipo>/{{CODE}}-<n>-slug` desde `main`
+- Código del proyecto en Notion: el valor `project` de `devkit.toml`, en la
+  raíz del repo. Cada tarea es una card con Clave `<CÓDIGO>-<n>`. Las skills
+  en `.claude/skills/` definen cada paso.
+- Una card activa por sesión. Rama `<tipo>/<CÓDIGO>-<n>-slug` desde `main`
   (`feat/`, `fix/` o `chore/` según el Tipo de la card), PR a `main` con
   auto-merge. Nunca push directo a `main`. Nunca force push.
 - Commits con Conventional Commits y la Clave como ámbito:
-  `feat({{CODE}}-42): agregar carga incremental`.
+  `feat(<CÓDIGO>-42): agregar carga incremental`.
 - `sandbox.local/` es un espacio de pruebas respaldado en Dropbox y fuera de
   git. Cualquier otro directorio `*.local` no se respalda y muere en el
   rebuild: no guardes ahí nada que importe.
-- Python lo gestiona `uv`. Versión en `.python-version`. Dependencias con
-  `uv add`, entorno con `uv sync`, ejecutar con `uv run`.
-- Sin `sudo`. Si falta un paquete de sistema, se declara en `devkit.env`
-  (`DEVKIT_EXTRA_APT`) y se reconstruye la imagen.
+- Python lo gestiona `uv`. Versión en `devkit.toml` (clave `python`).
+  Dependencias con `uv add`, entorno con `uv sync`, ejecutar con `uv run`.
+- Sin `sudo`. Si falta un paquete de sistema, se declara en `devkit.toml`
+  (`apt`) y se reconstruye la imagen con `devkit rebuild`.
 - Si una conexión falla con "connection refused", el dominio no está en la
-  lista blanca del proxy. Ejecuta `devkit-net-denied` y añádelo a
-  `DEVKIT_ALLOW_DOMAINS` en `devkit.env`.
+  lista blanca del proxy. Ejecuta `devkit-net-denied`, añádelo a `domains`
+  en `devkit.toml` y aplica con `devkit recreate`.
 
 ## Notion y skills
 

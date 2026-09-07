@@ -11,6 +11,11 @@
 #    .env         variables de compose (proyecto, versión, ruta del token)
 #    devkit.env   variables del contenedor: EDÍTALO antes del primer arranque
 #  y el comando ~/.devkit/bin/devkit.
+#
+#  Este script no toca el repo del proyecto: no tiene forma de hacerlo, solo
+#  descarga el template. `devkit.toml` (versión de template, código de
+#  Notion) lo crea `entrypoint.sh` dentro del contenedor, en el primer
+#  arranque, una vez que el repo existe.
 # ---------------------------------------------------------------------------
 set -eu
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"

@@ -115,7 +115,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 
 # --- Herramientas de Python para el editor ---------------------------------
 # Un Python fijo solo para las herramientas. El de cada proyecto lo decide su
-# .python-version al arrancar.
+# devkit.toml (clave `python`) al arrancar.
 RUN uv python install "${TOOLS_PYTHON}" \
  && uv tool install --python "${TOOLS_PYTHON}" ruff \
  && uv tool install --python "${TOOLS_PYTHON}" basedpyright \

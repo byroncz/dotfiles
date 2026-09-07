@@ -8,6 +8,34 @@ requeridos" dice exactamente qué.
 `template-update` lee este archivo para explicar al humano qué cambia entre la
 versión que usa un proyecto y la destino.
 
+## Sin publicar
+
+### `devkit.toml` como única fuente del entorno (DEVKIT-6)
+
+- `devkit.toml`, plano y en la raíz del repo, reemplaza a `DEVKIT_VERSION`,
+  `.python-version` y el placeholder `{{CODE}}` de `AGENTS.md` como fuente de
+  la versión del template, el código de Notion, la versión de Python, los
+  paquetes apt y los dominios extra del proxy.
+- `entrypoint.sh` lo crea con placeholders si el repo no lo tiene, exporta
+  `UV_PYTHON` desde su clave `python` y avisa si el repo pide un `template`
+  distinto al de la imagen. `devkit.sh` gana `devkit update <proyecto>` y
+  sincroniza `apt`/`domains` hacia el `.env` del Mac antes de `recreate` o
+  `rebuild`.
+
+### Cambios requeridos
+
+Proyectos en `0.1.0`: al actualizar, dentro del contenedor,
+
+- crear `devkit.toml` en la raíz del repo con `template` y `project` (el
+  código de Notion que antes estaba en `AGENTS.md`); commit y push;
+- borrar `.python-version` si existe, y declarar esa versión en `devkit.toml`
+  (clave `python`);
+- en `~/.devkit/<proyecto>/devkit.env`, en el Mac, borrar
+  `DEVKIT_PROJECT_CODE`, `DEVKIT_EXTRA_APT` y `DEVKIT_ALLOW_DOMAINS` si están
+  presentes: ya no los lee nada. Si el proyecto usaba paquetes apt o dominios
+  extra, declararlos en `devkit.toml` (`apt`, `domains`) y correr
+  `devkit rebuild`.
+
 ## 0.1.0 - 2026-09-06
 
 Mínimo viable. Un proyecto se instancia en el Mac con Docker y `curl`, trabaja

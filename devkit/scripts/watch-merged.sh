@@ -8,14 +8,18 @@ WS=/workspace
 RUN_DIR=/run/devkit
 CLOSED="$RUN_DIR/closed"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
-CODE="${DEVKIT_PROJECT_CODE:-}"
 
 cd "$WS" 2>/dev/null || exit 0
 touch "$CLOSED"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
-log "vigilancia iniciada (código ${CODE:-?}, cada ${INTERVAL}s)"
+log "vigilancia iniciada (cada ${INTERVAL}s)"
 
 while true; do
+  # Se relee en cada vuelta: en un proyecto nuevo, devkit.toml arranca con
+  # `project = "PROJ"` y project-init lo corrige después, sin reiniciar el
+  # contenedor.
+  CODE=""
+  [ -f "$WS/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/devkit.toml" | head -1)"
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     # PRs mergeados en las últimas 48 h, del más antiguo al más nuevo.
     gh pr list --state merged --limit 30 --json number,title,url,mergedAt \

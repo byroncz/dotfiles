@@ -3,8 +3,12 @@
 #   proxy  -> único con salida, filtrada por lista blanca.
 #
 # Este archivo se copia a ~/.devkit/<proyecto>/ junto con:
-#   .env        variables de interpolación de compose (las escribe new-project.sh)
-#   devkit.env  variables que entran al contenedor (las editas tú)
+#   .env        variables de interpolación de compose (proyecto, versión, apt
+#                extra, dominios extra). new-project.sh la crea; devkit.sh la
+#                mantiene al día leyendo devkit.toml del contenedor: es una
+#                copia derivada, no se edita a mano.
+#   devkit.env  variables que entran al contenedor (las editas tú: repo,
+#                identidad git, remoto de Dropbox)
 #   template/   copia del template en la versión declarada (contexto de build)
 name: devkit-${DEVKIT_PROJECT}
 

@@ -5,8 +5,8 @@ description: Desde el proyecto DEVKIT, abre un PR de actualización de template 
 
 # template-propagate
 
-Solo se ejecuta en el proyecto `DEVKIT`. Si `AGENTS.md` dice otro código,
-detente.
+Solo se ejecuta en el proyecto `DEVKIT`. Si `project` en `devkit.toml` dice
+otro código, detente.
 
 ## Pasos
 
@@ -17,7 +17,7 @@ detente.
 3. Para cada proyecto, en un directorio temporal:
    - `git clone <Repo> /tmp/propagate/<nombre>` y entra.
    - `git switch -c chore/<CÓDIGO>-0-template-<X.Y.Z>`.
-   - Escribe la versión en `DEVKIT_VERSION`, commit
+   - Cambia `template` a `<X.Y.Z>` en `devkit.toml`, commit
      `chore(<CÓDIGO>-0): actualizar template a <X.Y.Z>`, push.
    - `gh pr create --base main --title "<CÓDIGO>-0 Actualizar template a
      <X.Y.Z>"` con cuerpo: entradas del changelog entre versiones y, si es
