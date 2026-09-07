@@ -9,7 +9,7 @@
   "tareas": {
     "database_id": "8dfa9a8fe6064396a31b74e1a6a811c8",
     "data_source_id": "47b401a7-57d3-4382-961f-8a5fc93dab05",
-    "estados": ["Backlog", "Lista", "En progreso", "En revisión", "Hecha", "Bloqueada"],
+    "estados": ["Backlog", "Lista", "En progreso", "Revisión automática", "Lista para merge", "Hecha", "Bloqueada"],
     "niveles": ["Épica", "Tarea"],
     "tipos": ["feature", "bug", "chore"],
     "agentes": ["claude", "codex", "humano"],
