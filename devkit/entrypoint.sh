@@ -219,9 +219,9 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 fi
 
 # --- 8. Bucles -----------------------------------------------------------------
-if [ -n "${GH_TOKEN:-}" ] && [ -f "$SCRIPTS_DIR/watch-merged.sh" ]; then
-  nohup bash "$SCRIPTS_DIR/watch-merged.sh" >"$RUN_DIR/watch-merged.log" 2>&1 &
-  log "vigilancia de PRs mergeados activa (cada 5 min)"
+if [ -n "${GH_TOKEN:-}" ] && [ -f "$SCRIPTS_DIR/watch.sh" ]; then
+  nohup bash "$SCRIPTS_DIR/watch.sh" >"$RUN_DIR/watch.log" 2>&1 &
+  log "bucle de PRs activo (cada 5 min): revisión, corrección y cierre"
 fi
 
 log "listo. Proyecto: ${DEVKIT_PROJECT:-?}  Template: ${DEVKIT_VERSION:-dev}"

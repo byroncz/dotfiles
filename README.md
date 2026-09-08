@@ -13,9 +13,14 @@ Cambios por versión: [`devkit/CHANGELOG.md`](devkit/CHANGELOG.md).
 1. Tú mueves una Épica de **Backlog** a **Lista** en Notion.
 2. Un agente la descompone en cards hijas, crea una rama por card, trabaja y
    abre un PR a `main`.
-3. Tú apruebas el PR. GitHub lo mergea solo.
-4. Un bucle dentro del contenedor detecta el merge, cierra la card, escribe la
-   entrada de Documentación y arranca la siguiente hija.
+3. Un bucle dentro del contenedor lanza un revisor independiente sobre el PR.
+   Si pide cambios, un corrector los atiende y el revisor vuelve a mirar;
+   cuando da el OK, te pide el review. Tras tres ciclos sin OK, bloquea la
+   card y te avisa.
+4. Tú apruebas el PR y GitHub lo mergea solo. Si en vez de aprobar comentas,
+   el corrector atiende tu comentario y el ciclo sigue.
+5. El mismo bucle detecta el merge, cierra la card, escribe la entrada de
+   Documentación y arranca la siguiente hija.
 
 Estados de una card: `Backlog → Lista → En progreso → Revisión automática →
 Lista para merge → Hecha`, más `Bloqueada` cuando el agente necesita algo de
@@ -33,7 +38,7 @@ ti.
 | ![Neovim](https://img.shields.io/badge/Neovim-57A143?logo=neovim&logoColor=white) | **Neovim** | Editor en terminal, con plugins fijados por lockfile: LSP, autocompletado, Telescope, gitsigns y `claudecode.nvim` para hablar con Claude desde el editor. |
 | ![tmux](https://img.shields.io/badge/tmux-1BB91F?logo=tmux&logoColor=white) | **tmux** | Sesión persistente dentro del contenedor: si cierras la terminal, el trabajo sigue. `devkit attach` vuelve a ella. |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. |
-| ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) cierra cards sin intervención. |
+| ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) revisa, corrige y cierra cards sin intervención. |
 | ![Codex](https://img.shields.io/badge/Codex-000000?logo=openai&logoColor=white) | **Codex** | Segundo agente, preparado pero no instalado: lee el mismo `AGENTS.md` y las mismas skills (estándar Agent Skills). |
 | ![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white) | **GitHub + gh** | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge y borrado de ramas activados. Los agentes actúan con la cuenta máquina `byroncz-bot`. |
 | ![Git](https://img.shields.io/badge/Git-F05032?logo=git&logoColor=white) | **Git** | Una rama por card, un commit squash en `main` por PR, Conventional Commits con la Clave como ámbito. |
@@ -78,9 +83,34 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 | `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
 | `v`, `g`, `gs`, `gl`, `ll` | Alias: `nvim`, `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
+| `/opt/devkit/scripts/watch-test.sh` | Prueba la tabla de decisión de `watch.sh` con PRs sintéticos; sale con 1 si un caso falla. |
 
-Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y
-`watch-merged.sh` (cada 5 min busca PRs mergeados y lanza `task-close`).
+Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
+(cada 5 min). `watch.sh` mira cada PR cuyo título empieza por una Clave del
+proyecto y lanza en modo headless la skill que toca. Su único estado son los
+marcadores que las skills dejan en el PR; un rebuild no pierde nada.
+
+| Lo que ve en el PR | Qué lanza |
+|---|---|
+| Abierto y el head sin marcador `devkit-review` | `/pr-review <N>` |
+| Último marcador `verdict=CAMBIOS` para el head, sin respuesta `devkit-fix` | `/task-fix <Clave>` |
+| Último marcador `OK` y un comentario o review tuyo posterior (un approve no cuenta) | `/task-fix <Clave> "<tu comentario>"`; la card vuelve a `Revisión automática` |
+| Tres informes `CAMBIOS` desde el último `OK` o el último bloqueo, ya atendidos | Marcador `<!-- devkit-block sha=<head> -->` en el PR y `/task-block <Clave>`. No lo toca más hasta que muevas la card a `Revisión automática` y comentes en el PR qué hacer |
+| Mergeado en las últimas 48 h | `/task-close <Clave> <URL>` |
+
+Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
+trae el costo y los tokens, que es la medida de cada ciclo. Variables:
+`DEVKIT_WATCH_INTERVAL` (segundos, 300) y `DEVKIT_WATCH_MAX_CYCLES` (3). Para
+ver qué decidiría sobre un PR sin esperar al bucle:
+
+```sh
+gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
+```
+
+La tabla de decisión tiene una prueba reproducible sin GitHub:
+`bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
+con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación)
+contra `watch.sh --decide` y falla si alguno no da la acción esperada.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
@@ -113,9 +143,9 @@ en `Revisión automática`. Nunca revisa, aprueba ni mergea.
 | `/task-create <texto>` | Nace en Backlog | Humano o agente |
 | `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
 | `/task-review [Clave]` | En progreso → Revisión automática | Agente |
-| `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | Bucle del contenedor (headless) o humano |
-| `/task-fix <Clave> [texto]` | Revisión automática o Lista para merge → Revisión automática | Bucle del contenedor (headless) o humano |
-| `/task-close <Clave>` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
+| `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
+| `/task-fix <Clave> [texto]` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
+| `/task-close <Clave>` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
 | `/session-start` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `/template-update <X.Y.Z>` | Sube la versión del template del proyecto | Agente |

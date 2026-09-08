@@ -14,9 +14,9 @@ con `claude -p "/nombre argumentos"`.
 | `task-create` | Nace en Backlog | Humano o agente |
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
 | `task-review` | En progreso → Revisión automática | Agente |
-| `pr-review` | Revisión automática → Lista para merge, o se queda | Bucle del contenedor (headless) o humano |
-| `task-fix` | Revisión automática o Lista para merge → Revisión automática | Bucle del contenedor (headless) o humano |
-| `task-close` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
+| `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
+| `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
+| `task-close` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `task-block` | Cualquiera → Bloqueada | Agente |
 | `session-start` | Inicio de sesión | Humano o agente |
 | `template-update` | Sube la versión del template | Agente |
@@ -34,8 +34,8 @@ Convenciones comunes a todas:
   `fix/`, `chore` → `chore/`. Luego la Clave y un slug corto:
   `fix/DEVKIT-7-slug`.
 - `<CÓDIGO>-0` es la Clave reservada para trabajo sin card (alta de proyecto,
-  actualización de template). `watch-merged.sh` la ignora: nunca cierra una
-  card por un PR `-0`.
+  actualización de template). `watch.sh` la ignora: nunca revisa ni cierra
+  una card por un PR `-0`.
 - Localizar una card por Clave (`DEVKIT-7`): el MCP de Notion no devuelve
   el valor de las fórmulas, así que no filtres por `Clave`. Separa código y
   número, y consulta Tareas con `ID` = número y `Proyecto` = la fila cuyo

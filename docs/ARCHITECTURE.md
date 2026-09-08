@@ -200,7 +200,8 @@ devkit/
     skills/               # ver 5.3
   scripts/
     sync-sandbox.sh       # rclone cada minuto
-    watch-merged.sh       # PRs mergeados cada cinco minutos
+    watch.sh              # revisión, corrección y cierre de PRs cada cinco minutos
+    watch-test.sh         # casos de la tabla de decisión de watch.sh
     net-denied.sh         # destinos bloqueados por el proxy
   VERSION                 # la lee new-project.sh para elegir la etiqueta
   CHANGELOG.md            # una entrada por etiqueta; la lee template-update
@@ -282,9 +283,9 @@ Dos niveles en la misma base de datos, con subelementos nativos de Notion:
 
 Estados: Backlog, Lista, En progreso, Revisión automática, Lista para merge,
 Hecha, Bloqueada. Entre `Revisión automática` y `Lista para merge` corre el
-ciclo de revisor y corrector descrito en DEVKIT-9; hasta que ese ciclo exista,
-una card puede pasar directo de `Revisión automática` a `Hecha` con el
-approve manual de siempre.
+ciclo de revisor y corrector de DEVKIT-9: `watch.sh` lo orquesta cada cinco
+minutos leyendo los marcadores del PR, y el humano solo ve PRs que ya pasaron
+la revisión.
 
 | Paso | Quién | Qué pasa |
 |---|---|---|
@@ -292,10 +293,28 @@ approve manual de siempre.
 | Backlog → Lista en la Épica | Humano | Única aprobación de planificación |
 | `epic-plan` | Agente | Hijas en Lista con orden y dependencias; desglose publicado como comentario |
 | `task-start` en la primera hija libre | Agente | Rama `<tipo>/<CLAVE>-slug` desde `main` |
-| `task-review` | Agente | PR a `main` con auto-merge armado |
+| `task-review` | Agente | PR a `main` con auto-merge armado; card en `Revisión automática` |
+| `watch.sh`: head sin informe | Máquina | Lanza `pr-review` headless. `OK`: card a `Lista para merge` y review pedido al humano. `CAMBIOS`: bloque `devkit-findings` en el PR |
+| `watch.sh`: `CAMBIOS` para el head, sin respuesta | Máquina | Lanza `task-fix` headless: un commit por hallazgo, push, bloque `devkit-fixes`. El head nuevo vuelve a la fila anterior |
+| Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
+| Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y lanza `task-block`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
-| `watch-merged.sh` cada cinco minutos | Máquina | Lanza `task-close` headless; cierra la hija, documenta, arranca la siguiente |
+| `watch.sh`: PR mergeado | Máquina | Lanza `task-close` headless; cierra la hija, documenta, arranca la siguiente |
 | Todas las hijas en Hecha | Automático | La Épica pasa a Hecha con una entrada de Documentación consolidada |
+
+El bucle no guarda estado propio: decide con lo que hay en el PR. Cada
+informe del revisor lleva `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`,
+cada respuesta del corrector `<!-- devkit-fix sha=<head nuevo> review=<sha> -->`
+y cada bloqueo `<!-- devkit-block sha=<head> -->`. Los marcadores se reconocen
+por su texto, no por su autor, para que valgan aunque el informe lo haya
+publicado el humano desde otra sesión. Un comentario humano es cualquier
+comentario o review sin marcador, de una cuenta distinta a la máquina y
+posterior al último marcador; los approve no cuentan porque los consume el
+auto-merge. La guardia cuenta los `CAMBIOS` posteriores al último `OK` o al
+último bloqueo, lo que sea más reciente: un rebuild no pierde nada y el humano
+reinicia el conteo con solo retomar. `/run/devkit/launched` (tmpfs) solo evita
+relanzar la misma skill para la misma entrada dentro de una vida del
+contenedor; como cada skill es idempotente, perderlo no daña.
 
 Reglas:
 
@@ -367,7 +386,9 @@ proceso y aparecen en `docker inspect`.
 - Sin `sudo` en la imagen.
 - `settings.json` de Claude Code: comandos denegados como force push, push a
   `main` y lectura del directorio de secretos; comandos rutinarios permitidos.
-  El bucle headless corre con herramientas restringidas a `task-close`.
+  El bucle headless lanza cada skill con una lista fija de herramientas
+  (`--allowedTools`); las negaciones de `settings.json` siguen aplicando,
+  porque una negación gana a cualquier permiso.
 - Proxy de salida con lista blanca. Lista base en el template; dominios del
   proyecto en `devkit.env`; interruptor de red abierta por sesión para
   depurar; `net-denied.sh` muestra los destinos bloqueados.
