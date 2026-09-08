@@ -29,6 +29,7 @@ run_tests() {
   check "Hola Mundo" "hola-mundo"
   check "  Café   con   Leche!! " "cafe-con-leche"
   check "DEVKIT-3 Skills del flujo" "devkit-3-skills-del-flujo"
+  check "2026" "2026"
   return $fail
 }
 
