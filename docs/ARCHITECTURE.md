@@ -325,6 +325,12 @@ Reglas:
   Backlog.
 - Cada hija sale de `main` y vuelve a `main`. No hay rama por Épica.
 - Una card activa por sesión en el mínimo viable.
+- Sin una card en `En progreso` sobre la rama actual, la sesión interactiva
+  no edita código: revisa, crea cards, comenta y documenta. La regla vive en
+  `AGENTS.md` (sección "Cómo se trabaja aquí"). Razón: con el ciclo de
+  revisor y corrector andando, un cambio hecho a mano desde la sesión web se
+  salta la revisión independiente y no deja rastro en Notion. La excepción es
+  una autorización expresa del humano en la conversación.
 
 ### 6.3 Trazabilidad
 

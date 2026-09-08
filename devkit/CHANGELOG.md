@@ -10,6 +10,14 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### La sesión interactiva no toca código fuera del flujo de cards (DEVKIT-15)
+
+- `AGENTS.template.md` suma la regla: sin una card en `En progreso` sobre la
+  rama actual, la sesión no edita archivos de código. Puede crear cards,
+  comentar, revisar con `pr-review` y escribir Documentación. Excepción:
+  autorización expresa del humano en la conversación. El porqué está en
+  `docs/ARCHITECTURE.md`, sección 6.2.
+
 ### `devkit.toml` como única fuente del entorno (DEVKIT-6)
 
 - `devkit.toml`, plano y en la raíz del repo, reemplaza a `DEVKIT_VERSION`,
