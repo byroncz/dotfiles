@@ -264,6 +264,7 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `task-start` | Lista → En progreso | Asigna agente, crea rama desde `main`, escribe URL de rama, comenta el plan |
 | `task-review` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | Revisor independiente del autor: comprueba cada criterio ejecutando, lee el diff de forma adversarial, publica el informe en el PR con el marcador `devkit-review` y el bloque `devkit-findings`; con `OK` pide review al humano |
+| `task-fix` | Revisión automática o Lista para merge → Revisión automática | Corrector del ciclo: lee el bloque `devkit-findings` del último informe `CAMBIOS` (o el comentario del humano como hallazgo único), un commit por hallazgo en la rama de la card, push, respuesta en el PR con el bloque `devkit-fixes` (`id | atendido o descartado | commit o motivo`) |
 | `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `session-start` | Inicio de sesión | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |

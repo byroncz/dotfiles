@@ -39,6 +39,18 @@ versión que usa un proyecto y la destino.
   que `pr-review` pide el review. Sin ella, vale el dueño del repo si es un
   usuario y no una organización.
 
+### Corrector de PRs (DEVKIT-13)
+
+- Skill `task-fix <Clave> [texto]`: lee el bloque `devkit-findings` del
+  último informe de `pr-review` con veredicto `CAMBIOS`, o el comentario del
+  humano sobre una card en `Lista para merge`, y atiende cada hallazgo con
+  un commit en la rama de la card. Responde en el PR con el bloque
+  `devkit-fixes` (`id | atendido o descartado | commit o motivo`) y deja la
+  card en `Revisión automática`. Trabaja en un `git worktree` aparte cuando
+  la sesión interactiva está en otra rama. Sin permisos nuevos en
+  `settings.json`: `gh pr comment`, `git worktree` y el push a ramas
+  `feat/`, `fix/` y `chore/` ya estaban permitidos.
+
 ### Cambios requeridos
 
 Proyectos en `0.1.0`: al actualizar, dentro del contenedor,

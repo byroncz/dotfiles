@@ -94,6 +94,16 @@ los atienda. El revisor nunca corrige ni aprueba: `settings.json` niega
 compuerta real es GitHub (sin autoaprobación, ruleset de `main`); el detalle
 está en `docs/ARCHITECTURE.md`, sección 12b.
 
+Corrección de PRs: `/task-fix <Clave> [texto]` es el corrector del ciclo.
+Sin texto, lee el bloque `devkit-findings` del último informe con veredicto
+`CAMBIOS` y solo los archivos que nombra; con texto, o si la card está en
+`Lista para merge` y hay un comentario tuyo en el PR, atiende ese comentario
+como un hallazgo único `C<n>`. Un commit por hallazgo con la Clave como
+ámbito, push sin `--force`, y una respuesta en el PR dentro del bloque
+`devkit-fixes` (`id | atendido o descartado | commit o motivo`) que es lo
+único que `pr-review` relee en el ciclo siguiente. Al terminar deja la card
+en `Revisión automática`. Nunca revisa, aprueba ni mergea.
+
 ### Skills (comandos `/nombre` dentro de `claude`)
 
 | Skill | Transición | Quién la lanza |
@@ -104,6 +114,7 @@ está en `docs/ARCHITECTURE.md`, sección 12b.
 | `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
 | `/task-review [Clave]` | En progreso → Revisión automática | Agente |
 | `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | Bucle del contenedor (headless) o humano |
+| `/task-fix <Clave> [texto]` | Revisión automática o Lista para merge → Revisión automática | Bucle del contenedor (headless) o humano |
 | `/task-close <Clave>` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
 | `/session-start` | Estado del proyecto y siguiente card libre | Humano o agente |
