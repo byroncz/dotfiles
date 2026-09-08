@@ -259,8 +259,8 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `epic-plan` | Épica en Lista | Descompone en hijas con orden y dependencias, las deja en Lista, publica el desglose como comentario |
 | `task-create` | Nace en Backlog | Crea la card desde la plantilla |
 | `task-start` | Lista → En progreso | Asigna agente, crea rama desde `main`, escribe URL de rama, comenta el plan |
-| `task-review` | En progreso → En revisión | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
-| `task-close` | En revisión → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, arranca la siguiente hija |
+| `task-review` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
+| `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `session-start` | Inicio de sesión | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
 | `template-update` | Mantenimiento | Sube `template` en `devkit.toml` y actualiza Notion |
@@ -275,7 +275,11 @@ Dos niveles en la misma base de datos, con subelementos nativos de Notion:
 
 ### 6.2 Máquina de estados
 
-Estados: Backlog, Lista, En progreso, En revisión, Hecha, Bloqueada.
+Estados: Backlog, Lista, En progreso, Revisión automática, Lista para merge,
+Hecha, Bloqueada. Entre `Revisión automática` y `Lista para merge` corre el
+ciclo de revisor y corrector descrito en DEVKIT-9; hasta que ese ciclo exista,
+una card puede pasar directo de `Revisión automática` a `Hecha` con el
+approve manual de siempre.
 
 | Paso | Quién | Qué pasa |
 |---|---|---|

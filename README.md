@@ -17,8 +17,9 @@ Cambios por versión: [`devkit/CHANGELOG.md`](devkit/CHANGELOG.md).
 4. Un bucle dentro del contenedor detecta el merge, cierra la card, escribe la
    entrada de Documentación y arranca la siguiente hija.
 
-Estados de una card: `Backlog → Lista → En progreso → En revisión → Hecha`,
-más `Bloqueada` cuando el agente necesita algo de ti.
+Estados de una card: `Backlog → Lista → En progreso → Revisión automática →
+Lista para merge → Hecha`, más `Bloqueada` cuando el agente necesita algo de
+ti.
 
 ## Stack
 
@@ -89,8 +90,8 @@ Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y
 | `/epic-plan <Clave>` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `/task-create <texto>` | Nace en Backlog | Humano o agente |
 | `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
-| `/task-review [Clave]` | En progreso → En revisión | Agente |
-| `/task-close <Clave>` | En revisión → Hecha | `watch-merged.sh` tras el merge |
+| `/task-review [Clave]` | En progreso → Revisión automática | Agente |
+| `/task-close <Clave>` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
 | `/session-start` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `/template-update <X.Y.Z>` | Sube la versión del template del proyecto | Agente |

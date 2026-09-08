@@ -13,8 +13,8 @@ con `claude -p "/nombre argumentos"`.
 | `epic-plan` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `task-create` | Nace en Backlog | Humano o agente |
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
-| `task-review` | En progreso → En revisión | Agente |
-| `task-close` | En revisión → Hecha | `watch-merged.sh` tras el merge |
+| `task-review` | En progreso → Revisión automática | Agente |
+| `task-close` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
 | `task-block` | Cualquiera → Bloqueada | Agente |
 | `session-start` | Inicio de sesión | Humano o agente |
 | `template-update` | Sube la versión del template | Agente |

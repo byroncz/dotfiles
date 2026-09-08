@@ -1,6 +1,6 @@
 ---
 name: task-review
-description: Cierra el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a En revisión. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
+description: Cierra el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a Revisión automática. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
 ---
 
 # task-review
@@ -38,16 +38,14 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 6. Activa el auto-merge: `gh pr merge --auto --squash`. Si GitHub lo rechaza
    porque el repo no lo permite, comenta en la card que falta activar
    "Allow auto-merge" y sigue.
-7. Actualiza la card: `PR` = URL del PR, `Estado` = `En revisión`.
+7. Actualiza la card: `PR` = URL del PR, `Estado` = `Revisión automática`.
 8. Comenta en la card, dos a cuatro líneas: qué se entregó y qué debe mirar
    el revisor primero.
 
-## Tras comentarios del revisor
-
-Si el humano pide cambios en el PR: la card vuelve a `En progreso`, aplica
-los cambios, push, y la card vuelve a `En revisión` con un comentario de una
-línea. El approve invalidado por el push se vuelve a pedir con
-`gh pr edit --add-reviewer <usuario>` si es necesario.
+A partir de aquí el ciclo es automático: la skill `pr-review` decide si la
+card pasa a `Lista para merge` o si `task-fix` la corrige y la deja de nuevo
+en `Revisión automática`. `task-review` no vuelve a tocar esta card salvo que
+el humano lo pida explícitamente.
 
 ## Reglas
 
