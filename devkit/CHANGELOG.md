@@ -10,6 +10,21 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Las ejecuciones headless no terminan preguntando (DEVKIT-17)
+
+- `task-start` gana una sección "Modo headless": tras comentar el plan
+  implementa la card hasta cumplir los criterios y ejecuta `task-review`; si
+  falta algo, `task-block`. Antes, invocada desde `task-close` con `claude -p`,
+  creaba la rama y preguntaba si seguía: nadie respondía y la card quedaba en
+  `En progreso` sin proceso.
+- `task-close`, paso 7: la siguiente hija se trabaja completa en la misma
+  ejecución, no solo se arranca.
+- `AGENTS.template.md` generaliza la regla: en `claude -p`, una pregunta al
+  humano equivale a `task-block`.
+- `watch.sh` registra al terminar cada `claude -p` una línea `estado:` con la
+  rama, sus commits sobre `main` y su PR, para que un corte se vea en el log
+  sin abrir Notion.
+
 ### `slugify.sh`: script de prueba punta a punta (DEVKIT-25)
 
 - `devkit/scripts/slugify.sh` convierte un texto libre en un slug de

@@ -20,7 +20,7 @@ Cambios por versión: [`devkit/CHANGELOG.md`](devkit/CHANGELOG.md).
 4. Tú apruebas el PR y GitHub lo mergea solo. Si en vez de aprobar comentas,
    el corrector atiende tu comentario y el ciclo sigue.
 5. El mismo bucle detecta el merge, cierra la card, escribe la entrada de
-   Documentación y arranca la siguiente hija.
+   Documentación y trabaja la siguiente hija hasta dejar su PR abierto.
 
 Estados de una card: `Backlog → Lista → En progreso → Revisión automática →
 Lista para merge → Hecha`, más `Bloqueada` cuando el agente necesita algo de
@@ -100,7 +100,13 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Mergeado en las últimas 48 h | `/task-close <Clave> <URL>` |
 
 Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
-trae el costo y los tokens, que es la medida de cada ciclo. Variables:
+trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
+`claude -p`, el bucle registra además una línea `estado:` con la rama en la que
+quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin PR` si
+no lo hay, `PR desconocido` si `gh` no respondió). Es una observación de git y
+GitHub, no del Estado de la card: una rama de card sin PR es la señal de que la
+ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la card.
+Variables:
 `DEVKIT_WATCH_INTERVAL` (segundos, 300) y `DEVKIT_WATCH_MAX_CYCLES` (3). Para
 ver qué decidiría sobre un PR sin esperar al bucle:
 
@@ -153,6 +159,22 @@ en `Revisión automática`. Nunca revisa, aprueba ni mergea.
 | `/template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
 Detalle y convenciones: [`devkit/agents/skills/README.md`](devkit/agents/skills/README.md).
+
+**Modo headless.** `watch.sh` invoca las skills con `claude -p`, donde no hay
+quien conteste: una pregunta al humano mata el proceso y deja la card a medias,
+así que equivale a `/task-block`. Toda ejecución headless termina en un estado
+observable de la card, nunca a la espera. Dos skills lo hacen explícito:
+
+- `/task-start` no se detiene tras crear la rama y comentar el plan: implementa
+  la card hasta cumplir todos los criterios de aceptación y termina ejecutando
+  `/task-review`. Si falta una decisión, un acceso o un criterio de aceptación,
+  o se atasca más de dos intentos en el mismo problema, ejecuta `/task-block`
+  con la petición concreta. Una ejecución que no deja la card en `Revisión
+  automática` o `Bloqueada` es un corte, no un avance.
+- `/task-close`, al cerrar una hija de una Épica que aún tiene hermanas
+  pendientes, toma la siguiente con `/task-start` y la trabaja completa en la
+  misma ejecución, hasta `/task-review` o `/task-block`. Arrancarla y devolver
+  el control no cuenta: nadie la retomaría.
 
 ## Qué declara cada proyecto
 

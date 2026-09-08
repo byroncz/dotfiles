@@ -51,8 +51,11 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
   para el resto.
 - El humano decide dos cosas: mover una Épica de Backlog a Lista y aprobar
   el PR. Todo lo demás lo haces tú, sin preguntar, siguiendo las skills.
-- En modo headless (`claude -p`) no hay quien responda: si falta algo,
-  coméntalo en la card y termina.
+- En modo headless (`claude -p`) no hay quien responda: una pregunta al
+  humano equivale a `task-block`. Nunca termines con una pregunta abierta.
+  Si falta algo, ejecuta `task-block` con la petición concreta (o comenta en
+  la card, si no hay card que bloquear) y termina. Toda ejecución headless
+  cierra en un estado observable de la card, nunca a la espera.
 
 ## Documentar comandos y skills
 

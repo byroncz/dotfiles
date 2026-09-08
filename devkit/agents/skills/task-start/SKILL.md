@@ -35,6 +35,21 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    `feat(DEVKIT-3): crear skill task-start`. Haz push con frecuencia.
 9. Al cumplir los criterios de aceptación, ejecuta `task-review`.
 
+## Modo headless
+
+`task-close` o el humano te invocan como `claude -p "/task-start <Clave>"`.
+No hay quien conteste: si terminas preguntando, el proceso muere con la card
+`En progreso` y nadie trabajándola.
+
+- No hagas preguntas. Tras comentar el plan (paso 7) sigue de largo:
+  implementa la card hasta cumplir todos los criterios de aceptación y
+  termina ejecutando `task-review`.
+- Una ejecución que no deja la card en `Revisión automática` o `Bloqueada`
+  es un corte, no un avance.
+- Si falta una decisión, un acceso o un criterio de aceptación, o te bloqueas
+  más de dos intentos en el mismo problema, ejecuta `task-block` con la
+  petición concreta al humano. Nunca termines con una pregunta abierta.
+
 ## Reglas
 
 - Una card activa por sesión.

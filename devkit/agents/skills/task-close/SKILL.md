@@ -1,6 +1,6 @@
 ---
 name: task-close
-description: Cierra una card cuyo PR ya fue mergeado: la pasa a Hecha, escribe la entrada de Documentación y, si es hija de una Épica, arranca la siguiente hija o cierra la Épica. La invoca el bucle watch.sh en modo headless, o el humano. Argumento: la Clave; opcionalmente la URL del PR.
+description: Cierra una card cuyo PR ya fue mergeado: la pasa a Hecha, escribe la entrada de Documentación y, si es hija de una Épica, toma la siguiente hija y la trabaja completa, o cierra la Épica. La invoca el bucle watch.sh en modo headless, o el humano. Argumento: la Clave; opcionalmente la URL del PR.
 ---
 
 # task-close
@@ -54,11 +54,16 @@ Argumento: Clave. Opcional: URL del PR.
      Épica que consolide: una línea por hija con enlace a su entrada, y la
      sección "Cambios requeridos" unificada.
    - Si quedan hijas: ejecuta `task-start` sin argumento para tomar la
-     siguiente libre. Si no hay libres por dependencias, comenta en la Épica
-     qué falta.
+     siguiente libre y trabájala completa en esta misma ejecución, hasta
+     `task-review` o `task-block`. Arrancarla y devolver el control no
+     cuenta: nadie la va a retomar. Si no hay libres por dependencias,
+     comenta en la Épica qué falta.
 
 ## Modo headless
 
 `watch.sh` te invoca como `claude -p "/task-close <Clave> <URL PR>"`.
-No hagas preguntas: si falta información, escribe un comentario en la card
-explicando qué falta y termina.
+No hay quien conteste: una pregunta al humano equivale a `task-block`. Si falta
+una decisión, un acceso o información para cerrar, ejecuta `task-block` con la
+petición concreta y termina; si no hay card que bloquear, comenta en la card
+que sí exista. Nunca termines con una pregunta abierta: la ejecución cierra en
+un estado observable de la card.

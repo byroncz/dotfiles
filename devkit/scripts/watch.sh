@@ -103,8 +103,40 @@ log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 launched() { grep -qxF "$1" "$LAUNCHED"; }
 mark() { echo "$1" >> "$LAUNCHED"; }
 
+# Estado en el que quedó el trabajo tras un `claude -p`. Notion no se consulta
+# desde bash, así que se registra solo lo observable en git y GitHub: la rama en
+# la que quedó el workspace, sus commits sobre main y su PR. La línea no afirma
+# en qué Estado quedó la card, que solo lo sabe Notion; "rama de card sin PR" es
+# la señal de que la ejecución pudo cortarse, y quien lea el log decide.
+work_state() {
+  local branch key ahead pr prs
+  branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  # HEAD desprendido va aparte: no se sabe qué rama se estaba trabajando, así
+  # que tampoco se puede afirmar que no haya card en progreso.
+  if [ "$branch" = "HEAD" ]; then
+    log "  estado: workspace en HEAD desprendido, estado desconocido"
+    return
+  fi
+  if [ -z "$branch" ] || [ "$branch" = "main" ]; then
+    log "  estado: workspace en '${branch:-?}', ninguna card en progreso"
+    return
+  fi
+  key=$(printf '%s' "$branch" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  ahead=$(git -C "$WS" rev-list --count "main..$branch" 2>/dev/null) || ahead="?"
+  # El código de salida distingue "gh no respondió" de "no hay PR": sin esa
+  # comprobación, un fallo de token o de red se leería como una rama sin PR.
+  if prs=$(gh pr list --head "$branch" --state all --limit 1 --json number,state \
+             --jq '.[] | "PR #\(.number) \(.state)"' 2>/dev/null); then
+    pr="${prs:-rama de card sin PR}"
+  else
+    pr="PR desconocido: gh no respondió"
+  fi
+  log "  estado: ${key:-sin Clave} en $branch, $ahead commits sobre main, $pr"
+}
+
 # run_skill <nombre del log> <prompt>. Salida JSON de claude -p: la última
-# línea trae costo, tokens y turnos, que es la medida de cada ciclo.
+# línea trae costo, tokens y turnos, que es la medida de cada ciclo. Al
+# terminar se registra el estado del trabajo, para que un corte sea visible.
 run_skill() {
   local name=$1 prompt=$2 logf rc summary
   logf="$RUN_DIR/$name.log"
@@ -121,6 +153,7 @@ run_skill() {
   else
     log "$name falló (rc=$rc): $summary; ver $logf"
   fi
+  work_state
   return $rc
 }
 
