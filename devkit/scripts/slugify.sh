@@ -19,7 +19,7 @@ run_tests() {
   check() {
     local input=$1 want=$2 got
     got=$(slugify "$input")
-    if [ "$want" = "$want" ]; then
+    if [ "$want" = "$got" ]; then
       printf 'ok   %-30s -> %s\n' "$input" "$got"
     else
       printf 'FAIL %-30s esperado %s, obtenido %s\n' "$input" "$want" "$got"
