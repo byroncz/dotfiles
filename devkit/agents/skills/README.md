@@ -15,6 +15,7 @@ con `claude -p "/nombre argumentos"`.
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
 | `task-review` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | Bucle del contenedor (headless) o humano |
+| `task-fix` | Revisión automática o Lista para merge → Revisión automática | Bucle del contenedor (headless) o humano |
 | `task-close` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
 | `task-block` | Cualquiera → Bloqueada | Agente |
 | `session-start` | Inicio de sesión | Humano o agente |

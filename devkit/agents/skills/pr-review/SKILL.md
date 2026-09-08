@@ -45,9 +45,11 @@ es trabajo de `task-fix`.
    - **Primer ciclo** (sin marcador previo): el diff completo,
      `git diff origin/main...FETCH_HEAD`, y el cuerpo del PR.
    - **Ciclos siguientes**: solo `git diff <sha del marcador> FETCH_HEAD`,
-     el bloque `devkit-findings` de tu informe anterior y las líneas
-     `id | atendido | commit` con las que `task-fix` respondió. No releas el
-     PR entero ni repitas lo que ya diste por verificado.
+     el bloque `devkit-findings` de tu informe anterior y el bloque
+     `devkit-fixes` con el que `task-fix` respondió (comentario del PR con
+     `<!-- devkit-fix sha=<head> review=<sha de tu marcador> -->`, una línea
+     `id | atendido o descartado | commit o motivo` por hallazgo). No releas
+     el PR entero ni repitas lo que ya diste por verificado.
 6. Aplica la rúbrica, en este orden:
    - **Criterios de aceptación de la card, uno por uno.** Cada uno se
      comprueba ejecutando algo en la copia de trabajo (`bash -n`, `git grep`,
