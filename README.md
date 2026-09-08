@@ -82,6 +82,18 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y
 `watch-merged.sh` (cada 5 min busca PRs mergeados y lanza `task-close`).
 
+Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
+autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
+el diff de forma adversarial y publica el informe en el PR con el marcador
+`<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Con `OK` mueve la
+card a `Lista para merge` y te pide el review; con `CAMBIOS` deja los
+hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
+`id | severidad | archivo:línea | qué falla | qué hacer`) para que `task-fix`
+los atienda. El revisor nunca corrige ni aprueba: `settings.json` niega
+`gh pr review --approve` y todo `gh pr merge` que no sea `--auto`, y la
+compuerta real es GitHub (sin autoaprobación, ruleset de `main`); el detalle
+está en `docs/ARCHITECTURE.md`, sección 12b.
+
 ### Skills (comandos `/nombre` dentro de `claude`)
 
 | Skill | Transición | Quién la lanza |
@@ -91,6 +103,7 @@ Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y
 | `/task-create <texto>` | Nace en Backlog | Humano o agente |
 | `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
 | `/task-review [Clave]` | En progreso → Revisión automática | Agente |
+| `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | Bucle del contenedor (headless) o humano |
 | `/task-close <Clave>` | Lista para merge → Hecha | `watch-merged.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
 | `/session-start` | Estado del proyecto y siguiente card libre | Humano o agente |
@@ -110,7 +123,11 @@ project  = "DATA"      # código del proyecto en Notion
 python   = "3.13"      # opcional
 apt      = []          # opcional: paquetes de sistema extra
 domains  = []          # opcional: dominios extra para el proxy
+reviewer = "usuario"   # opcional: usuario de GitHub al que pr-review pide el review
 ```
+
+Sin `reviewer`, `pr-review` usa el dueño del repo si es un usuario; en una
+organización hay que declararlo.
 
 En el Mac, `~/.devkit/<proyecto>/devkit.env` guarda solo lo personal: URL del
 repo, identidad git y remoto de Dropbox.

@@ -27,9 +27,10 @@
 #    DEVKIT_SANDBOX_REMOTE ruta en Dropbox (ej. dropbox:devkit/sandbox.local)
 #
 #  devkit.toml (en el repo del proyecto, no en devkit.env): declara
-#  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`
-#  y `domains`. Es la única fuente de esos valores; ver docs/ARCHITECTURE.md
-#  sección 5.2.
+#  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`,
+#  `domains` y `reviewer` (usuario de GitHub que aprueba los PRs; lo lee la
+#  skill pr-review). Es la única fuente de esos valores; ver
+#  docs/ARCHITECTURE.md sección 5.2.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

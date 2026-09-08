@@ -22,6 +22,23 @@ versión que usa un proyecto y la destino.
   sincroniza `apt`/`domains` hacia el `.env` del Mac antes de `recreate` o
   `rebuild`.
 
+### Revisor independiente de PRs (DEVKIT-12)
+
+- Skill `pr-review <número de PR>`: comprueba cada criterio de aceptación
+  de la card ejecutando algo, lee el diff de forma adversarial y publica el
+  informe en el PR con el marcador
+  `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Con `OK` mueve
+  la card a `Lista para merge` y pide review al dueño del repo; con
+  `CAMBIOS` deja un bloque `devkit-findings` con una línea por hallazgo para
+  `task-fix`.
+- `settings.json` permite `gh pr review --comment`, `gh pr edit` y
+  `git worktree`; la negación de `gh pr review` se reduce a `--approve`. La
+  compuerta real contra aprobar sigue siendo GitHub (ver
+  `docs/ARCHITECTURE.md`, 12b).
+- `devkit.toml` admite la clave opcional `reviewer`: usuario de GitHub al
+  que `pr-review` pide el review. Sin ella, vale el dueño del repo si es un
+  usuario y no una organización.
+
 ### Cambios requeridos
 
 Proyectos en `0.1.0`: al actualizar, dentro del contenedor,
