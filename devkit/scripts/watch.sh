@@ -172,7 +172,9 @@ while true; do
             mark "fix-humano:$num:$ref"
             text=$(printf '%s' "$extra" | base64 -d 2>/dev/null)
             log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
-            run_skill "task-fix-$num-humano" "/task-fix $key $text"
+            # La fecha del comentario en el nombre: un PR puede recibir varios
+            # comentarios humanos y cada ejecución conserva su log.
+            run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text"
             ;;
           bloquear)
             launched "bloquear:$num:$head" && continue
