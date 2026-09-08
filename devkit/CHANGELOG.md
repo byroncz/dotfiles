@@ -51,9 +51,31 @@ versión que usa un proyecto y la destino.
   `settings.json`: `gh pr comment`, `git worktree` y el push a ramas
   `feat/`, `fix/` y `chore/` ya estaban permitidos.
 
+### Bucle de revisión automática (DEVKIT-14)
+
+- `scripts/watch-merged.sh` pasa a ser `scripts/watch.sh` y orquesta el ciclo
+  completo. Cada cinco minutos, por cada PR cuyo título empieza por una Clave
+  del proyecto: head sin marcador `devkit-review` → `pr-review`; último
+  marcador `CAMBIOS` para el head sin respuesta `devkit-fix` → `task-fix`;
+  último marcador `OK` y comentario humano posterior → `task-fix` con ese
+  texto; PR mergeado → `task-close`, como antes.
+- Guardia: tras tres informes `CAMBIOS` sin `OK` para el mismo PR, publica
+  el marcador `<!-- devkit-block sha=<head> -->` en el PR, lanza `task-block`
+  y no toca ese PR hasta que el humano mueva la card a `Revisión automática`
+  y comente en el PR. El conteo se lee de los marcadores del PR, no de un
+  archivo del contenedor; el bloqueo lo reinicia.
+- Cada skill headless deja su log en `/run/devkit/<skill>-<N>.log` con el
+  costo y los tokens de la ejecución en la última línea (`claude -p
+  --output-format json`). Variables: `DEVKIT_WATCH_INTERVAL` (300 s) y
+  `DEVKIT_WATCH_MAX_CYCLES` (3). `bash watch.sh --decide < pr.json` imprime
+  la decisión para un PR sin esperar al bucle.
+
 ### Cambios requeridos
 
 Proyectos en `0.1.0`: al actualizar, dentro del contenedor,
+
+- el bucle nuevo llega con la imagen: `devkit update` (o `devkit rebuild`)
+  tras subir `template`;
 
 - crear `devkit.toml` en la raíz del repo con `template` y `project` (el
   código de Notion que antes estaba en `AGENTS.md`); commit y push;
