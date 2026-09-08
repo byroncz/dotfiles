@@ -111,7 +111,13 @@ mark() { echo "$1" >> "$LAUNCHED"; }
 work_state() {
   local branch key ahead pr prs
   branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  if [ -z "$branch" ] || [ "$branch" = "main" ] || [ "$branch" = "HEAD" ]; then
+  # HEAD desprendido va aparte: no se sabe qué rama se estaba trabajando, así
+  # que tampoco se puede afirmar que no haya card en progreso.
+  if [ "$branch" = "HEAD" ]; then
+    log "  estado: workspace en HEAD desprendido, estado desconocido"
+    return
+  fi
+  if [ -z "$branch" ] || [ "$branch" = "main" ]; then
     log "  estado: workspace en '${branch:-?}', ninguna card en progreso"
     return
   fi
