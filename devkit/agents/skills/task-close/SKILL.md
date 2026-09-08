@@ -62,5 +62,8 @@ Argumento: Clave. Opcional: URL del PR.
 ## Modo headless
 
 `watch.sh` te invoca como `claude -p "/task-close <Clave> <URL PR>"`.
-No hagas preguntas: si falta información, escribe un comentario en la card
-explicando qué falta y termina.
+No hay quien conteste: una pregunta al humano equivale a `task-block`. Si falta
+una decisión, un acceso o información para cerrar, ejecuta `task-block` con la
+petición concreta y termina; si no hay card que bloquear, comenta en la card
+que sí exista. Nunca termines con una pregunta abierta: la ejecución cierra en
+un estado observable de la card.
