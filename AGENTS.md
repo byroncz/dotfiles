@@ -19,6 +19,11 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
 - Una card activa por sesión. Rama `<tipo>/<CÓDIGO>-<n>-slug` desde `main`
   (`feat/`, `fix/` o `chore/` según el Tipo de la card), PR a `main` con
   auto-merge. Nunca push directo a `main`. Nunca force push.
+- Sin una card activa en `En progreso` sobre la rama actual, la sesión no
+  edita archivos de código. Puede crear cards (`task-create`), comentar,
+  revisar (`pr-review`) y escribir Documentación. Todo cambio de código
+  entra por una card y su rama; el ciclo automático lo revisa y lo mergea.
+  Única excepción: autorización expresa del humano en la conversación.
 - Commits con Conventional Commits y la Clave como ámbito:
   `feat(<CÓDIGO>-42): agregar carga incremental`.
 - `sandbox.local/` es un espacio de pruebas respaldado en Dropbox y fuera de
