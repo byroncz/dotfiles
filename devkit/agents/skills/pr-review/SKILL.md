@@ -11,8 +11,10 @@ es trabajo de `task-fix`.
 
 ## Pasos
 
-1. Lee el PR: `gh pr view <N> --json number,title,state,url,headRefOid,headRefName,body,reviews`.
-   Si `state` no es `OPEN`, responde "PR no abierto" y termina.
+1. Lee el PR: `gh pr view <N> --json number,title,state,url,headRefOid,headRefName,body,reviews,comments`.
+   Si `state` no es `OPEN`, responde "PR no abierto" y termina. Los informes
+   del revisor viven en `reviews`; las respuestas del corrector, en
+   `comments`: necesitas ambos.
 2. Deduce la Clave del prefijo del título (`DEVKIT-12 ...` → código `DEVKIT`,
    ID `12`). Si el código no coincide con `project` de `devkit.toml` o el ID
    es `0`, responde "sin card que revisar" y termina. Localiza la card en
@@ -46,10 +48,25 @@ es trabajo de `task-fix`.
      `git diff origin/main...FETCH_HEAD`, y el cuerpo del PR.
    - **Ciclos siguientes**: solo `git diff <sha del marcador> FETCH_HEAD`,
      el bloque `devkit-findings` de tu informe anterior y el bloque
-     `devkit-fixes` con el que `task-fix` respondió (comentario del PR con
-     `<!-- devkit-fix sha=<head> review=<sha de tu marcador> -->`, una línea
-     `id | atendido o descartado | commit o motivo` por hallazgo). No releas
-     el PR entero ni repitas lo que ya diste por verificado.
+     `devkit-fixes` con el que `task-fix` respondió. Esa respuesta es un
+     comentario del PR, no una review: el último de la cuenta máquina
+     (`gh api user --jq .login`) cuyo marcador
+     `<!-- devkit-fix sha=<head> review=<sha> -->` tenga `review=` igual al
+     `sha` de tu marcador anterior:
+
+     ```sh
+     gh pr view <N> --json comments | jq -r \
+       --arg bot "$(gh api user --jq .login)" --arg rev "<sha del marcador>" \
+       '[.comments[] | select(.author.login == $bot and (.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=" + $rev)))] | sort_by(.createdAt) | last | .body'
+     ```
+
+     (`--jq` de `gh` no acepta `--arg`; por eso el filtro corre en `jq`.)
+
+     Trae una línea `id | atendido o descartado | commit o motivo` por
+     hallazgo. Si no hay comentario, el corrector no respondió todavía:
+     revisa el diff igual y marca cada hallazgo anterior por lo que veas en
+     el código. No releas el PR entero ni repitas lo que ya diste por
+     verificado.
 6. Aplica la rúbrica, en este orden:
    - **Criterios de aceptación de la card, uno por uno.** Cada uno se
      comprueba ejecutando algo en la copia de trabajo (`bash -n`, `git grep`,
