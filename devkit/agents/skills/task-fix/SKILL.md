@@ -26,8 +26,18 @@ trabajo de `pr-review`.
      es `OK`, responde "nada que corregir" y termina. Si su `sha` no es
      `headRefOid`, el head ya cambió después del informe: responde
      "informe desactualizado, esperando a pr-review" y termina. Si ya
-     existe un comentario tuyo con `<!-- devkit-fix review=<ese sha> -->`,
-     responde "ya atendido" y termina. Si pasa todo, extrae el bloque
+     existe un comentario de la cuenta máquina (`gh api user --jq .login`)
+     cuyo marcador `devkit-fix` tenga `review=` igual a ese `sha`, responde
+     "ya atendido" y termina. La búsqueda exacta, sobre `comments` del
+     paso 2:
+
+     ```sh
+     gh pr view <N> --json comments --jq '.comments[].body' \
+       | grep -o 'devkit-fix sha=[0-9a-f]* review=[0-9a-f]*' \
+       | grep -c 'review=<ese sha>'
+     ```
+
+     Si pasa todo, extrae el bloque
      `<!-- devkit-findings -->` ... `<!-- /devkit-findings -->` de ese
      informe: una línea por hallazgo, cinco campos separados por ` | `:
      `id | severidad | archivo:línea | qué falla | qué hacer`.
