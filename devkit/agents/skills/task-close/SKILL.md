@@ -1,6 +1,6 @@
 ---
 name: task-close
-description: Cierra una card cuyo PR ya fue mergeado: la pasa a Hecha, escribe la entrada de Documentación y, si es hija de una Épica, arranca la siguiente hija o cierra la Épica. La invoca el bucle watch.sh en modo headless, o el humano. Argumento: la Clave; opcionalmente la URL del PR.
+description: Cierra una card cuyo PR ya fue mergeado: la pasa a Hecha, escribe la entrada de Documentación y, si es hija de una Épica, toma la siguiente hija y la trabaja completa, o cierra la Épica. La invoca el bucle watch.sh en modo headless, o el humano. Argumento: la Clave; opcionalmente la URL del PR.
 ---
 
 # task-close
