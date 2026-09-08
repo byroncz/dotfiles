@@ -90,7 +90,9 @@ card a `Lista para merge` y te pide el review; con `CAMBIOS` deja los
 hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
 `id | severidad | archivo:línea | qué falla | qué hacer`) para que `task-fix`
 los atienda. El revisor nunca corrige ni aprueba: `settings.json` niega
-`gh pr review --approve` y todo `gh pr merge` que no sea `--auto`.
+`gh pr review --approve` y todo `gh pr merge` que no sea `--auto`, y la
+compuerta real es GitHub (sin autoaprobación, ruleset de `main`); el detalle
+está en `docs/ARCHITECTURE.md`, sección 12b.
 
 ### Skills (comandos `/nombre` dentro de `claude`)
 
@@ -121,7 +123,11 @@ project  = "DATA"      # código del proyecto en Notion
 python   = "3.13"      # opcional
 apt      = []          # opcional: paquetes de sistema extra
 domains  = []          # opcional: dominios extra para el proxy
+reviewer = "usuario"   # opcional: usuario de GitHub al que pr-review pide el review
 ```
+
+Sin `reviewer`, `pr-review` usa el dueño del repo si es un usuario; en una
+organización hay que declararlo.
 
 En el Mac, `~/.devkit/<proyecto>/devkit.env` guarda solo lo personal: URL del
 repo, identidad git y remoto de Dropbox.

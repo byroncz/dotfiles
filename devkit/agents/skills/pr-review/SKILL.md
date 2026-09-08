@@ -107,10 +107,18 @@ es trabajo de `task-fix`.
    sin saltos de línea dentro de un hallazgo.
 9. Según el veredicto:
    - **`OK`**: `Estado` de la card = `Lista para merge`. Pide el review al
-     humano, que es el dueño del repo:
-     `gh pr edit --add-reviewer "$(gh repo view --json owner --jq .owner.login)" <N>`.
-     Si el dueño es la propia cuenta máquina (`gh api user --jq .login`), no
-     pidas review y dilo en el comentario. Luego publica un comentario
+     humano con `gh pr edit --add-reviewer <usuario> <N>`. El usuario sale de
+     la clave `reviewer` de `devkit.toml`:
+
+     ```sh
+     sed -n 's/^reviewer[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' devkit.toml | head -1
+     ```
+
+     Si la clave no existe, usa el dueño del repo solo si es un usuario y no
+     una organización (`gh api repos/{owner}/{repo} --jq '.owner.type'`
+     devuelve `User`). Si no hay revisor, o es la propia cuenta máquina
+     (`gh api user --jq .login`), no pidas review y dilo en el comentario:
+     el humano debe declarar `reviewer`. Luego publica un comentario
      aparte con `gh pr comment --body-file - <N>`, para el humano, siguiendo
      la guía de redacción de `AGENTS.md` y con este contenido, en máximo diez
      líneas:
@@ -132,7 +140,15 @@ es trabajo de `task-fix`.
 ## Reglas
 
 - Nunca `git commit`, `git push` ni edición de archivos en la rama del PR.
-  Nunca `gh pr review --approve` ni ningún `gh pr merge`.
+  Nunca `gh pr review --approve` ni ningún `gh pr merge`. Nunca `gh api`
+  sobre `/pulls/*/reviews`: publicar reviews es trabajo de `gh pr review
+  --comment` y nada más.
+- `settings.json` no puede impedir aprobar: sus reglas son prefijos y no
+  ven `gh pr review <N> --approve` ni una review por `gh api`. La compuerta
+  real está en GitHub: la cuenta máquina no puede aprobar sus propios PRs y
+  el ruleset de `main` exige una aprobación humana. Esta regla es lo que te
+  frena en un PR abierto por el humano; respétala aunque la herramienta lo
+  permita.
 - No leas los comentarios de la card para saber qué hizo el autor: la card
   te da los criterios, el PR te da el código. Lo demás es contexto del autor.
 - Un informe por head. Si el head cambió mientras revisabas, publica igual

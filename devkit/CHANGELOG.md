@@ -32,7 +32,12 @@ versión que usa un proyecto y la destino.
   `CAMBIOS` deja un bloque `devkit-findings` con una línea por hallazgo para
   `task-fix`.
 - `settings.json` permite `gh pr review --comment`, `gh pr edit` y
-  `git worktree`; la negación de `gh pr review` se reduce a `--approve`.
+  `git worktree`; la negación de `gh pr review` se reduce a `--approve`. La
+  compuerta real contra aprobar sigue siendo GitHub (ver
+  `docs/ARCHITECTURE.md`, 12b).
+- `devkit.toml` admite la clave opcional `reviewer`: usuario de GitHub al
+  que `pr-review` pide el review. Sin ella, vale el dueño del repo si es un
+  usuario y no una organización.
 
 ### Cambios requeridos
 

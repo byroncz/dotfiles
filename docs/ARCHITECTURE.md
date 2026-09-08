@@ -230,12 +230,15 @@ project  = "DATA"            # código del proyecto en Notion (obligatorio)
 python   = "3.13"            # opcional; el arranque exporta UV_PYTHON
 apt      = ["libpq-dev"]     # opcional; paquetes de sistema extra
 domains  = ["api.ejemplo.com"]  # opcional; dominios extra para el proxy
+reviewer = "usuario"         # opcional; usuario de GitHub que aprueba los PRs
 ```
 
 Regla de reparto entre el repo y el Mac: al repo va lo que cualquiera
 necesita para reconstruir el proyecto igual (versión del template, código de
-Notion, versión de Python, paquetes apt, dominios); al Mac va solo lo
-personal e irreproducible. En `~/.devkit/<proyecto>/`:
+Notion, versión de Python, paquetes apt, dominios, usuario que aprueba los
+PRs); al Mac va solo lo personal e irreproducible. `reviewer` lo usa
+`pr-review` para pedir el review; si falta, vale el dueño del repo cuando es
+un usuario y no una organización. En `~/.devkit/<proyecto>/`:
 
 - `devkit.env`: URL del repo, identidad git, remoto de Dropbox. Lo edita el
   humano una vez.
@@ -549,6 +552,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Ratón en Neovim y en Claude Code | Ambos capturan el ratón; la selección nativa exige apagar "Permitir informe del ratón" | Documentado en 4.4; se recomienda un atajo de teclado al menú |
 | Las skills buscan cards por la fórmula `Clave` | El MCP de Notion devuelve las fórmulas y rollups como referencias opacas, no como texto | Las skills filtran por `ID` (número) y `Proyecto`, y construyen la Clave como `<Código>-<ID>`. `Clave` queda como columna legible para el humano |
 | `settings.json` niega todo `gh pr merge` | `task-review` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
+| `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que no pueden impedir aprobar. La compuerta real es GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana. Queda expuesto el caso de un PR abierto por el humano; la skill lo prohíbe por regla y una card en DEVKIT-18 propone un hook `PreToolUse` que bloquee `approve` por contenido del comando |
 | `DEVKIT_VERSION`, `.python-version` y `{{CODE}}` en `AGENTS.md` como fuentes sueltas | Tres archivos/placeholders para configuración que un proyecto declara una sola vez; tres skills asumían un `DEVKIT_VERSION` que ni siquiera existía como archivo (DEVKIT-2) | `devkit.toml` único en la raíz del repo, plano y leído con expresiones regulares. Regla de reparto: al repo lo que hace falta para reconstruir el proyecto igual (`template`, `project`, `python`, `apt`, `domains`); al Mac solo lo personal e irreproducible (`devkit.env`: repo, identidad git, remoto de Dropbox). Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el template a Python). `new-project.sh` no puede crear `devkit.toml` porque nunca toca el repo del proyecto: lo crea `entrypoint.sh` con placeholders en el primer arranque (DEVKIT-6) |
 
 ## 13. Referencias
