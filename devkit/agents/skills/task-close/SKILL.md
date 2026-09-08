@@ -54,8 +54,10 @@ Argumento: Clave. Opcional: URL del PR.
      Épica que consolide: una línea por hija con enlace a su entrada, y la
      sección "Cambios requeridos" unificada.
    - Si quedan hijas: ejecuta `task-start` sin argumento para tomar la
-     siguiente libre. Si no hay libres por dependencias, comenta en la Épica
-     qué falta.
+     siguiente libre y trabájala completa en esta misma ejecución, hasta
+     `task-review` o `task-block`. Arrancarla y devolver el control no
+     cuenta: nadie la va a retomar. Si no hay libres por dependencias,
+     comenta en la Épica qué falta.
 
 ## Modo headless
 

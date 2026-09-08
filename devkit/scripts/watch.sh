@@ -103,8 +103,32 @@ log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 launched() { grep -qxF "$1" "$LAUNCHED"; }
 mark() { echo "$1" >> "$LAUNCHED"; }
 
+# Estado en el que quedó el trabajo tras un `claude -p`. Notion no se consulta
+# desde bash, así que se registra lo observable en git y GitHub: la rama en la
+# que quedó el workspace, sus commits sobre main y su PR. Una rama de card sin
+# PR es una card que quedó En progreso y que nadie está trabajando: el corte se
+# ve en el log, sin abrir Notion.
+work_state() {
+  local branch key ahead pr
+  branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -z "$branch" ] || [ "$branch" = "main" ] || [ "$branch" = "HEAD" ]; then
+    log "  estado: workspace en '${branch:-?}', ninguna card en progreso"
+    return
+  fi
+  key=$(printf '%s' "$branch" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  ahead=$(git -C "$WS" rev-list --count "main..$branch" 2>/dev/null) || ahead="?"
+  pr=$(gh pr list --head "$branch" --state all --limit 1 --json number,state \
+         --jq '.[] | "PR #\(.number) \(.state)"' 2>/dev/null)
+  if [ -n "$pr" ]; then
+    log "  estado: ${key:-sin Clave} en $branch, $ahead commits sobre main, $pr"
+  else
+    log "  estado: ${key:-sin Clave} en $branch, $ahead commits sobre main, sin PR: la card quedó En progreso y nadie la sigue"
+  fi
+}
+
 # run_skill <nombre del log> <prompt>. Salida JSON de claude -p: la última
-# línea trae costo, tokens y turnos, que es la medida de cada ciclo.
+# línea trae costo, tokens y turnos, que es la medida de cada ciclo. Al
+# terminar se registra el estado del trabajo, para que un corte sea visible.
 run_skill() {
   local name=$1 prompt=$2 logf rc summary
   logf="$RUN_DIR/$name.log"
@@ -121,6 +145,7 @@ run_skill() {
   else
     log "$name falló (rc=$rc): $summary; ver $logf"
   fi
+  work_state
   return $rc
 }
 
