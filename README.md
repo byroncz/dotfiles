@@ -102,9 +102,11 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
 trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
 `claude -p`, el bucle registra además una línea `estado:` con la rama en la que
-quedó el workspace, sus commits sobre `main` y su PR. Una rama de card sin PR
-significa que la card quedó en `En progreso` y nadie la sigue: el corte se ve
-en el log, sin abrir Notion. Variables:
+quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin PR` si
+no lo hay, `PR desconocido` si `gh` no respondió). Es una observación de git y
+GitHub, no del Estado de la card: una rama de card sin PR es la señal de que la
+ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la card.
+Variables:
 `DEVKIT_WATCH_INTERVAL` (segundos, 300) y `DEVKIT_WATCH_MAX_CYCLES` (3). Para
 ver qué decidiría sobre un PR sin esperar al bucle:
 
