@@ -84,6 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 | `v`, `g`, `gs`, `gl`, `ll` | Alias: `nvim`, `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
 | `/opt/devkit/scripts/watch-test.sh` | Prueba la tabla de decisión de `watch.sh` con PRs sintéticos; sale con 1 si un caso falla. |
+| `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
 (cada 5 min). `watch.sh` mira cada PR cuyo título empieza por una Clave del

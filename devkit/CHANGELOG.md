@@ -10,6 +10,12 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `slugify.sh`: script de prueba punta a punta (DEVKIT-25)
+
+- `devkit/scripts/slugify.sh` convierte un texto libre en un slug de
+  minúsculas separado por guiones, el formato que usan las ramas de las
+  cards. `--test` corre su tabla de autoprueba.
+
 ### La sesión interactiva no toca código fuera del flujo de cards (DEVKIT-15)
 
 - `AGENTS.template.md` suma la regla: sin una card en `En progreso` sobre la
