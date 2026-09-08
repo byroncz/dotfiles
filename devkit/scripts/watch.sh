@@ -36,6 +36,9 @@ MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
 # el informe lo haya publicado el humano desde otra sesión. Lo humano es todo
 # lo que no lleva marcador, no lo firma la cuenta máquina y llega después del
 # último marcador; los approve no cuentan (los cierra el auto-merge).
+# Un bloqueo manda hasta que aparece un devkit-fix posterior a él: esa
+# respuesta del corrector (al comentario humano) reanuda el ciclo y el head
+# nuevo vuelve a la rama normal (revisar). Los casos están en watch-test.sh.
 DECIDE='
 def markers($re; $ts):
   [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
@@ -47,6 +50,8 @@ def markers($re; $ts):
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
+| ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
+| ($block_at != "" and $last != null and $block_at > $last.at and ($resumed | not)) as $blocked
 | (([$reviews[] | select(.verdict == "OK") | .at] | max) // "") as $ok_at
 | ([$ok_at, $block_at] | max) as $reset_at
 | ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at)] | length) as $cambios
@@ -63,7 +68,7 @@ def markers($re; $ts):
    and ([$fixes[] | select(.review == $last.sha)] | length) == 0) as $pending_fix
 | ($human | map(.body) | join("\n\n") | @base64) as $human_text
 | (($human | last | .at) // "-") as $human_at
-| if $last != null and $block_at > $last.at then
+| if $blocked then
     (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text]
      else ["bloqueado", $head, $block_at, "-"] end)
   elif ($human | length) > 0 and $last != null and $last.verdict == "OK" and $last.sha == $head then

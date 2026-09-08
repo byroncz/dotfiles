@@ -63,7 +63,12 @@ versión que usa un proyecto y la destino.
   el marcador `<!-- devkit-block sha=<head> -->` en el PR, lanza `task-block`
   y no toca ese PR hasta que el humano mueva la card a `Revisión automática`
   y comente en el PR. El conteo se lee de los marcadores del PR, no de un
-  archivo del contenedor; el bloqueo lo reinicia.
+  archivo del contenedor; el bloqueo lo reinicia. La respuesta `devkit-fix`
+  del corrector a ese comentario levanta el bloqueo y el head nuevo vuelve
+  a revisarse.
+- `scripts/watch-test.sh` prueba la tabla de decisión con PRs sintéticos
+  (vacío, `CAMBIOS` con y sin respuesta, comentario humano, tres ciclos,
+  bloqueo y reanudación) y sale con 1 si un caso falla.
 - Cada skill headless deja su log en `/run/devkit/<skill>-<N>.log` con el
   costo y los tokens de la ejecución en la última línea (`claude -p
   --output-format json`). Variables: `DEVKIT_WATCH_INTERVAL` (300 s) y

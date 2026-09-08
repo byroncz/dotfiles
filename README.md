@@ -83,6 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 | `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
 | `v`, `g`, `gs`, `gl`, `ll` | Alias: `nvim`, `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
+| `/opt/devkit/scripts/watch-test.sh` | Prueba la tabla de decisión de `watch.sh` con PRs sintéticos; sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
 (cada 5 min). `watch.sh` mira cada PR cuyo título empieza por una Clave del
@@ -105,6 +106,11 @@ ver qué decidiría sobre un PR sin esperar al bucle:
 ```sh
 gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
 ```
+
+La tabla de decisión tiene una prueba reproducible sin GitHub:
+`bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
+con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación)
+contra `watch.sh --decide` y falla si alguno no da la acción esperada.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee

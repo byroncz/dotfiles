@@ -201,6 +201,7 @@ devkit/
   scripts/
     sync-sandbox.sh       # rclone cada minuto
     watch.sh              # revisión, corrección y cierre de PRs cada cinco minutos
+    watch-test.sh         # casos de la tabla de decisión de watch.sh
     net-denied.sh         # destinos bloqueados por el proxy
   VERSION                 # la lee new-project.sh para elegir la etiqueta
   CHANGELOG.md            # una entrada por etiqueta; la lee template-update
