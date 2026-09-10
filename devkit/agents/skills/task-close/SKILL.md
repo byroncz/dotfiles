@@ -11,7 +11,13 @@ Argumento: Clave. Opcional: URL del PR.
 
 1. Localiza la card. Si ya está `Hecha`, publica el marcador de cierre del
    paso 6 si al PR le falta, responde "ya cerrada" y termina: este skill se
-   ejecuta varias veces y debe ser idempotente.
+   ejecuta varias veces y debe ser idempotente. Esa ruta no pasa por los
+   pasos 2 a 5, así que los dos datos del marcador los reúnes aquí: el sha
+   del merge commit con `gh pr view <N> --json mergeCommit --jq
+   .mergeCommit.oid` (si no recibiste la URL del PR, haz el paso 2 completo,
+   que además confirma el merge) y el enlace a la entrada de Documentación
+   desde la propiedad `Documentación` de la card. Si falta cualquiera de los
+   dos, no publiques un marcador a medias: responde qué falta y termina.
    Si `Nivel` es Épica, no hay PR: verifica que todas sus hijas están
    `Hecha` y salta al cierre de Épica del paso 8. Si falta alguna, responde
    cuáles y termina.
