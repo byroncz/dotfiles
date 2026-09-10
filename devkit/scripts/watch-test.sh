@@ -88,6 +88,12 @@ check_merged "cerrado por el humano desde otra sesión" cerrada \
   "$(comment humano T09 '<!-- devkit-closed sha=f6 -->')"
 check_merged "cerrado tras el ciclo completo" cerrada \
   "$(fix T02 b2 a1)" "$(closed T09 f6)"
+# Un marcador sin sha hexadecimal no es evidencia de cierre: el bucle vuelve a
+# lanzar task-close, que con el mismo patrón lo republica bien.
+check_merged "marcador sin sha válido" cerrar \
+  "$(comment "$BOT" T09 '<!-- devkit-closed sha=null -->')"
+check_merged "marcador sin sha" cerrar \
+  "$(comment "$BOT" T09 '<!-- devkit-closed -->')"
 
 # El sha del marcador es lo que el bucle registra en el log: se comprueba
 # aparte, porque un marcador que no devuelve su sha no serviría de evidencia.

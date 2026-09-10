@@ -27,7 +27,9 @@ versión que usa un proyecto y la destino.
   unos 3 USD y veinte minutos de espera.
 - `watch.sh --decide-merged` es la entrada de prueba para esa decisión: recibe
   el JSON de `gh pr view <N> --json comments` e imprime `cerrar -` o
-  `cerrada <sha>`. `watch-test.sh` suma seis casos para la rama de cierre.
+  `cerrada <sha>`. `watch-test.sh` suma ocho casos para la rama de cierre.
+  Los dos lados exigen el mismo patrón con sha hexadecimal, así que un
+  marcador malformado no da el PR por cerrado: `task-close` lo republica.
 - Cambios requeridos: los PRs ya mergeados y cerrados de un repo existente no
   llevan marcador. Para que el próximo `recreate` no los reprocese, se les
   pone una vez con el comando del README (sección "Cierre de PRs").

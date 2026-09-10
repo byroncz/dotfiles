@@ -58,11 +58,15 @@ Argumento: Clave. Opcional: URL del PR.
    nace vacío en cada `devkit recreate`, así que sin marcador el bucle
    relanzaba el cierre sobre cada PR mergeado en las últimas 48 h, con card ya
    en `Hecha` (DEVKIT-24). Antes de publicar, comprueba que no está ya, para
-   no duplicarlo en una segunda ejecución:
+   no duplicarlo en una segunda ejecución. El patrón es el mismo que usa
+   `watch.sh` (`DECIDE_MERGED`), sha incluido: si los dos lados no exigen lo
+   mismo, un marcador malformado deja el PR atrapado, porque el bucle lo
+   ignora y este paso lo da por publicado. Exigiendo el sha aquí también, la
+   ejecución siguiente lo republica bien:
 
    ```sh
    gh pr view <N> --json comments \
-     --jq '[.comments[] | select(.body | test("<!-- devkit-closed "))] | length'
+     --jq '[.comments[] | select(.body | test("<!-- devkit-closed sha=[0-9a-f]+ -->"))] | length'
    ```
 
    Si devuelve `0`, publícalo con el sha del merge commit del paso 2 y una
