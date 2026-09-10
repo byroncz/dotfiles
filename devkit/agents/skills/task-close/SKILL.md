@@ -9,10 +9,11 @@ Argumento: Clave. Opcional: URL del PR.
 
 ## Pasos
 
-1. Localiza la card. Si ya está `Hecha`, responde "ya cerrada" y termina:
-   este skill se ejecuta varias veces y debe ser idempotente.
+1. Localiza la card. Si ya está `Hecha`, publica el marcador de cierre del
+   paso 6 si al PR le falta, responde "ya cerrada" y termina: este skill se
+   ejecuta varias veces y debe ser idempotente.
    Si `Nivel` es Épica, no hay PR: verifica que todas sus hijas están
-   `Hecha` y salta al cierre de Épica del paso 7. Si falta alguna, responde
+   `Hecha` y salta al cierre de Épica del paso 8. Si falta alguna, responde
    cuáles y termina.
 2. Verifica el merge: `gh pr view <url o número> --json state,mergedAt,mergeCommit,url`.
    Si no recibiste URL, usa la propiedad `PR` de la card; si también está
@@ -46,9 +47,29 @@ Argumento: Clave. Opcional: URL del PR.
    ```
 
 5. Comenta en la card una línea: "Cerrada. Documentación: <URL>".
-6. Limpieza local: `git switch main && git pull --ff-only && git branch -d
+6. Publica el marcador de cierre en el PR. Es lo que le dice a `watch.sh` que
+   este PR ya no necesita `task-close`: `/run/devkit/launched` vive en tmpfs y
+   nace vacío en cada `devkit recreate`, así que sin marcador el bucle
+   relanzaba el cierre sobre cada PR mergeado en las últimas 48 h, con card ya
+   en `Hecha` (DEVKIT-24). Antes de publicar, comprueba que no está ya, para
+   no duplicarlo en una segunda ejecución:
+
+   ```sh
+   gh pr view <N> --json comments \
+     --jq '[.comments[] | select(.body | test("<!-- devkit-closed "))] | length'
+   ```
+
+   Si devuelve `0`, publícalo con el sha del merge commit del paso 2 y una
+   sola línea de texto, el enlace a la entrada de Documentación:
+
+   ```sh
+   gh pr comment <N> --body "<!-- devkit-closed sha=<merge commit> -->
+   Documentación: <URL de la entrada>"
+   ```
+
+7. Limpieza local: `git switch main && git pull --ff-only && git branch -d
    <rama>` si la rama existe localmente.
-7. Si la card tiene `Padre`:
+8. Si la card tiene `Padre`:
    - Si todas las hijas del Padre están `Hecha`: pon la Épica en `Hecha` con
      `Cierre`, y crea una entrada de Documentación de tipo `cambio` para la
      Épica que consolide: una línea por hija con enlace a su entrada, y la

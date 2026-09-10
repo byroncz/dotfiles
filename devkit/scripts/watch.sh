@@ -6,16 +6,19 @@
 #   último marcador CAMBIOS para el head, sin respuesta     -> task-fix
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
 #   3 ciclos revisor -> corrector sin OK                    -> task-block
-#   PR mergeado                                             -> task-close
+#   PR mergeado, sin marcador devkit-closed                 -> task-close
 #
 # El estado del ciclo vive en GitHub, en los marcadores de reviews y
 # comentarios del PR (<!-- devkit-review -->, <!-- devkit-fix -->,
-# <!-- devkit-block -->): un rebuild no lo pierde. /run/devkit/launched
-# (tmpfs) solo evita relanzar lo mismo dentro de una vida del contenedor;
-# cada skill es idempotente, así que repetir tras un rebuild no daña.
+# <!-- devkit-block -->, <!-- devkit-closed -->): un rebuild no lo pierde.
+# /run/devkit/launched (tmpfs) solo evita relanzar lo mismo dentro de una vida
+# del contenedor; cada skill es idempotente, así que repetir tras un rebuild no
+# daña, pero cuesta dinero y tiempo: por eso el cierre también deja marcador.
 #
 # Uso de prueba: `bash watch.sh --decide < pr.json` imprime la decisión para
-# el JSON de `gh pr view <N> --json headRefOid,reviews,comments`.
+# el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
+# `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
+# de `gh pr view <N> --json comments`.
 set -u
 WS=/workspace
 RUN_DIR=/run/devkit
@@ -89,8 +92,33 @@ decide() {  # decide <login de la cuenta máquina>  (JSON por stdin)
   jq -r --arg bot "$1" --argjson max "$MAX_CYCLES" "$DECIDE"
 }
 
+# Decisión sobre un PR ya mergeado. Entrada: el JSON de
+# `gh pr view <N> --json comments`. Salida: una línea con dos campos separados
+# por tabulador, nunca vacíos:
+#   cerrar  -                       (no hay marcador: hay que lanzar task-close)
+#   cerrada <sha del merge commit>  (task-close ya terminó sobre este PR)
+# El marcador es lo que sobrevive a un `devkit recreate`: `launched` vive en
+# tmpfs y nace vacío, así que sin él el bucle relanzaba task-close sobre cada
+# PR mergeado en las últimas 48 h, con card ya en Hecha (DEVKIT-24). Como el
+# resto de la familia, se reconoce por su texto y no por su autor.
+DECIDE_MERGED='
+[ (.comments // [])[]
+  | (.body // "" | capture("<!-- devkit-closed sha=(?<sha>[0-9a-f]+) -->")) ]
+| if length > 0 then ["cerrada", (last | .sha)] else ["cerrar", "-"] end
+| @tsv
+'
+
+decide_merged() {  # (JSON por stdin)
+  jq -r "$DECIDE_MERGED"
+}
+
 if [ "${1:-}" = "--decide" ]; then
   decide "${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+  exit $?
+fi
+
+if [ "${1:-}" = "--decide-merged" ]; then
+  decide_merged
   exit $?
 fi
 
@@ -233,6 +261,18 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
     | while IFS=$'\t' read -r num url title; do
         key=$(key_of "$title" "$CODE") || continue
         launched "cerrar:$num" && continue
+        IFS=$'\t' read -r action ref < <(
+          gh pr view "$num" --json comments 2>/dev/null | decide_merged
+        )
+        # Sin decisión, gh no respondió: no se registra nada y se reintenta en
+        # la vuelta siguiente. Registrarlo aquí perdería el cierre.
+        [ -n "${action:-}" ] || continue
+        if [ "$action" = "cerrada" ]; then
+          # Se registra igual: evita una consulta a GitHub cada vuelta.
+          mark "cerrar:$num"
+          log "PR #$num mergeado ($key) ya cerrado en ${ref:0:7}: se omite"
+          continue
+        fi
         # Se registra antes de lanzar: si falla, el humano o session-start lo
         # repiten; task-close es idempotente.
         mark "cerrar:$num"

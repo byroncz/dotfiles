@@ -97,7 +97,8 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Último marcador `verdict=CAMBIOS` para el head, sin respuesta `devkit-fix` | `/task-fix <Clave>` |
 | Último marcador `OK` y un comentario o review tuyo posterior (un approve no cuenta) | `/task-fix <Clave> "<tu comentario>"`; la card vuelve a `Revisión automática` |
 | Tres informes `CAMBIOS` desde el último `OK` o el último bloqueo, ya atendidos | Marcador `<!-- devkit-block sha=<head> -->` en el PR y `/task-block <Clave>`. No lo toca más hasta que muevas la card a `Revisión automática` y comentes en el PR qué hacer |
-| Mergeado en las últimas 48 h | `/task-close <Clave> <URL>` |
+| Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `/task-close <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
+| Mergeado y con marcador `devkit-closed` | Nada: una línea `ya cerrado` en el log |
 
 Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
 trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
@@ -112,12 +113,18 @@ ver qué decidiría sobre un PR sin esperar al bucle:
 
 ```sh
 gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
+gh pr view <N> --json comments | bash /opt/devkit/scripts/watch.sh --decide-merged
 ```
+
+`--decide` responde por un PR abierto; `--decide-merged`, por uno ya mergeado
+(`cerrar` o `cerrada <sha>`), que no tiene head que revisar y solo se pregunta
+si `task-close` ya pasó.
 
 La tabla de decisión tiene una prueba reproducible sin GitHub:
 `bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
-con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación)
-contra `watch.sh --decide` y falla si alguno no da la acción esperada.
+con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación, y
+la rama de cierre con y sin marcador) contra `watch.sh --decide` y
+`--decide-merged`, y falla si alguno no da la acción esperada.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
@@ -140,6 +147,19 @@ como un hallazgo único `C<n>`. Un commit por hallazgo con la Clave como
 `devkit-fixes` (`id | atendido o descartado | commit o motivo`) que es lo
 único que `pr-review` relee en el ciclo siguiente. Al terminar deja la card
 en `Revisión automática`. Nunca revisa, aprueba ni mergea.
+
+Cierre de PRs: `/task-close <Clave> [URL]` deja la card en `Hecha`, escribe la
+entrada de Documentación y publica en el PR el marcador
+`<!-- devkit-closed sha=<merge commit> -->` con el enlace a esa entrada.
+El marcador es lo que impide repetir el cierre: `/run/devkit/launched` vive en
+tmpfs y nace vacío en cada `devkit recreate`, así que antes el bucle relanzaba
+`task-close` sobre cada PR mergeado en las últimas 48 h, con card ya cerrada
+(unos 0,47 USD y 150 s por ejecución inútil). Para ponerlo a mano en un PR ya
+cerrado, o para poner al día un repo que viene de una versión anterior:
+
+```sh
+gh pr comment <N> --body "<!-- devkit-closed sha=$(gh pr view <N> --json mergeCommit --jq .mergeCommit.oid) -->"
+```
 
 ### Skills (comandos `/nombre` dentro de `claude`)
 

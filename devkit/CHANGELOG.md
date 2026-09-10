@@ -10,6 +10,28 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### El cierre de cards deja marcador en el PR (DEVKIT-24)
+
+- `task-close` publica al terminar `<!-- devkit-closed sha=<merge commit> -->`
+  en el PR, con una línea de texto: el enlace a la entrada de Documentación.
+  Es el cuarto marcador de la familia (`devkit-review`, `devkit-fix`,
+  `devkit-block`). Si la card ya estaba `Hecha`, el skill igual lo publica
+  cuando falta: así un repo que viene de una versión anterior se pone al día
+  solo. El paso de limpieza local pasa a ser el 7 y el de Épica el 8.
+- `watch.sh` omite los PRs mergeados que ya llevan el marcador, además de los
+  registrados en `launched`, y lo deja escrito en el log
+  (`ya cerrado en <sha>`). Antes, `/run/devkit/launched` era el único freno:
+  vive en tmpfs y nace vacío en cada `devkit recreate`, así que el bucle
+  relanzaba `task-close` sobre cada PR mergeado en las últimas 48 h aunque su
+  card estuviera cerrada. El 2026-09-08 fueron siete ejecuciones inútiles,
+  unos 3 USD y veinte minutos de espera.
+- `watch.sh --decide-merged` es la entrada de prueba para esa decisión: recibe
+  el JSON de `gh pr view <N> --json comments` e imprime `cerrar -` o
+  `cerrada <sha>`. `watch-test.sh` suma seis casos para la rama de cierre.
+- Cambios requeridos: los PRs ya mergeados y cerrados de un repo existente no
+  llevan marcador. Para que el próximo `recreate` no los reprocese, se les
+  pone una vez con el comando del README (sección "Cierre de PRs").
+
 ### Las ejecuciones headless no terminan preguntando (DEVKIT-17)
 
 - `task-start` gana una sección "Modo headless": tras comentar el plan

@@ -18,6 +18,7 @@ comment() { printf '{"author":{"login":"%s"},"createdAt":"%s","body":"%s"}' "$1"
 rev() { review humano COMMENTED "$1" "<!-- devkit-review sha=$2 verdict=$3 -->"; }
 fix() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->"; }
 block() { comment "$BOT" "$1" "<!-- devkit-block sha=$2 -->"; }
+closed() { comment "$BOT" "$1" "<!-- devkit-closed sha=$2 -->"; }
 join() { local IFS=,; printf '%s' "$*"; }
 
 # check <nombre> <acción esperada> <head> <reviews...> -- <comments...>
@@ -61,5 +62,42 @@ check "bloqueo, comentario humano y respuesta con head nuevo (caso J)" revisar e
 check "informe CAMBIOS nuevo tras el bloqueo reinicia el conteo" fix e5 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" "$(rev T10 e5 CAMBIOS)" -- \
   "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 d4 c3)" "$(block T07 d4)" "$(comment humano T08 'sigue')" "$(fix T09 e5 d4)"
+
+# --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
+# Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
+# porque un PR mergeado ya no tiene head que revisar.
+# check_merged <nombre> <acción esperada> <comments...>
+check_merged() {
+  local name=$1 want=$2; shift 2
+  local got
+  got=$(printf '{"comments":[%s]}' "$(join "$@")" \
+        | bash "$WATCH" --decide-merged | cut -f1)
+  if [ "$got" = "$want" ]; then
+    printf 'ok   %-58s %s\n' "$name" "$got"
+  else
+    printf 'FAIL %-58s esperado %s, obtenido %s\n' "$name" "$want" "${got:-<vacío>}"
+    fail=1
+  fi
+}
+
+check_merged "mergeado sin marcador de cierre" cerrar
+check_merged "mergeado con el ciclo de revisión, sin cierre" cerrar \
+  "$(fix T02 b2 a1)" "$(block T07 d4)" "$(comment humano T08 'gracias')"
+check_merged "mergeado y ya cerrado" cerrada "$(closed T09 f6)"
+check_merged "cerrado por el humano desde otra sesión" cerrada \
+  "$(comment humano T09 '<!-- devkit-closed sha=f6 -->')"
+check_merged "cerrado tras el ciclo completo" cerrada \
+  "$(fix T02 b2 a1)" "$(closed T09 f6)"
+
+# El sha del marcador es lo que el bucle registra en el log: se comprueba
+# aparte, porque un marcador que no devuelve su sha no serviría de evidencia.
+sha=$(printf '{"comments":[%s]}' "$(closed T09 f6)" \
+      | bash "$WATCH" --decide-merged | cut -f2)
+if [ "$sha" = "f6" ]; then
+  printf 'ok   %-58s %s\n' "sha del marcador de cierre" "$sha"
+else
+  printf 'FAIL %-58s esperado f6, obtenido %s\n' "sha del marcador de cierre" "${sha:-<vacío>}"
+  fail=1
+fi
 
 exit $fail
