@@ -9,10 +9,19 @@ Argumento: Clave. Opcional: URL del PR.
 
 ## Pasos
 
-1. Localiza la card. Si ya está `Hecha`, responde "ya cerrada" y termina:
-   este skill se ejecuta varias veces y debe ser idempotente.
+1. Localiza la card. Si ya está `Hecha`, publica el marcador de cierre del
+   paso 6 si al PR le falta, responde "ya cerrada" y termina: este skill se
+   ejecuta varias veces y debe ser idempotente. Esa ruta no pasa por los
+   pasos 2 a 5, así que los dos datos del marcador los reúnes aquí: el sha
+   del merge commit con `gh pr view <N> --json mergeCommit --jq
+   .mergeCommit.oid` (si no recibiste la URL del PR, haz el paso 2 completo,
+   que además confirma el merge) y el enlace a la entrada de Documentación
+   desde la propiedad `Documentación` de la card. Sin el sha no hay marcador
+   que publicar: responde qué falta y termina. Sin el enlace sí lo hay, y
+   publicarlo solo es lo correcto: el enlace es cortesía, el sha es lo que
+   lee `watch.sh`, y un PR sin marcador se reprocesa en cada `recreate`.
    Si `Nivel` es Épica, no hay PR: verifica que todas sus hijas están
-   `Hecha` y salta al cierre de Épica del paso 7. Si falta alguna, responde
+   `Hecha` y salta al cierre de Épica del paso 8. Si falta alguna, responde
    cuáles y termina.
 2. Verifica el merge: `gh pr view <url o número> --json state,mergedAt,mergeCommit,url`.
    Si no recibiste URL, usa la propiedad `PR` de la card; si también está
@@ -46,9 +55,41 @@ Argumento: Clave. Opcional: URL del PR.
    ```
 
 5. Comenta en la card una línea: "Cerrada. Documentación: <URL>".
-6. Limpieza local: `git switch main && git pull --ff-only && git branch -d
+6. Publica el marcador de cierre en el PR. Es lo que le dice a `watch.sh` que
+   este PR ya no necesita `task-close`: `/run/devkit/launched` vive en tmpfs y
+   nace vacío en cada `devkit recreate`, así que sin marcador el bucle
+   relanzaba el cierre sobre cada PR mergeado en las últimas 48 h, con card ya
+   en `Hecha` (DEVKIT-24). Antes de publicar, comprueba que no está ya, para
+   no duplicarlo en una segunda ejecución. El patrón es el mismo que usa
+   `watch.sh` (`DECIDE_MERGED`), sha incluido: si los dos lados no exigen lo
+   mismo, un marcador malformado deja el PR atrapado, porque el bucle lo
+   ignora y este paso lo da por publicado. Exigiendo el sha aquí también, la
+   ejecución siguiente lo republica bien:
+
+   ```sh
+   gh pr view <N> --json comments \
+     --jq '[.comments[] | select(.body | test("<!-- devkit-closed sha=[0-9a-f]+ -->"))] | length'
+   ```
+
+   Si devuelve `0`, publícalo con el sha del merge commit del paso 2 y una
+   sola línea de texto, el enlace a la entrada de Documentación:
+
+   ```sh
+   gh pr comment <N> --body "<!-- devkit-closed sha=<merge commit> -->
+   Documentación: <URL de la entrada>"
+   ```
+
+   Si vienes de la ruta "card ya `Hecha`" y la card no tiene entrada de
+   Documentación, publica el marcador solo, como el comando de backfill del
+   README:
+
+   ```sh
+   gh pr comment <N> --body "<!-- devkit-closed sha=<merge commit> -->"
+   ```
+
+7. Limpieza local: `git switch main && git pull --ff-only && git branch -d
    <rama>` si la rama existe localmente.
-7. Si la card tiene `Padre`:
+8. Si la card tiene `Padre`:
    - Si todas las hijas del Padre están `Hecha`: pon la Épica en `Hecha` con
      `Cierre`, y crea una entrada de Documentación de tipo `cambio` para la
      Épica que consolide: una línea por hija con enlace a su entrada, y la

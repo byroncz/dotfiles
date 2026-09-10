@@ -266,7 +266,7 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `task-review` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | Revisor independiente del autor: comprueba cada criterio ejecutando, lee el diff de forma adversarial, publica el informe en el PR con el marcador `devkit-review` y el bloque `devkit-findings`; con `OK` pide review al humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | Corrector del ciclo: lee el bloque `devkit-findings` del último informe `CAMBIOS` (o el comentario del humano como hallazgo único), un commit por hallazgo en la rama de la card, push, respuesta en el PR con el bloque `devkit-fixes` (`id | atendido o descartado | commit o motivo`) |
-| `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, arranca la siguiente hija |
+| `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, marcador `devkit-closed` en el PR, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `session-start` | Inicio de sesión | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
 | `template-update` | Mantenimiento | Sube `template` en `devkit.toml` y actualiza Notion |
@@ -299,13 +299,14 @@ la revisión.
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
 | Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y lanza `task-block`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
-| `watch.sh`: PR mergeado | Máquina | Lanza `task-close` headless; cierra la hija, documenta, arranca la siguiente |
+| `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Lanza `task-close` headless; cierra la hija, documenta, deja el marcador `devkit-closed` en el PR y arranca la siguiente |
 | Todas las hijas en Hecha | Automático | La Épica pasa a Hecha con una entrada de Documentación consolidada |
 
 El bucle no guarda estado propio: decide con lo que hay en el PR. Cada
 informe del revisor lleva `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`,
-cada respuesta del corrector `<!-- devkit-fix sha=<head nuevo> review=<sha> -->`
-y cada bloqueo `<!-- devkit-block sha=<head> -->`. Los marcadores se reconocen
+cada respuesta del corrector `<!-- devkit-fix sha=<head nuevo> review=<sha> -->`,
+cada bloqueo `<!-- devkit-block sha=<head> -->` y cada cierre
+`<!-- devkit-closed sha=<merge commit> -->`. Los marcadores se reconocen
 por su texto, no por su autor, para que valgan aunque el informe lo haya
 publicado el humano desde otra sesión. Un comentario humano es cualquier
 comentario o review sin marcador, de una cuenta distinta a la máquina y
@@ -314,7 +315,19 @@ auto-merge. La guardia cuenta los `CAMBIOS` posteriores al último `OK` o al
 último bloqueo, lo que sea más reciente: un rebuild no pierde nada y el humano
 reinicia el conteo con solo retomar. `/run/devkit/launched` (tmpfs) solo evita
 relanzar la misma skill para la misma entrada dentro de una vida del
-contenedor; como cada skill es idempotente, perderlo no daña.
+contenedor; como cada skill es idempotente, perderlo no daña la corrección de
+lo que hay en Notion.
+
+Sí daña la factura, y por eso el cierre también dejó de depender de él
+(DEVKIT-24). `launched` nace vacío en cada `devkit recreate`, y la ventana de
+48 h de la consulta de PRs mergeados vuelve a ofrecer todos los que ya se
+cerraron: el 2026-09-08, el primer arranque del bucle nuevo reprocesó siete
+PRs con card en `Hecha` antes de llegar al único pendiente, unos 3 USD y veinte
+minutos de espera. La corrección es la misma idea que el resto del ciclo:
+`task-close` publica `<!-- devkit-closed sha=<merge commit> -->` en el PR al
+terminar, y `watch.sh` omite los PRs mergeados que ya lo llevan. Se descartó
+persistir `launched` en disco: guardaría en el contenedor un estado que ya
+existe en GitHub, y no serviría en otra máquina ni tras un `devkit rebuild`.
 
 Reglas:
 
