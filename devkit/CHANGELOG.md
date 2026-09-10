@@ -13,13 +13,17 @@ versión que usa un proyecto y la destino.
 ### Neovim relee los archivos que cambian en disco (DEVKIT-21)
 
 - `devkit/nvim/init.lua` ejecuta `checktime` en `CursorHold`, `CursorHoldI`,
-  `FocusGained`, `BufEnter` y `TermLeave`, saltándose la línea de comandos y
-  los buffers sin archivo detrás (`buftype` distinto de vacío: el terminal de
-  Claude, los paneles de los plugins). `autoread` ya venía activo, pero Neovim
-  solo compara la marca de tiempo del archivo cuando algo dispara la
-  comprobación, y dentro de tmux en Terminal.app casi ningún evento de foco
-  llega: mientras el agente editaba, el buffer seguía mostrando la versión
-  vieja hasta que el humano escribía `:e`.
+  `FocusGained`, `BufEnter` y `TermLeave`, saltándose solo la línea de
+  comandos. `autoread` ya venía activo, pero Neovim solo compara la marca de
+  tiempo del archivo cuando algo dispara la comprobación, y dentro de tmux en
+  Terminal.app casi ningún evento de foco llega: mientras el agente editaba,
+  el buffer seguía mostrando la versión vieja hasta que el humano escribía
+  `:e`.
+- No se filtra por `buftype`. Sería tentador saltarse los buffers sin archivo
+  detrás (el terminal de Claude, los paneles de los plugins), pero `checktime`
+  sin argumentos revisa todos los buffers: filtrar por el buffer con el foco
+  apagaría la recarga justo en el caso que motiva la card, mirar el panel de
+  `claudecode.nvim` mientras el agente edita el archivo abierto al lado.
 - Un timer de `vim.uv` repite la comprobación cada segundo. `CursorHold`
   dispara una sola vez tras cada pulsación, no cada `updatetime`, así que por
   sí solo deja fuera el caso más común: mirar el panel del agente sin tocar el

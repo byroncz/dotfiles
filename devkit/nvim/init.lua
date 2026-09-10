@@ -89,10 +89,14 @@ vim.api.nvim_create_autocmd('TextYankPost', {
 vim.o.autoread = true
 vim.o.updatetime = 1000
 
--- checktime falla en la línea de comandos, y los buffers sin archivo detrás
--- (el terminal de Claude, los paneles de los plugins) no tienen nada que releer.
+-- checktime falla en la línea de comandos: ese es el único caso que se salta.
+-- No se filtra por 'buftype'. `checktime` sin argumentos revisa todos los
+-- buffers, así que mirar el terminal de Claude o el panel de un plugin no
+-- impide releer el archivo abierto al lado, que es justo lo que hace falta
+-- mientras el agente escribe. Los buffers sin archivo detrás no tienen nada
+-- que releer y resolverlos no cuesta nada.
 local function comprobar_cambios_en_disco()
-  if vim.fn.mode() == 'c' or vim.bo.buftype ~= '' then return end
+  if vim.fn.mode() == 'c' then return end
   vim.cmd 'checktime'
 end
 
