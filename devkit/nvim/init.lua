@@ -154,6 +154,56 @@ require('which-key').setup {
   },
 }
 
+-- ---------------------------------------------------------------------------
+-- Explorador de archivos: snacks.explorer, con <espacio>e
+--
+-- snacks.nvim ya venía instalado porque claudecode.nvim lo usa de proveedor de
+-- terminal, así que el explorador no añade ningún plugin y nvim-pack-lock.json
+-- no cambia. Es "un picker disfrazado": por eso se configura bajo
+-- picker.sources.explorer y no bajo explorer.
+--
+-- De serie ya trae lo que hace falta trabajando con un agente. `watch = true`
+-- levanta un vim.uv.fs_event por cada directorio abierto y otro sobre .git, así
+-- que crear, borrar o renombrar archivos desde fuera del editor refresca el
+-- árbol solo, y `git_status = true` repinta la marca del archivo en cuanto
+-- cambia el índice. Lo que sigue es solo lo que se aparta del valor por defecto.
+--
+-- `.git` no se lista por defecto (los ocultos están apagados), pero `H` los
+-- enciende y ahí sí aparecería: `exclude` lo deja fuera en los dos casos.
+--
+-- Un clic abre el archivo bajo el ratón; sobre un directorio solo mueve el
+-- cursor. Expandir y plegar queda en el doble clic a propósito: si un clic
+-- alternara el directorio, el segundo clic de un doble clic lo volvería a
+-- cerrar. La lista sincroniza su elemento actual en CursorMoved, que no ha
+-- corrido todavía cuando se procesa el mapeo, así que hay que resolver la fila
+-- del ratón a mano, igual que hace snacks en su propio manejador.
+local function abrir_con_clic(picker)
+  local lista = picker.list
+  local raton = vim.fn.getmousepos()
+  if raton.winid ~= lista.win.win or raton.line < 1 then return end
+  local primera = vim.api.nvim_win_call(raton.winid, function() return vim.fn.line 'w0' end)
+  local indice = lista:row2idx(raton.line - primera + 1)
+  local elemento = lista:get(indice)
+  if not elemento then return end
+  lista:move(indice, true)
+  if not elemento.dir then picker:action 'confirm' end
+end
+
+require('snacks').setup {
+  explorer = { replace_netrw = true },
+  picker = {
+    sources = {
+      explorer = {
+        exclude = { '.git' },
+        actions = { devkit_abrir_con_clic = abrir_con_clic },
+        win = { list = { keys = { ['<LeftMouse>'] = 'devkit_abrir_con_clic' } } },
+      },
+    },
+  },
+}
+
+vim.keymap.set('n', '<leader>e', function() Snacks.explorer() end, { desc = '[E]xplorador de archivos' })
+
 require('gitsigns').setup {
   signs = { add = { text = '+' }, change = { text = '~' }, delete = { text = '_' }, topdelete = { text = '‾' }, changedelete = { text = '~' } },
   on_attach = function(bufnr)
