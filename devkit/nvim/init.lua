@@ -30,7 +30,6 @@ vim.o.undofile = true
 vim.o.ignorecase = true
 vim.o.smartcase = true
 vim.o.signcolumn = 'yes'
-vim.o.updatetime = 250
 vim.o.timeoutlen = 300
 vim.o.splitright = true
 vim.o.splitbelow = true
@@ -66,6 +65,60 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   desc = 'Resaltar lo copiado',
   group = vim.api.nvim_create_augroup('devkit-yank', { clear = true }),
   callback = function() vim.hl.on_yank() end,
+})
+
+-- ---------------------------------------------------------------------------
+-- Recarga de archivos que cambian en disco
+--
+-- Un agente edita los archivos directo en disco mientras siguen abiertos en un
+-- buffer. 'autoread' ya viene activo, pero Neovim solo compara la marca de
+-- tiempo del archivo cuando algo dispara la comprobación, y dentro de tmux en
+-- Terminal.app casi ningún evento de foco llega: el buffer se queda mostrando
+-- la versión vieja mientras el agente trabaja.
+--
+-- 'updatetime' sube de los 250 ms de kickstart a 1000 ms porque aquí ya no es
+-- solo el retardo de gitsigns y del resaltado del LSP: es también cada cuánto
+-- se consulta el disco. Un segundo se percibe igual de inmediato y evita
+-- cuatro comprobaciones por segundo en un contenedor con el volumen montado
+-- desde el Mac, donde un stat() cuesta bastante más que en disco local.
+--
+-- CursorHold dispara una sola vez tras cada pulsación, no cada 'updatetime'.
+-- Por sí solo deja fuera el caso más común: el humano mirando el panel sin
+-- tocar el teclado. El timer repite la comprobación en ese silencio.
+-- ---------------------------------------------------------------------------
+vim.o.autoread = true
+vim.o.updatetime = 1000
+
+-- checktime falla en la línea de comandos: ese es el único caso que se salta.
+-- No se filtra por 'buftype'. `checktime` sin argumentos revisa todos los
+-- buffers, así que mirar el terminal de Claude o el panel de un plugin no
+-- impide releer el archivo abierto al lado, que es justo lo que hace falta
+-- mientras el agente escribe. Los buffers sin archivo detrás no tienen nada
+-- que releer y resolverlos no cuesta nada.
+local function comprobar_cambios_en_disco()
+  if vim.fn.mode() == 'c' then return end
+  vim.cmd 'checktime'
+end
+
+vim.api.nvim_create_autocmd({ 'CursorHold', 'CursorHoldI', 'FocusGained', 'BufEnter', 'TermLeave' }, {
+  desc = 'Releer el archivo si cambió en disco',
+  group = vim.api.nvim_create_augroup('devkit-checktime', { clear = true }),
+  callback = comprobar_cambios_en_disco,
+})
+
+local temporizador_checktime = vim.uv.new_timer()
+temporizador_checktime:start(
+  vim.o.updatetime,
+  vim.o.updatetime,
+  function() vim.schedule(comprobar_cambios_en_disco) end
+)
+
+vim.api.nvim_create_autocmd('VimLeavePre', {
+  desc = 'Detener el timer de checktime al salir',
+  group = vim.api.nvim_create_augroup('devkit-checktime-cierre', { clear = true }),
+  callback = function()
+    if not temporizador_checktime:is_closing() then temporizador_checktime:close() end
+  end,
 })
 
 -- ---------------------------------------------------------------------------

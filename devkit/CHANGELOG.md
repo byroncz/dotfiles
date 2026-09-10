@@ -10,6 +10,34 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Neovim relee los archivos que cambian en disco (DEVKIT-21)
+
+- `devkit/nvim/init.lua` ejecuta `checktime` en `CursorHold`, `CursorHoldI`,
+  `FocusGained`, `BufEnter` y `TermLeave`, saltándose solo la línea de
+  comandos. `autoread` ya venía activo, pero Neovim solo compara la marca de
+  tiempo del archivo cuando algo dispara la comprobación, y dentro de tmux en
+  Terminal.app casi ningún evento de foco llega: mientras el agente editaba,
+  el buffer seguía mostrando la versión vieja hasta que el humano escribía
+  `:e`.
+- No se filtra por `buftype`. Sería tentador saltarse los buffers sin archivo
+  detrás (el terminal de Claude, los paneles de los plugins), pero `checktime`
+  sin argumentos revisa todos los buffers: filtrar por el buffer con el foco
+  apagaría la recarga justo en el caso que motiva la card, mirar el panel de
+  `claudecode.nvim` mientras el agente edita el archivo abierto al lado.
+- Un timer de `vim.uv` repite la comprobación cada segundo. `CursorHold`
+  dispara una sola vez tras cada pulsación, no cada `updatetime`, así que por
+  sí solo deja fuera el caso más común: mirar el panel del agente sin tocar el
+  teclado. Medido con el archivo abierto y en reposo, sin el timer el buffer
+  no se actualiza nunca; con él, en menos de dos segundos.
+- `updatetime` pasa de 250 a 1000 ms. Deja de ser solo el retardo de gitsigns
+  y del resaltado del LSP: ahora es también cada cuánto se consulta el disco.
+  Un segundo se percibe igual de inmediato y evita cuatro `stat()` por segundo
+  sobre un volumen montado desde el Mac, donde esa llamada cuesta bastante más
+  que en disco local.
+- Los cambios que Claude propone por la integración (`openDiff`) no cambian:
+  siguen llegando como diff para aceptar con `espacio a a`. Esto cubre las
+  ediciones que el agente escribe directo en disco.
+
 ### El cierre de cards deja marcador en el PR (DEVKIT-24)
 
 - `task-close` publica al terminar `<!-- devkit-closed sha=<merge commit> -->`
