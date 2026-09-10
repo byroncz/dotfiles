@@ -17,7 +17,9 @@ versión que usa un proyecto y la destino.
   Es el cuarto marcador de la familia (`devkit-review`, `devkit-fix`,
   `devkit-block`). Si la card ya estaba `Hecha`, el skill igual lo publica
   cuando falta: así un repo que viene de una versión anterior se pone al día
-  solo. El paso de limpieza local pasa a ser el 7 y el de Épica el 8.
+  solo. En esa ruta puede no haber entrada de Documentación; entonces el
+  marcador va solo, porque el enlace es cortesía y el sha es el dato que lee
+  `watch.sh`. El paso de limpieza local pasa a ser el 7 y el de Épica el 8.
 - `watch.sh` omite los PRs mergeados que ya llevan el marcador, además de los
   registrados en `launched`, y lo deja escrito en el log
   (`ya cerrado en <sha>`). Antes, `/run/devkit/launched` era el único freno:

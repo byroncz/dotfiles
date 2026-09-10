@@ -16,8 +16,10 @@ Argumento: Clave. Opcional: URL del PR.
    del merge commit con `gh pr view <N> --json mergeCommit --jq
    .mergeCommit.oid` (si no recibiste la URL del PR, haz el paso 2 completo,
    que además confirma el merge) y el enlace a la entrada de Documentación
-   desde la propiedad `Documentación` de la card. Si falta cualquiera de los
-   dos, no publiques un marcador a medias: responde qué falta y termina.
+   desde la propiedad `Documentación` de la card. Sin el sha no hay marcador
+   que publicar: responde qué falta y termina. Sin el enlace sí lo hay, y
+   publicarlo solo es lo correcto: el enlace es cortesía, el sha es lo que
+   lee `watch.sh`, y un PR sin marcador se reprocesa en cada `recreate`.
    Si `Nivel` es Épica, no hay PR: verifica que todas sus hijas están
    `Hecha` y salta al cierre de Épica del paso 8. Si falta alguna, responde
    cuáles y termina.
@@ -75,6 +77,14 @@ Argumento: Clave. Opcional: URL del PR.
    ```sh
    gh pr comment <N> --body "<!-- devkit-closed sha=<merge commit> -->
    Documentación: <URL de la entrada>"
+   ```
+
+   Si vienes de la ruta "card ya `Hecha`" y la card no tiene entrada de
+   Documentación, publica el marcador solo, como el comando de backfill del
+   README:
+
+   ```sh
+   gh pr comment <N> --body "<!-- devkit-closed sha=<merge commit> -->"
    ```
 
 7. Limpieza local: `git switch main && git pull --ff-only && git branch -d

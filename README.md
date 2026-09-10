@@ -150,7 +150,8 @@ en `Revisión automática`. Nunca revisa, aprueba ni mergea.
 
 Cierre de PRs: `/task-close <Clave> [URL]` deja la card en `Hecha`, escribe la
 entrada de Documentación y publica en el PR el marcador
-`<!-- devkit-closed sha=<merge commit> -->` con el enlace a esa entrada.
+`<!-- devkit-closed sha=<merge commit> -->` con el enlace a esa entrada, o
+solo, si la card ya estaba `Hecha` y no tiene entrada que enlazar.
 El marcador es lo que impide repetir el cierre: `/run/devkit/launched` vive en
 tmpfs y nace vacío en cada `devkit recreate`, así que antes el bucle relanzaba
 `task-close` sobre cada PR mergeado en las últimas 48 h, con card ya cerrada
