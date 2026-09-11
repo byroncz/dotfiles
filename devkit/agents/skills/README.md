@@ -13,12 +13,12 @@ con `claude -p "/nombre argumentos"`.
 | `epic-plan` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `task-create` | Nace en Backlog | Humano o agente |
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
-| `task-review` | En progreso → Revisión automática | Agente |
+| `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
 | `task-close` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `task-block` | Cualquiera → Bloqueada | Agente |
-| `session-start` | Inicio de sesión | Humano o agente |
+| `project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `template-update` | Sube la versión del template | Agente |
 | `template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
@@ -41,6 +41,12 @@ Convenciones comunes a todas:
   número, y consulta Tareas con `ID` = número y `Proyecto` = la fila cuyo
   Código es el del proyecto (`data_source_id` de `tareas` en el JSON). Al
   escribir la Clave en ramas, commits y PRs, constrúyela tú: `<Código>-<ID>`.
+- Editar una skill se hace por su ruta real en el repo del template,
+  `devkit/agents/skills/<skill>/SKILL.md`, nunca por `.claude/skills/`. Ese
+  directorio es un enlace simbólico al template y Claude Code no acepta
+  escrituras bajo `.claude/` sin confirmación del humano, que en headless
+  nadie da: la ejecución se detiene a medias. Caso de origen: DEVKIT-26,
+  cuya primera ejecución se detuvo por eso.
 - Todo texto sigue la guía de redacción de `AGENTS.md`.
 - Idempotencia: cada skill comprueba el estado actual antes de actuar y no
   repite lo que ya está hecho.

@@ -33,7 +33,7 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    qué orden. Sin justificaciones largas.
 8. Trabaja la card. Commits con Conventional Commits y la Clave como ámbito:
    `feat(DEVKIT-3): crear skill task-start`. Haz push con frecuencia.
-9. Al cumplir los criterios de aceptación, ejecuta `task-review`.
+9. Al cumplir los criterios de aceptación, ejecuta `task-submit`.
 
 ## Modo headless
 
@@ -43,7 +43,7 @@ No hay quien conteste: si terminas preguntando, el proceso muere con la card
 
 - No hagas preguntas. Tras comentar el plan (paso 7) sigue de largo:
   implementa la card hasta cumplir todos los criterios de aceptación y
-  termina ejecutando `task-review`.
+  termina ejecutando `task-submit`.
 - Una ejecución que no deja la card en `Revisión automática` o `Bloqueada`
   es un corte, no un avance.
 - Si falta una decisión, un acceso o un criterio de aceptación, o te bloqueas

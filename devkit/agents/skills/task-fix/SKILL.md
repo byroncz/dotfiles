@@ -74,7 +74,7 @@ trabajo de `pr-review`.
    - Si un hallazgo es incorrecto, ambiguo o queda fuera del alcance de la
      card, no lo fuerces: se responde `descartado` con el motivo en una
      frase. El revisor decide en el siguiente ciclo.
-6. Verificación local antes de subir, igual que en `task-review`: `ruff
+6. Verificación local antes de subir, igual que en `task-submit`: `ruff
    check .` y `ruff format --check .` si hay Python, `uv run pytest` si hay
    pruebas, `bash -n` sobre cada script de shell tocado. Si algo falla,
    corrígelo dentro del commit del hallazgo correspondiente.

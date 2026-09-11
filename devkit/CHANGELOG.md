@@ -10,13 +10,36 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Dos skills se renombran para que el nombre diga lo que hacen (DEVKIT-10)
+
+- Cambio de nombre, sin cambio de comportamiento. Mapa viejo → nuevo:
+  `session-start` → `project-status`, `task-review` → `task-submit`. Los pasos
+  de cada skill son los mismos.
+- `session-start` no era solo del inicio de sesión: reconcilia Notion con
+  GitHub y resume el estado del proyecto, y sirve en cualquier momento.
+  `project-status` lo dice.
+- `task-review` no revisa nada: verifica, sube la rama, abre el PR y pasa la
+  card a `Revisión automática`. Es el autor entregando. El nombre hacía creer
+  que el autor se revisaba a sí mismo, confusión observada el 2026-09-11 con
+  DEVKIT-26. Quien revisa sigue siendo `pr-review`, en otro proceso, sin la
+  conversación del autor. `task-submit` separa entregar de revisar.
+- Invocarlas por el nombre viejo ya no funciona: `/project-status` y
+  `/task-submit` son los nombres nuevos en Claude Code y en `claude -p`.
+  Ninguna skill, script ni documento vigente conserva el nombre viejo; las
+  entradas de 0.1.0 de este changelog se dejan como están porque son historia.
+- Regla nueva en `devkit/agents/skills/README.md` y en `AGENTS.template.md`:
+  una skill se edita por su ruta real `devkit/agents/skills/<skill>/SKILL.md`,
+  nunca por `.claude/skills/`, que es un enlace al template. Claude Code no
+  escribe bajo `.claude/` sin confirmación del humano, y en headless nadie la
+  da: la ejecución se detiene a medias, como pasó en la primera de DEVKIT-26.
+
 ### El bucle despierta al instante cuando una skill deja trabajo nuevo (DEVKIT-26)
 
 - `watch.sh` ya no duerme el intervalo de un tirón: lo hace en tramos de cinco
   segundos y sale antes si existe `/run/devkit/poke`, que borra al despertar,
   antes de consultar GitHub, para no perder un aviso llegado durante la
   consulta.
-- `task-review` (tras abrir el PR) y `task-fix` (tras responder en el PR) crean
+- `task-submit` (tras abrir el PR) y `task-fix` (tras responder en el PR) crean
   ese archivo con `touch /run/devkit/poke` como último paso, sin redirecciones
   ni `|| true` para que la regla exacta de `settings.json` lo cubra. Si no se
   puede crear, no se reintenta: el bucle llega igual en el siguiente intervalo.
@@ -118,7 +141,7 @@ versión que usa un proyecto y la destino.
 ### Las ejecuciones headless no terminan preguntando (DEVKIT-17)
 
 - `task-start` gana una sección "Modo headless": tras comentar el plan
-  implementa la card hasta cumplir los criterios y ejecuta `task-review`; si
+  implementa la card hasta cumplir los criterios y ejecuta `task-submit`; si
   falta algo, `task-block`. Antes, invocada desde `task-close` con `claude -p`,
   creaba la rama y preguntaba si seguía: nadie respondía y la card quedaba en
   `En progreso` sin proceso.

@@ -1,9 +1,9 @@
 ---
-name: session-start
-description: Reconcilia Notion con GitHub al empezar una sesión y resume el estado del proyecto: cierra cards en Revisión automática o Lista para merge cuyo PR ya se mergeó, señala cards huérfanas o inactivas y dice cuál es la siguiente card libre. Úsala al abrir Claude Code en el proyecto o cuando el humano pregunte "en qué vamos".
+name: project-status
+description: Reconcilia Notion con GitHub y resume el estado del proyecto: cierra cards en Revisión automática o Lista para merge cuyo PR ya se mergeó, señala cards huérfanas o inactivas y dice cuál es la siguiente card libre. Úsala al abrir la sesión en el proyecto o en cualquier momento en que el humano pregunte "en qué vamos".
 ---
 
-# session-start
+# project-status
 
 Sin argumentos.
 
