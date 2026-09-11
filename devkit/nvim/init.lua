@@ -8,6 +8,8 @@
     - Ratón activo. El portapapeles del Mac se maneja desde Terminal.app
       (ver docs/ARCHITECTURE.md, sección 4.4).
     - Los agentes (Claude hoy, Codex después) viven en lua/devkit/agents.
+    - Interfaz en ASCII: no se pide ningún glifo de Nerd Font. Ver la sección
+      "Solo ASCII en la interfaz" y las pruebas en tests/.
 
   Atajos: <espacio> es la tecla líder. Pulsa <espacio> y espera: which-key
   muestra lo disponible.
@@ -17,7 +19,67 @@ vim.loader.enable()
 
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
+
+-- Terminal.app pinta con Menlo, que no trae glifos de Nerd Font: pedir uno
+-- dibuja un cuadro. Por eso todo va en ASCII. Ver docs/ARCHITECTURE.md 4.4.
 vim.g.have_nerd_font = false
+
+-- ---------------------------------------------------------------------------
+-- Solo ASCII en la interfaz
+--
+-- El contenedor no dibuja: emite texto y Terminal.app lo pinta con la fuente
+-- del Mac. Instalar una fuente aquí dentro no cambia nada, así que la única
+-- salida es no pedir glifos que Menlo no tenga. `have_nerd_font = false` no
+-- alcanza: cada plugin trae sus propios iconos por defecto y los usa igual.
+--
+-- Sí se permiten los caracteres de dibujo de cajas (U+2500–U+257F): Menlo los
+-- trae completos y son los que dan los bordes y el árbol del explorador. Todo
+-- lo demás —iconos de Nerd Font (área privada U+E000+ y U+F0000+), braille,
+-- figuras geométricas, dingbats— se reemplaza por texto.
+--
+-- Las tablas de abajo se usan más adelante, en la configuración de cada
+-- plugin. Se definen aquí juntas para que se lea de un vistazo qué se cambió.
+-- ---------------------------------------------------------------------------
+
+-- which-key fusiona en profundidad (`vim.tbl_deep_extend`), así que pasarle
+-- `keys = {}` no borra nada: sus iconos por defecto sobreviven. Hay que dar un
+-- texto por cada tecla que trae.
+local teclas_ascii = {
+  Up = 'Up ',
+  Down = 'Down ',
+  Left = 'Left ',
+  Right = 'Right ',
+  C = 'C-',
+  M = 'M-',
+  D = 'D-',
+  S = 'S-',
+  CR = 'CR ',
+  NL = 'NL ',
+  Esc = 'Esc ',
+  BS = 'BS ',
+  Space = 'Space ',
+  Tab = 'Tab ',
+  ScrollWheelDown = 'WheelDown ',
+  ScrollWheelUp = 'WheelUp ',
+}
+for n = 1, 12 do
+  teclas_ascii['F' .. n] = 'F' .. n .. ' '
+end
+
+-- Tipos del LSP (funciones, clases, variables...) con el nombre en texto en vez
+-- de un icono. Se generan desde las listas del protocolo para no dejarse
+-- ninguno: lo que no se sobrescriba conserva el glifo por defecto.
+local tipos_ascii = {
+  Control = 'control ',
+  Collapsed = 'plegado ',
+  Copilot = 'copilot ',
+  Unknown = 'otro ',
+}
+for _, tabla in ipairs { vim.lsp.protocol.CompletionItemKind, vim.lsp.protocol.SymbolKind } do
+  for nombre in pairs(tabla) do
+    if type(nombre) == 'string' then tipos_ascii[nombre] = nombre:lower() .. ' ' end
+  end
+end
 
 -- ---------------------------------------------------------------------------
 -- Opciones (kickstart)
@@ -34,7 +96,9 @@ vim.o.timeoutlen = 300
 vim.o.splitright = true
 vim.o.splitbelow = true
 vim.o.list = true
-vim.opt.listchars = { tab = '» ', trail = '·', nbsp = '␣' }
+-- kickstart marca el espacio duro con '␣' (U+2423, bloque Control Pictures),
+-- que Menlo no trae: sale un cuadro dentro del texto del archivo.
+vim.opt.listchars = { tab = '> ', trail = '-', nbsp = '+' }
 vim.o.inccommand = 'split'
 vim.o.cursorline = true
 vim.o.scrolloff = 10
@@ -54,11 +118,23 @@ vim.keymap.set('n', '<C-l>', '<C-w><C-l>', { desc = 'Ventana derecha' })
 vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Ventana inferior' })
 vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Ventana superior' })
 
+-- El borde 'rounded' usa dibujo de cajas, que Menlo sí trae. Los dos valores
+-- que hay que fijar son el prefijo del texto virtual, que por defecto es '■'
+-- (U+25A0), y las letras del margen, que si no salen de la inicial de cada
+-- severidad: se escriben aquí para que no dependan de un default de Neovim.
 vim.diagnostic.config {
   update_in_insert = false,
   severity_sort = true,
   float = { border = 'rounded', source = 'if_many' },
-  virtual_text = true,
+  signs = {
+    text = {
+      [vim.diagnostic.severity.ERROR] = 'E',
+      [vim.diagnostic.severity.WARN] = 'W',
+      [vim.diagnostic.severity.INFO] = 'I',
+      [vim.diagnostic.severity.HINT] = 'H',
+    },
+  },
+  virtual_text = { prefix = '*', spacing = 2, source = 'if_many' },
 }
 
 vim.api.nvim_create_autocmd('TextYankPost', {
@@ -145,7 +221,13 @@ vim.cmd.colorscheme 'tokyonight-night'
 
 require('which-key').setup {
   delay = 0,
-  icons = { mappings = false, keys = {} },
+  icons = {
+    mappings = false,
+    breadcrumb = '>', -- por defecto '»'
+    separator = '->', -- por defecto '➜' (U+279C), fuera de Menlo
+    ellipsis = '...', -- por defecto '…'
+    keys = teclas_ascii,
+  },
   spec = {
     { '<leader>s', group = '[S]earch' },
     { '<leader>t', group = '[T]oggle' },
@@ -189,10 +271,54 @@ local function abrir_con_clic(picker)
   if not elemento.dir then picker:action 'confirm' end
 end
 
+-- Los iconos del explorador salen de snacks.picker, no de snacks.explorer: el
+-- explorador es un picker. Sin mini.icons ni nvim-web-devicons instalados,
+-- `Snacks.util.icon` cae en estos valores, que de fábrica son Nerd Font.
+-- `files.enabled = false` quitaría también la marca de carpeta, así que se deja
+-- encendido con un hueco para los archivos y '-' / '+' para las carpetas.
+-- El árbol (`icons.tree`) se queda con su dibujo de cajas: Menlo lo trae.
 require('snacks').setup {
   explorer = { replace_netrw = true },
   picker = {
+    prompt = '> ',
+    icons = {
+      files = { enabled = true, file = '  ', dir = '- ', dir_open = '+ ' },
+      keymaps = { nowait = '! ' },
+      undo = { saved = '* ' },
+      ui = {
+        live = 'vivo ',
+        hidden = 'h',
+        ignored = 'i',
+        follow = 'f',
+        selected = '* ',
+        unselected = '  ',
+      },
+      git = {
+        enabled = true,
+        commit = 'c ',
+        staged = 'S',
+        added = 'A',
+        deleted = 'D',
+        ignored = 'I',
+        modified = 'M',
+        renamed = 'R',
+        unmerged = 'U',
+        untracked = '?',
+      },
+      diagnostics = { Error = 'E ', Warn = 'W ', Hint = 'H ', Info = 'I ' },
+      lsp = { unavailable = '', enabled = 'on ', disabled = 'off ', attached = 'lsp ' },
+      kinds = tipos_ascii,
+    },
     sources = {
+      -- Los pickers de GitHub traen el logo de GitHub (U+E709) en el título.
+      -- Esta configuración no les pone atajo, pero se limpian igual por si
+      -- alguien llama a Snacks.picker.gh_pr() a mano.
+      gh_actions = { title = 'Actions' },
+      gh_diff = { title = 'Pull Request Diff' },
+      gh_issue = { title = 'Issues' },
+      gh_labels = { title = 'Labels' },
+      gh_pr = { title = 'Pull Requests' },
+      gh_reactions = { title = 'Reactions' },
       explorer = {
         exclude = { '.git' },
         actions = { devkit_abrir_con_clic = abrir_con_clic },
@@ -204,8 +330,10 @@ require('snacks').setup {
 
 vim.keymap.set('n', '<leader>e', function() Snacks.explorer() end, { desc = '[E]xplorador de archivos' })
 
+-- 'topdelete' venía con '‾' (U+203E). El resto ya era ASCII; la marca de
+-- archivo sin seguir usa dibujo de cajas, que se queda como está.
 require('gitsigns').setup {
-  signs = { add = { text = '+' }, change = { text = '~' }, delete = { text = '_' }, topdelete = { text = '‾' }, changedelete = { text = '~' } },
+  signs = { add = { text = '+' }, change = { text = '~' }, delete = { text = '_' }, topdelete = { text = '-' }, changedelete = { text = '~' } },
   on_attach = function(bufnr)
     local gs = require 'gitsigns'
     local map = function(mode, l, r, desc) vim.keymap.set(mode, l, r, { buffer = bufnr, desc = desc }) end
@@ -235,7 +363,19 @@ vim.keymap.set('n', '<leader>/', builtin.current_buffer_fuzzy_find, { desc = 'Bu
 -- ---------------------------------------------------------------------------
 -- LSP: basedpyright (tipos) y ruff (lint). Ambos en PATH, sin Mason.
 -- ---------------------------------------------------------------------------
-require('fidget').setup {}
+-- fidget gira un spinner mientras el LSP trabaja. El patrón por defecto,
+-- 'dots', son caracteres braille (U+28xx) y el icono de terminado un '✔':
+-- ninguno de los dos está en Menlo. 'line' es el mismo spinner en '-\|/'.
+require('fidget').setup {
+  progress = {
+    display = { progress_icon = { pattern = 'line', period = 1 }, done_icon = 'ok' },
+  },
+  notification = {
+    configs = {
+      default = vim.tbl_extend('force', require('fidget.notification').default_config, { icon = '>>' }),
+    },
+  },
+}
 
 vim.api.nvim_create_autocmd('LspAttach', {
   group = vim.api.nvim_create_augroup('devkit-lsp-attach', { clear = true }),
@@ -274,11 +414,21 @@ require('conform').setup {
 vim.keymap.set('n', '<leader>f', function() require('conform').format { async = true } end, { desc = '[F]ormatear buffer' })
 
 -- Autocompletado. Implementación de búsqueda en Lua: sin binarios externos.
+--
+-- La primera columna del menú es 'kind_icon' de fábrica: un glifo de Nerd Font
+-- por tipo. Se cambia por 'kind', que es el mismo dato en texto ('Function',
+-- 'Variable'...), y se manda al final para que el nombre quede a la izquierda.
+-- 'kind_icons' se sobrescribe igual: la columna ya no se dibuja, pero así no
+-- quedan glifos esperando a que alguien la vuelva a encender.
 require('blink.cmp').setup {
   keymap = { preset = 'default' },
   fuzzy = { implementation = 'lua' },
   sources = { default = { 'lsp', 'path', 'buffer' } },
-  completion = { documentation = { auto_show = true, auto_show_delay_ms = 300 } },
+  appearance = { kind_icons = tipos_ascii },
+  completion = {
+    documentation = { auto_show = true, auto_show_delay_ms = 300 },
+    menu = { draw = { columns = { { 'label', 'label_description', gap = 1 }, { 'kind' } } } },
+  },
 }
 
 -- ---------------------------------------------------------------------------
