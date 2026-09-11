@@ -15,6 +15,12 @@
 # del contenedor; cada skill es idempotente, así que repetir tras un rebuild no
 # daña, pero cuesta dinero y tiempo: por eso el cierre también deja marcador.
 #
+# /run/devkit/poke: `task-review` y `task-fix` lo tocan (`touch`) como último
+# paso, para no dejar el ciclo revisar → corregir → revisar esperando el
+# intervalo completo sin que nadie trabaje. El bucle duerme en tramos de 5 s y
+# sale antes si el archivo aparece; al despertar lo borra y sigue con la
+# consulta a GitHub. Quien lo toca no decide nada, solo adelanta el reloj.
+#
 # Uso de prueba: `bash watch.sh --decide < pr.json` imprime la decisión para
 # el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
 # `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
@@ -23,6 +29,7 @@ set -u
 WS=/workspace
 RUN_DIR=/run/devkit
 LAUNCHED="$RUN_DIR/launched"
+POKE="$RUN_DIR/poke"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
 
@@ -131,6 +138,20 @@ log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 launched() { grep -qxF "$1" "$LAUNCHED"; }
 mark() { echo "$1" >> "$LAUNCHED"; }
 
+# Duerme hasta completar $1 segundos, en tramos de 5, o hasta que aparezca
+# $POKE. Lo borra al despertar, antes de que el bucle vuelva a consultar
+# GitHub, para que un aviso llegado durante la consulta no se pierda.
+sleep_or_poke() {
+  local total=$1 waited=0 step
+  while [ "$waited" -lt "$total" ]; do
+    [ -e "$POKE" ] && break
+    step=$(( total - waited < 5 ? total - waited : 5 ))
+    sleep "$step"
+    waited=$((waited + step))
+  done
+  rm -f "$POKE"
+}
+
 # Estado en el que quedó el trabajo tras un `claude -p`. Notion no se consulta
 # desde bash, así que se registra solo lo observable en git y GitHub: la rama en
 # la que quedó el workspace, sus commits sobre main y su PR. La línea no afirma
@@ -203,6 +224,7 @@ while true; do
   [ -f "$WS/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/devkit.toml" | head -1)"
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     BOT="$(gh api user --jq .login 2>/dev/null)"
+    log "consultando GitHub"
 
     # --- PRs abiertos: revisar, corregir o bloquear ------------------------
     gh pr list --state open --limit 30 --json number,title,url \
@@ -280,5 +302,5 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
         run_skill "task-close-$num" "/task-close $key $url"
       done
   fi
-  sleep "$INTERVAL"
+  sleep_or_poke "$INTERVAL"
 done
