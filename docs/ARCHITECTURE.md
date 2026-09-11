@@ -296,12 +296,12 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `epic-plan` | Épica en Lista | Descompone en hijas con orden y dependencias, las deja en Lista, publica el desglose como comentario |
 | `task-create` | Nace en Backlog | Crea la card desde la plantilla |
 | `task-start` | Lista → En progreso | Asigna agente, crea rama desde `main`, escribe URL de rama, comenta el plan |
-| `task-review` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
+| `task-submit` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | Revisor independiente del autor: comprueba cada criterio ejecutando, lee el diff de forma adversarial, publica el informe en el PR con el marcador `devkit-review` y el bloque `devkit-findings`; con `OK` pide review al humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | Corrector del ciclo: lee el bloque `devkit-findings` del último informe `CAMBIOS` (o el comentario del humano como hallazgo único), un commit por hallazgo en la rama de la card, push, respuesta en el PR con el bloque `devkit-fixes` (`id | atendido o descartado | commit o motivo`) |
 | `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, marcador `devkit-closed` en el PR, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
-| `session-start` | Inicio de sesión | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
+| `project-status` | En cualquier momento | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
 | `template-update` | Mantenimiento | Sube `template` en `devkit.toml` y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
@@ -327,7 +327,7 @@ revisión.
 | Backlog → Lista en la Épica | Humano | Única aprobación de planificación |
 | `epic-plan` | Agente | Hijas en Lista con orden y dependencias; desglose publicado como comentario |
 | `task-start` en la primera hija libre | Agente | Rama `<tipo>/<CLAVE>-slug` desde `main` |
-| `task-review` | Agente | PR a `main` con auto-merge armado; card en `Revisión automática` |
+| `task-submit` | Agente | PR a `main` con auto-merge armado; card en `Revisión automática` |
 | `watch.sh`: head sin informe | Máquina | Lanza `pr-review` headless. `OK`: card a `Lista para merge` y review pedido al humano. `CAMBIOS`: bloque `devkit-findings` en el PR |
 | `watch.sh`: `CAMBIOS` para el head, sin respuesta | Máquina | Lanza `task-fix` headless: un commit por hallazgo, push, bloque `devkit-fixes`. El head nuevo vuelve a la fila anterior |
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
@@ -364,14 +364,14 @@ persistir `launched` en disco: guardaría en el contenedor un estado que ya
 existe en GitHub, y no serviría en otra máquina ni tras un `devkit rebuild`.
 
 `/run/devkit/poke` es el otro archivo del bucle en tmpfs, y tampoco guarda
-estado (DEVKIT-26): `task-review` y `task-fix` lo tocan al terminar, `watch.sh`
+estado (DEVKIT-26): `task-submit` y `task-fix` lo tocan al terminar, `watch.sh`
 duerme en tramos de cinco segundos en vez de un `sleep` seguido y despierta en
 cuanto aparece, y lo borra antes de consultar GitHub para no perder un aviso
 llegado durante la consulta. Solo adelanta el reloj entre dos vueltas: no salta
 la guarda de `launched` y la decisión sigue saliendo de los marcadores del PR,
 así que el revisor sigue naciendo en un proceso sin memoria del autor y el
 autor sigue sin decidir cuándo lo revisan. Por eso se descartó que
-`task-review` invocara `pr-review` como skill: compartiría su conversación y
+`task-submit` invocara `pr-review` como skill: compartiría su conversación y
 rompería esa independencia. Perder el aviso no rompe nada, solo devuelve la
 espera al intervalo completo, y por eso las skills lo tocan sin comprobar el
 resultado ni reintentar. El comando que prescriben es `touch /run/devkit/poke`
@@ -426,7 +426,7 @@ URL, tipo con valores cambio, decisión o runbook, fecha. Cuerpo con secciones
 fijas: qué cambió, por qué, cómo probarlo, cambios requeridos, enlaces.
 
 Los huecos en los IDs no significan cards perdidas. Una card perdida se detecta
-por estado y tiempo con una vista filtrada y con `session-start`.
+por estado y tiempo con una vista filtrada y con `project-status`.
 
 ## 8. Seguridad
 
@@ -642,7 +642,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Copiar direcciones largas desde tmux | Terminal.app inserta saltos de línea al copiar texto envuelto | En el Mac: `pbpaste \| tr -d ' \n' \| pbcopy` antes de pegar en Safari |
 | Ratón en Neovim y en Claude Code | Ambos capturan el ratón; la selección nativa exige apagar "Permitir informe del ratón" | Documentado en 4.4; se recomienda un atajo de teclado al menú |
 | Las skills buscan cards por la fórmula `Clave` | El MCP de Notion devuelve las fórmulas y rollups como referencias opacas, no como texto | Las skills filtran por `ID` (número) y `Proyecto`, y construyen la Clave como `<Código>-<ID>`. `Clave` queda como columna legible para el humano |
-| `settings.json` niega todo `gh pr merge` | `task-review` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
+| `settings.json` niega todo `gh pr merge` | `task-submit` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
 | `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que no pueden impedir aprobar. La compuerta real es GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana. Queda expuesto el caso de un PR abierto por el humano; la skill lo prohíbe por regla y una card en DEVKIT-18 propone un hook `PreToolUse` que bloquee `approve` por contenido del comando |
 | `DEVKIT_VERSION`, `.python-version` y `{{CODE}}` en `AGENTS.md` como fuentes sueltas | Tres archivos/placeholders para configuración que un proyecto declara una sola vez; tres skills asumían un `DEVKIT_VERSION` que ni siquiera existía como archivo (DEVKIT-2) | `devkit.toml` único en la raíz del repo, plano y leído con expresiones regulares. Regla de reparto: al repo lo que hace falta para reconstruir el proyecto igual (`template`, `project`, `python`, `apt`, `domains`); al Mac solo lo personal e irreproducible (`devkit.env`: repo, identidad git, remoto de Dropbox). Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el template a Python). `new-project.sh` no puede crear `devkit.toml` porque nunca toca el repo del proyecto: lo crea `entrypoint.sh` con placeholders en el primer arranque (DEVKIT-6) |
 

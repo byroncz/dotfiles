@@ -1,9 +1,9 @@
 ---
-name: task-review
-description: Cierra el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a Revisión automática. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
+name: task-submit
+description: Entrega para revisión el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a Revisión automática. No emite veredicto; quien revisa es pr-review, en otro proceso. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
 ---
 
-# task-review
+# task-submit
 
 Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 
@@ -50,7 +50,7 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 
 A partir de aquí el ciclo es automático: la skill `pr-review` decide si la
 card pasa a `Lista para merge` o si `task-fix` la corrige y la deja de nuevo
-en `Revisión automática`. `task-review` no vuelve a tocar esta card salvo que
+en `Revisión automática`. `task-submit` no vuelve a tocar esta card salvo que
 el humano lo pida explícitamente.
 
 ## Reglas

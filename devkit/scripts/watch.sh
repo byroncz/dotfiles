@@ -15,7 +15,7 @@
 # del contenedor; cada skill es idempotente, así que repetir tras un rebuild no
 # daña, pero cuesta dinero y tiempo: por eso el cierre también deja marcador.
 #
-# /run/devkit/poke: `task-review` y `task-fix` lo tocan (`touch`) como último
+# /run/devkit/poke: `task-submit` y `task-fix` lo tocan (`touch`) como último
 # paso, para no dejar el ciclo revisar → corregir → revisar esperando el
 # intervalo completo sin que nadie trabaje. El bucle duerme en tramos de 5 s y
 # sale antes si el archivo aparece; al despertar lo borra y sigue con la
@@ -295,7 +295,7 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
           log "PR #$num mergeado ($key) ya cerrado en ${ref:0:7}: se omite"
           continue
         fi
-        # Se registra antes de lanzar: si falla, el humano o session-start lo
+        # Se registra antes de lanzar: si falla, el humano o project-status lo
         # repiten; task-close es idempotente.
         mark "cerrar:$num"
         log "PR #$num mergeado ($key): lanzando task-close"

@@ -45,10 +45,14 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
   Para encontrar una card por Clave, filtra por `ID` y `Proyecto`, no por
   la fórmula `Clave`: el MCP no la devuelve. Detalle en `.claude/skills/README.md`.
 - Cada skill en `.claude/skills/` es un paso del flujo. Las principales:
-  `/session-start` al abrir la sesión, `/task-start` toma una card libre,
-  `/task-review` abre el PR, `/task-close` la cierra tras el merge,
-  `/task-block` cuando necesitas al humano. Lee `.claude/skills/README.md`
-  para el resto.
+  `/project-status` dice en qué va el proyecto, `/task-start` toma una card
+  libre, `/task-submit` entrega el trabajo y abre el PR, `/task-close` cierra
+  la card tras el merge, `/task-block` cuando necesitas al humano. Lee
+  `.claude/skills/README.md` para el resto.
+- Una skill se edita en el repo del template (DEVKIT), por su ruta real
+  `devkit/agents/skills/<skill>/SKILL.md`, nunca por `.claude/skills/`: ese
+  directorio es un enlace al template y Claude Code no acepta escrituras bajo
+  `.claude/` sin confirmación del humano, que en headless nadie da.
 - El humano decide dos cosas: mover una Épica de Backlog a Lista y aprobar
   el PR. Todo lo demás lo haces tú, sin preguntar, siguiendo las skills.
 - En modo headless (`claude -p`) no hay quien responda: una pregunta al
@@ -67,7 +71,7 @@ referencia de herramientas y comandos del devkit. Regla sin excepción:
 - Todo comando de `devkit.sh`, alias del shell, script de `devkit/scripts/`,
   bucle en segundo plano o skill que se cree, cambie de nombre o de
   comportamiento se documenta en ambos sitios **en el mismo PR** que lo
-  introduce. `task-review` no abre el PR si falta.
+  introduce. `task-submit` no abre el PR si falta.
 - Toda herramienta que entre o salga del `Dockerfile` actualiza la tabla de
   stack de ambos sitios, con su versión.
 - El README lleva el detalle; la entrada de Notion, el resumen y el enlace al

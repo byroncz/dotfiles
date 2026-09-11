@@ -101,7 +101,7 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Mergeado y con marcador `devkit-closed` | Nada: una línea `ya cerrado` en el log |
 
 El bucle no siempre espera el intervalo completo: duerme en tramos de 5 s y
-despierta en cuanto existe `/run/devkit/poke`, que `task-review` y `task-fix`
+despierta en cuanto existe `/run/devkit/poke`, que `task-submit` y `task-fix`
 crean con `touch /run/devkit/poke` como último paso, escrito tal cual: la regla
 de `allow` en `settings.json` es de coincidencia exacta y no cubre variantes con
 redirección o `|| true`. Así el ciclo revisar → corregir → revisar encadena en
@@ -203,12 +203,12 @@ Para salir: `:w` guarda, `:q` cierra la ventana, `:qa` cierra Neovim.
 | `/epic-plan <Clave>` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `/task-create <texto>` | Nace en Backlog | Humano o agente |
 | `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
-| `/task-review [Clave]` | En progreso → Revisión automática | Agente |
+| `/task-submit [Clave]` | En progreso → Revisión automática | Agente |
 | `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `/task-fix <Clave> [texto]` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
 | `/task-close <Clave>` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
-| `/session-start` | Estado del proyecto y siguiente card libre | Humano o agente |
+| `/project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `/template-update <X.Y.Z>` | Sube la versión del template del proyecto | Agente |
 | `/template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
@@ -221,13 +221,13 @@ observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
 - `/task-start` no se detiene tras crear la rama y comentar el plan: implementa
   la card hasta cumplir todos los criterios de aceptación y termina ejecutando
-  `/task-review`. Si falta una decisión, un acceso o un criterio de aceptación,
+  `/task-submit`. Si falta una decisión, un acceso o un criterio de aceptación,
   o se atasca más de dos intentos en el mismo problema, ejecuta `/task-block`
   con la petición concreta. Una ejecución que no deja la card en `Revisión
   automática` o `Bloqueada` es un corte, no un avance.
 - `/task-close`, al cerrar una hija de una Épica que aún tiene hermanas
   pendientes, toma la siguiente con `/task-start` y la trabaja completa en la
-  misma ejecución, hasta `/task-review` o `/task-block`. Arrancarla y devolver
+  misma ejecución, hasta `/task-submit` o `/task-block`. Arrancarla y devolver
   el control no cuenta: nadie la retomaría.
 
 ## Qué declara cada proyecto

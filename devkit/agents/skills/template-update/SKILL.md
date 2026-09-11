@@ -23,7 +23,7 @@ Argumento: versión destino `X.Y.Z`.
    con `task-start`.
 5. Cambia `template` a la versión destino en `devkit.toml`. Commit
    `chore(<Clave>): actualizar template a <X.Y.Z>`.
-6. `task-review`. En el cuerpo del PR incluye el resumen del changelog y, si
+6. `task-submit`. En el cuerpo del PR incluye el resumen del changelog y, si
    aplica, los cambios manuales requeridos.
 7. Actualiza en Notion la fila del proyecto: `Versión del template` = destino.
 8. Una vez mergeado, en el Mac: `devkit update <proyecto>`. Lee `template`
