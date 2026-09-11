@@ -527,6 +527,45 @@ vencimiento en la nota de cada secreto.
 Descartado: bind mount del clon local con enlaces simbólicos. Rompe el host
 mínimo, elimina las versiones y no tiene radio de impacto controlado.
 
+### 9.1 Modo dev: dos canales, no uno
+
+En modo dev el workspace es el template, pero llega al contenedor por dos
+caminos con latencias distintas, y confundirlos costó dos cards dadas por
+hechas (DEVKIT-21 y DEVKIT-23, verificado el 2026-09-11):
+
+| Canal | Qué viaja | Cuándo se activa |
+|---|---|---|
+| Lectura en vivo | `entrypoint.sh` (re-exec), `scripts/` (`SCRIPTS_DIR`), `agents/` (enlaces simbólicos) | Al recrear el contenedor, o al instante en el caso de `agents/` |
+| Imagen | `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/` | Solo al reconstruir la imagen |
+
+El contexto de build de Compose es `~/.devkit/<proyecto>/template/`, una copia
+que `new-project.sh` baja una vez y que `devkit update` reemplaza por la
+etiqueta destino. En modo dev no hay etiqueta, así que nadie la refrescaba: la
+imagen se reconstruía con el template del día de la instalación aunque el
+workspace ya tuviera el cambio mergeado, y el arranque avisaba de todo menos de
+eso.
+
+Decisión: en modo dev, `devkit up`, `recreate` y `rebuild` rearman el contexto
+con `docker cp devkit-<proyecto>:/workspace/devkit/. template/` antes de
+construir. La alternativa era montar el workspace como contexto de build, y no
+es posible: `/workspace` vive dentro del contenedor, no hay bind mount desde el
+Mac (decisión 4.1, el código no vive en el host), así que no existe una ruta
+del Mac que Compose pueda usar de contexto. `docker cp` es la única vía, y
+tiene el efecto correcto: copia lo que hay en el contenedor, que es la rama
+mergeada del propio repo. Si el contenedor no responde, se avisa y se
+construye con la copia existente: sin contenedor no hay workspace del que
+copiar, y fallar dejaría al humano sin poder levantar nada.
+
+Para que la asimetría deje de engañar, `entrypoint.sh` compara en cada arranque
+el `devkit/` del workspace con `/opt/devkit/image`, la copia de lo que entró
+por imagen, y avisa: `hay cambios que requieren devkit recreate: <qué>`. La
+lista de qué es "solo por imagen" y la comparación viven en
+`scripts/image-drift.sh`, con autoprueba (`--test`), para que no se dupliquen
+entre el `Dockerfile` y el arranque.
+
+Fuera de modo dev nada de esto corre: el contexto sigue siendo la copia de la
+etiqueta, que es lo que hace reproducible una versión.
+
 ## 10. Mínimo viable
 
 ### 10.1 Dentro

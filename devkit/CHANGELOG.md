@@ -10,6 +10,47 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### En modo dev la imagen se construye desde el workspace (DEVKIT-30)
+
+- El contexto de build es `~/.devkit/<proyecto>/template/`, una copia del
+  template que solo `new-project.sh` y `devkit update` refrescaban. En modo dev
+  no hay etiqueta que bajar, así que nadie la tocaba: `devkit recreate`
+  reconstruía con el template del día de la instalación. DEVKIT-21 y DEVKIT-23
+  se mergearon, el humano recreó y ninguna quedó activa, porque la imagen se
+  armó con el `nvim/init.lua` viejo. Verificado el 2026-09-11.
+- Ahora `devkit up`, `recreate` y `rebuild` rearman ese contexto con
+  `docker cp devkit-<proyecto>:/workspace/devkit/. template/` antes de
+  construir, y lo dicen en una línea. Montar el workspace como contexto no era
+  opción: `/workspace` vive dentro del contenedor y no hay bind mount desde el
+  Mac, así que no existe ruta del host que Compose pueda usar.
+- Si el contenedor no responde (primer `up`, contenedor destruido), se avisa y
+  se construye con la copia que haya, sin fallar: sin contenedor no hay
+  workspace del que copiar, y abortar dejaría al humano sin poder levantar
+  nada.
+- Fuera de modo dev el comportamiento no cambia: el contexto sigue siendo la
+  copia de la etiqueta, que es lo que hace reproducible una versión.
+- `devkit update` en modo dev ya no responde "ya en dev", que sonaba a que no
+  faltaba nada: manda a `devkit recreate <proyecto>`, que es quien lleva
+  `devkit/` a la imagen.
+- El arranque avisa de la deriva. El `Dockerfile` deja en `/opt/devkit/image`
+  la copia de lo que solo entra por imagen (`Dockerfile`, `nvim/`, `tmux/`,
+  `zsh/`, `proxy/`) y `entrypoint.sh` la compara con el workspace en modo dev:
+  `hay cambios que requieren devkit recreate: <qué>`. Lo que el arranque relee
+  del workspace (`entrypoint.sh`, `scripts/`, `agents/`) no cuenta, para que el
+  aviso no sea ruido en cada sesión.
+- `scripts/image-drift.sh` es esa comparación, con la lista de rutas de imagen
+  como única fuente y autoprueba en `--test`. `host/devkit-test.sh` prueba el
+  comando `devkit` del Mac contra un doble de `docker`, sin Docker ni
+  contenedores: 27 casos que cubren modo dev, versión etiquetada, contenedor
+  caído y los avisos.
+- `recreate` avisa además cuando el `compose.yaml` del proyecto o el comando
+  `~/.devkit/bin/devkit` difieren del template. Esos dos son del Mac y los
+  instala `new-project.sh`; reemplazarlos desde el propio script no es seguro,
+  así que se avisa y se reinstalan con `new-project.sh <proyecto> --ref <rama>`.
+- Reemplazo directo: nada que tocar en `devkit.env` ni en los volúmenes. El
+  aviso del arranque solo aparece tras el primer `devkit recreate` con esta
+  versión, que es cuando `/opt/devkit/image` existe.
+
 ### El bucle relanza la skill que murió por cuota agotada (DEVKIT-27)
 
 - Un `claude -p` que agota la cuota de la suscripción muere con código distinto

@@ -62,9 +62,9 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 | `devkit attach <proyecto>` | Vuelve a la sesión de tmux. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
-| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. |
-| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. |
-| `devkit update <proyecto>` | Sube a la versión de template que pide `devkit.toml` del repo. |
+| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
+| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. En modo dev, también rearma el contexto de build. |
+| `devkit update <proyecto>` | Sube a la versión de template que pide `devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit ls` | Proyectos instanciados. |
@@ -74,6 +74,36 @@ Crear un proyecto nuevo:
 ```sh
 curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.sh | sh -s -- <proyecto> --version 0.1.0
 ```
+
+### Modo dev: probar el template antes de etiquetarlo
+
+Solo aplica al repo del template (`DEVKIT`), que se instancia con
+`new-project.sh <proyecto> --ref main` y queda con `DEVKIT_VERSION=dev`. Ahí el
+workspace **es** el template: `devkit/` del repo es lo que se prueba.
+
+Qué llega al contenedor y cuándo:
+
+| Qué cambias | Cómo se activa |
+|---|---|
+| `devkit/entrypoint.sh`, `devkit/scripts/` | Solo con recrear el contenedor: el arranque los lee del workspace. |
+| `devkit/agents/` (skills, `settings.json`, `notion.json`) | Al instante: están enlazados al workspace. |
+| `devkit/Dockerfile`, `devkit/nvim/`, `devkit/tmux/`, `devkit/zsh/`, `devkit/proxy/` | Solo reconstruyendo la imagen: `devkit recreate <proyecto>`. |
+
+El contexto de build es `~/.devkit/<proyecto>/template/`, una copia del
+template en el Mac. En modo dev, `devkit up`, `recreate` y `rebuild` la rearman
+antes de construir copiando `devkit/` del workspace con `docker cp`, porque el
+workspace solo existe dentro del contenedor. Si el contenedor no responde
+(primer `up`, contenedor destruido), lo dicen y construyen con la copia que
+haya.
+
+Al arrancar, si lo que solo entra por imagen difiere de la copia con la que se
+construyó, el log avisa: `hay cambios que requieren devkit recreate: <qué>`.
+Míralo con `devkit logs <proyecto>`.
+
+`~/.devkit/<proyecto>/compose.yaml` y el propio comando `~/.devkit/bin/devkit`
+los instala `new-project.sh` y no los refresca nadie: si cambian en el
+workspace, `recreate` avisa y se reinstalan con
+`new-project.sh <proyecto> --ref <rama>`, que respeta `devkit.env`.
 
 ### Dentro del contenedor
 
@@ -85,6 +115,8 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
+| `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
+| `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
 (cada 5 min). `watch.sh` mira cada PR cuyo título empieza por una Clave del
