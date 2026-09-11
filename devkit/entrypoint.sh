@@ -136,6 +136,19 @@ if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$WS/devkit/scripts" ]; then
   SCRIPTS_DIR="$WS/devkit/scripts"
 fi
 
+# /opt/devkit/image es la copia del template con la que se construyó la imagen.
+# Lo que está ahí (Dockerfile, nvim, tmux, zsh, proxy) no se refresca al
+# arrancar, a diferencia de entrypoint.sh y scripts/: si difiere del workspace,
+# lo que está mergeado todavía no está activo (DEVKIT-30). La lista y la
+# comparación viven en image-drift.sh, con su propia autoprueba.
+IMAGE_REF=/opt/devkit/image
+if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$IMAGE_REF" ] && [ -f "$SCRIPTS_DIR/image-drift.sh" ]; then
+  stale="$(sh "$SCRIPTS_DIR/image-drift.sh" "$WS/devkit" "$IMAGE_REF" | tr '\n' ' ' | sed 's/ *$//')"
+  if [ -n "$stale" ]; then
+    warn "hay cambios que requieren devkit recreate: $stale"
+  fi
+fi
+
 # Enlaces del template hacia el workspace (solo si el template existe).
 if [ -d "$TEMPLATE_DIR/agents" ]; then
   mkdir -p "$WS/.claude"
