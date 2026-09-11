@@ -1,0 +1,15 @@
+# Lo que el contenedor genera dentro del workspace. No es código del repo.
+#
+# En cada arranque, `devkit/entrypoint.sh` enlaza `.claude/skills` y
+# `.claude/devkit-notion.json` hacia `/opt/devkit/template/agents/`, que solo
+# existe dentro del contenedor. Versionarlos deja enlaces rotos en cualquier
+# clon de fuera, y además duplica lo que ya vive en `devkit/agents/`: esa es la
+# fuente, y es la que se edita. Claude Code escribe aquí mismo sus permisos de
+# sesión (`settings.local.json`) y sus worktrees.
+/.claude/
+
+# `sandbox.local/` y cualquier otro `*.local` quedan fuera por el ignore global
+# del contenedor (`~/.config/git/ignore`); se repiten aquí para que un clon
+# fuera del contenedor los respete igual.
+*.local
+*.local.*

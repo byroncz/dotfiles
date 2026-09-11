@@ -35,7 +35,7 @@ ti.
 | ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
 | ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
-| ![Neovim](https://img.shields.io/badge/Neovim-57A143?logo=neovim&logoColor=white) | **Neovim** | Editor en terminal, con plugins fijados por lockfile: LSP, autocompletado, Telescope, gitsigns y `claudecode.nvim` para hablar con Claude desde el editor. Los archivos que un agente cambia en disco se releen solos cada segundo, sin `:e`. |
+| ![Neovim](https://img.shields.io/badge/Neovim-57A143?logo=neovim&logoColor=white) | **Neovim** | Editor en terminal, con plugins fijados por lockfile: LSP, autocompletado, Telescope, gitsigns, el explorador de archivos de `snacks.nvim` y `claudecode.nvim` para hablar con Claude desde el editor. Los archivos que un agente cambia en disco se releen solos cada segundo, sin `:e`, y el árbol y el margen de git se actualizan con ellos. Atajos: [Neovim en cinco atajos](#neovim-en-cinco-atajos). |
 | ![tmux](https://img.shields.io/badge/tmux-1BB91F?logo=tmux&logoColor=white) | **tmux** | Sesión persistente dentro del contenedor: si cierras la terminal, el trabajo sigue. `devkit attach` vuelve a ella. |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. |
 | ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) revisa, corrige y cierra cards sin intervención. |
@@ -161,6 +161,28 @@ cerrado, o para poner al día un repo que viene de una versión anterior:
 ```sh
 gh pr comment <N> --body "<!-- devkit-closed sha=$(gh pr view <N> --json mergeCommit --jq .mergeCommit.oid) -->"
 ```
+
+### Neovim en cinco atajos
+
+La tecla líder es `<espacio>`: púlsala y espera, que `which-key` te lista lo que
+hay. Con estos cinco te mueves por el proyecto sin saber Vim.
+
+| Atajo | Qué hace |
+|---|---|
+| `<espacio>e` | Abre el explorador de archivos a la izquierda. Un clic abre el archivo, un doble clic expande o pliega la carpeta, y el margen marca lo que git ve modificado (`M`) o sin seguimiento (`??`). Se actualiza solo cuando el agente crea, borra o renombra algo. |
+| `<espacio>sf` | Busca un archivo por nombre. Escribe trozos sueltos del nombre, `Enter` abre. |
+| `<espacio>sg` | Busca un texto en todo el proyecto. |
+| `Ctrl-h`, `Ctrl-j`, `Ctrl-k`, `Ctrl-l` | Salta al panel de la izquierda, abajo, arriba o la derecha. |
+| `Esc` `Esc` | Sale del panel de Claude sin cerrarlo: el panel es un terminal y esto devuelve el teclado a Neovim. Desde ahí, `Ctrl-h` te lleva al código. |
+
+Claude vive en `<espacio>a`: `<espacio>ac` abre o cierra su panel, `<espacio>as`
+le manda el archivo actual (o la selección, en modo visual), `<espacio>aa`
+acepta el diff que propone y `<espacio>ad` lo rechaza. Cuándo verás un diff y
+cuándo el agente escribe directo al disco está en
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), sección 4.4: en resumen, solo
+hay diff si abriste Claude desde Neovim y lo dejaste en modo manual.
+
+Para salir: `:w` guarda, `:q` cierra la ventana, `:qa` cierra Neovim.
 
 ### Skills (comandos `/nombre` dentro de `claude`)
 

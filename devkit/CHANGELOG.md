@@ -10,6 +10,35 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Explorador de archivos en Neovim y qué esperar del diff del agente (DEVKIT-23)
+
+- `<espacio>e` abre el árbol del workspace en un panel a la izquierda, con el
+  estado de git por archivo. Es `snacks.explorer`, que ya venía dentro de
+  `snacks.nvim` porque `claudecode.nvim` lo usa de proveedor de terminal: no
+  entra ningún plugin y `nvim-pack-lock.json` no cambia.
+- El árbol se actualiza solo cuando el agente crea, borra o renombra archivos.
+  No hace falta cerrar y abrir el panel: el explorador levanta un
+  `vim.uv.fs_event` por cada directorio abierto y otro sobre `.git`, así que
+  también repinta la marca de git en cuanto cambia el índice.
+- Un clic abre el archivo bajo el ratón; expandir y plegar carpetas se queda en
+  el doble clic. Un clic que alternara la carpeta la volvería a cerrar con el
+  segundo clic de un doble clic, que es justo lo que hace quien viene de Finder.
+- `.git` queda excluido del árbol aunque se enciendan los archivos ocultos con
+  `H`.
+- `snacks.explorer` reemplaza a `netrw`: `:Ex` y abrir un directorio caen ahora
+  en el mismo panel.
+- Nuevo en el README: "Neovim en cinco atajos", la guía mínima para moverse por
+  el proyecto (explorador, buscar archivo, buscar texto, cambiar de panel, salir
+  del panel de Claude).
+- `docs/ARCHITECTURE.md` 4.4 explica, medido, cuándo una edición de Claude llega
+  como diff para aceptar con `<espacio>aa` y cuándo aparece ya escrita en disco.
+  Resumen: solo hay diff si abriste Claude desde Neovim con `<espacio>ac` y lo
+  dejaste en modo manual. Desde el shell, con `accept edits on`, o en el ciclo
+  automático (`claude -p`, que ni se conecta a Neovim), la edición va directa al
+  disco. Forzar el diff siempre no es posible: `claudecode.nvim` solo atiende el
+  `openDiff` que pide el CLI, y sus `diff_opts` deciden cómo se ve, no si
+  aparece.
+
 ### Neovim relee los archivos que cambian en disco (DEVKIT-21)
 
 - `devkit/nvim/init.lua` ejecuta `checktime` en `CursorHold`, `CursorHoldI`,
