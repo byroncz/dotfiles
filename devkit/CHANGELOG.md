@@ -10,6 +10,28 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### El bucle despierta al instante cuando una skill deja trabajo nuevo (DEVKIT-26)
+
+- `watch.sh` ya no duerme el intervalo de un tirón: lo hace en tramos de cinco
+  segundos y sale antes si existe `/run/devkit/poke`, que borra al despertar,
+  antes de consultar GitHub, para no perder un aviso llegado durante la
+  consulta.
+- `task-review` (tras abrir el PR) y `task-fix` (tras responder en el PR) crean
+  ese archivo con `touch /run/devkit/poke` como último paso, sin redirecciones
+  ni `|| true` para que la regla exacta de `settings.json` lo cubra. Si no se
+  puede crear, no se reintenta: el bucle llega igual en el siguiente intervalo.
+- El ciclo revisar → corregir → revisar encadena en segundos. Antes cada salto
+  costaba hasta cinco minutos muertos; medido el 2026-09-10 en el PR 15, unos
+  veinte minutos por card sin nadie trabajando.
+- El aviso no decide nada ni salta la guarda de `launched`: la decisión sigue
+  saliendo de los marcadores del PR, así que `--decide` responde lo mismo que
+  antes y `watch-test.sh` no cambia. El revisor sigue siendo independiente del
+  autor.
+- `settings.json` permite `Bash(touch /run/devkit/poke)`, sin abrir el resto de
+  `/run/devkit`, que sigue en `deny` para lectura.
+- Nueva línea del log, `consultando GitHub`, que marca el inicio de cada vuelta
+  y hace visible el efecto del aviso.
+
 ### Explorador de archivos en Neovim y qué esperar del diff del agente (DEVKIT-23)
 
 - `<espacio>e` abre el árbol del workspace en un panel a la izquierda, con el

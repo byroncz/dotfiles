@@ -100,16 +100,27 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `/task-close <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
 | Mergeado y con marcador `devkit-closed` | Nada: una línea `ya cerrado` en el log |
 
-Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
-trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
-`claude -p`, el bucle registra además una línea `estado:` con la rama en la que
-quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin PR` si
-no lo hay, `PR desconocido` si `gh` no respondió). Es una observación de git y
-GitHub, no del Estado de la card: una rama de card sin PR es la señal de que la
-ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la card.
-Variables:
-`DEVKIT_WATCH_INTERVAL` (segundos, 300) y `DEVKIT_WATCH_MAX_CYCLES` (3). Para
-ver qué decidiría sobre un PR sin esperar al bucle:
+El bucle no siempre espera el intervalo completo: duerme en tramos de 5 s y
+despierta en cuanto existe `/run/devkit/poke`, que `task-review` y `task-fix`
+crean con `touch /run/devkit/poke` como último paso, escrito tal cual: la regla
+de `allow` en `settings.json` es de coincidencia exacta y no cubre variantes con
+redirección o `|| true`. Así el ciclo revisar → corregir → revisar encadena en
+segundos en vez de perder hasta 5 min por salto. El aviso solo adelanta el
+reloj: no lanza nada, la decisión sigue saliendo de los marcadores del PR, y si
+el `touch` falla el bucle llega igual en el siguiente intervalo.
+
+Cada vuelta del bucle abre con una línea `consultando GitHub`, que es lo que se
+mira para comprobar que el aviso funcionó: su hora debe caer a menos de 5 s del
+`touch`. Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última
+línea trae el costo y los tokens, que es la medida de cada ciclo. Al terminar
+cada `claude -p`, el bucle registra además una línea `estado:` con la rama en
+la que quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin
+PR` si no lo hay, `PR desconocido` si `gh` no respondió). Es una observación de
+git y GitHub, no del Estado de la card: una rama de card sin PR es la señal de
+que la ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la
+card. Variables: `DEVKIT_WATCH_INTERVAL` (segundos, 300) y
+`DEVKIT_WATCH_MAX_CYCLES` (3). Para ver qué decidiría sobre un PR sin esperar
+al bucle:
 
 ```sh
 gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
