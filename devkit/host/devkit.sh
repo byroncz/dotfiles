@@ -7,7 +7,8 @@
 #   devkit stop <proyecto>      detener sin perder nada
 #   devkit down <proyecto>      destruir el contenedor (el código no committeado se pierde)
 #   devkit recreate <proyecto>  recrear los contenedores: relee secretos y devkit.env, y
-#                               reconstruye solo las capas de imagen que cambiaron
+#                               reconstruye las capas que cambiaron (en modo dev,
+#                               con el devkit/ del workspace)
 #   devkit rebuild <proyecto>   reconstruir las imágenes desde cero y recrear
 #   devkit update <proyecto>    subir a la versión de template que pide devkit.toml
 #   devkit logs <proyecto>      ver el arranque y los bucles
@@ -17,7 +18,7 @@ set -eu
 ROOT="${DEVKIT_HOME:-$HOME/.devkit}"
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,17p' "$0"; exit 1; }
+usage() { sed -n '2,16p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -42,6 +43,41 @@ sync_toml_env() {
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
 }
+# El contexto de build es $dir/template, una copia del template que solo
+# new-project.sh y `devkit update` refrescan. En modo dev el template es el
+# `devkit/` del workspace, que vive únicamente dentro del contenedor: no hay
+# bind mount desde el Mac, así que `docker cp` es la única vía para llevarlo al
+# contexto. Sin esto, un cambio en nvim/, zsh/, tmux/, proxy/ o el Dockerfile
+# se mergeaba y la imagen seguía construyéndose con la copia vieja (DEVKIT-30).
+sync_dev_template() {
+  [ "$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" | head -1)" = dev ] || return 0
+  if ! docker exec "devkit-$proj" test -d /workspace/devkit 2>/dev/null; then
+    echo "devkit: aviso: el contenedor no responde; se construye con la copia de $dir/template" >&2
+    return 0
+  fi
+  rm -rf "$dir/template.tmp"; mkdir -p "$dir/template.tmp"
+  if docker cp "devkit-$proj:/workspace/devkit/." "$dir/template.tmp" >/dev/null; then
+    rm -rf "$dir/template"; mv "$dir/template.tmp" "$dir/template"
+    echo "devkit: modo dev: contexto de build actualizado desde el workspace"
+    warn_host_stale
+  else
+    rm -rf "$dir/template.tmp"
+    echo "devkit: aviso: no se pudo copiar devkit/ del workspace; se construye con la copia de $dir/template" >&2
+  fi
+}
+# Lo que new-project.sh instaló en el Mac desde el template (el compose.yaml del
+# proyecto y el propio comando devkit) no lo refresca nadie. Reemplazarlo aquí
+# no es seguro: el script se sobrescribiría a sí mismo mientras corre. Se avisa
+# y se deja la decisión al humano.
+warn_host_stale() {
+  if [ -f "$dir/template/compose.yaml" ] && ! cmp -s "$dir/template/compose.yaml" "$dir/compose.yaml"; then
+    echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con new-project.sh --ref <rama>" >&2
+  fi
+  if [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
+     && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
+    echo "devkit: aviso: el comando devkit difiere del template; reinstala con new-project.sh --ref <rama>" >&2
+  fi
+}
 compose() { docker compose --project-directory "$dir" "$@"; }
 attach() {
   # El arranque tarda unos segundos (lee secretos, clona). Esperar al marcador
@@ -57,19 +93,29 @@ attach() {
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
-  up)       compose up -d --build && attach ;;
+  up)       sync_dev_template; compose up -d --build && attach ;;
   attach)   attach ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && sync_toml_env && compose up -d --build --force-recreate && attach ;;
-  rebuild)  confirm && sync_toml_env && compose build --no-cache && compose up -d --force-recreate && attach ;;
+  recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate && attach ;;
+  rebuild)  confirm && sync_toml_env && sync_dev_template && compose build --no-cache && compose up -d --force-recreate && attach ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
     target="$(printf '%s\n' "$toml" | toml_field template)"
     [ -n "$target" ] || { echo "devkit.toml no declara 'template'" >&2; exit 1; }
     current="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" | head -1)"
-    if [ "$target" = "$current" ]; then echo "ya en $target"; exit 0; fi
+    if [ "$target" = "$current" ]; then
+      # En modo dev no hay etiqueta que descargar: el template es el workspace y
+      # quien lo lleva a la imagen es `recreate`. Decirlo evita creer que este
+      # comando ya aplicó lo mergeado (DEVKIT-30).
+      if [ "$target" = dev ]; then
+        echo "en modo dev el template es el workspace; usa 'devkit recreate $proj' para llevar devkit/ a la imagen"
+      else
+        echo "ya en $target"
+      fi
+      exit 0
+    fi
     echo "devkit: actualizando template $current -> $target"
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
     curl -fsSL "https://github.com/$REPO/archive/refs/tags/v$target.tar.gz" | tar -xz -C "$tmp"

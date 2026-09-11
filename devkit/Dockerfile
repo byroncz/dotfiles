@@ -134,5 +134,17 @@ RUN nvim --headless +qa && ls "$HOME/.local/share/nvim/site/pack/core/opt"
 COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
 COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 
+# Copia de referencia de lo que solo entra por imagen. `entrypoint.sh` la
+# compara en modo dev con el devkit/ del workspace para avisar cuándo hace
+# falta un `devkit recreate` (DEVKIT-30): a diferencia de entrypoint.sh y
+# scripts/, que el arranque lee del workspace, estos archivos se congelan en la
+# imagen. Son los mismos del contexto de build y de los COPY de arriba, no otra
+# fuente. Va al final para no invalidar las capas anteriores.
+COPY --chown=${USER_UID}:${USER_GID} Dockerfile /opt/devkit/image/Dockerfile
+COPY --chown=${USER_UID}:${USER_GID} nvim/      /opt/devkit/image/nvim/
+COPY --chown=${USER_UID}:${USER_GID} tmux/      /opt/devkit/image/tmux/
+COPY --chown=${USER_UID}:${USER_GID} zsh/       /opt/devkit/image/zsh/
+COPY --chown=${USER_UID}:${USER_GID} proxy/     /opt/devkit/image/proxy/
+
 ENTRYPOINT ["/opt/devkit/entrypoint.sh"]
 CMD ["sleep", "infinity"]
