@@ -17,8 +17,9 @@ versión que usa un proyecto y la destino.
   antes de consultar GitHub, para no perder un aviso llegado durante la
   consulta.
 - `task-review` (tras abrir el PR) y `task-fix` (tras responder en el PR) crean
-  ese archivo con `touch` como último paso. Si no se puede crear, la skill no
-  falla: el bucle llega igual en el siguiente intervalo.
+  ese archivo con `touch /run/devkit/poke` como último paso, sin redirecciones
+  ni `|| true` para que la regla exacta de `settings.json` lo cubra. Si no se
+  puede crear, no se reintenta: el bucle llega igual en el siguiente intervalo.
 - El ciclo revisar → corregir → revisar encadena en segundos. Antes cada salto
   costaba hasta cinco minutos muertos; medido el 2026-09-10 en el PR 15, unos
   veinte minutos por card sin nadie trabajando.

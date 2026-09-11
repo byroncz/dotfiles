@@ -41,11 +41,12 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 7. Actualiza la card: `PR` = URL del PR, `Estado` = `Revisión automática`.
 8. Comenta en la card, dos a cuatro líneas: qué se entregó y qué debe mirar
    el revisor primero.
-9. `touch /run/devkit/poke 2>/dev/null || true`, como último paso. Despierta a
-   `watch.sh`, que duerme en tramos de 5 s, para que no espere el resto del
-   intervalo antes de lanzar `pr-review`. Es solo un aviso, no lanza nada ni
-   decide nada: si el archivo no se puede crear, el bucle llega igual en el
-   siguiente intervalo.
+9. `touch /run/devkit/poke`, como último paso. Despierta a `watch.sh`, que
+   duerme en tramos de 5 s, para que no espere el resto del intervalo antes de
+   lanzar `pr-review`. Es solo un aviso, no lanza nada ni decide nada. Escribe
+   el comando tal cual, sin redirecciones ni `|| true`: así es como lo autoriza
+   `settings.json`. Si falla, no pasa nada y no se reintenta: el bucle llega
+   igual en el siguiente intervalo.
 
 A partir de aquí el ciclo es automático: la skill `pr-review` decide si la
 card pasa a `Lista para merge` o si `task-fix` la corrige y la deja de nuevo

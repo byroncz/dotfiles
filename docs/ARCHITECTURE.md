@@ -373,7 +373,11 @@ así que el revisor sigue naciendo en un proceso sin memoria del autor y el
 autor sigue sin decidir cuándo lo revisan. Por eso se descartó que
 `task-review` invocara `pr-review` como skill: compartiría su conversación y
 rompería esa independencia. Perder el aviso no rompe nada, solo devuelve la
-espera al intervalo completo, y por eso las skills lo tocan con `|| true`.
+espera al intervalo completo, y por eso las skills lo tocan sin comprobar el
+resultado ni reintentar. El comando que prescriben es `touch /run/devkit/poke`
+a secas, sin redirecciones ni `|| true`, porque la regla de `allow` en
+`settings.json` es de coincidencia exacta: cualquier añadido la dejaría fuera y
+el humano tendría que aprobar el aviso en cada corrida interactiva.
 
 Reglas:
 

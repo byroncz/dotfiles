@@ -102,10 +102,12 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 
 El bucle no siempre espera el intervalo completo: duerme en tramos de 5 s y
 despierta en cuanto existe `/run/devkit/poke`, que `task-review` y `task-fix`
-crean con `touch` como último paso. Así el ciclo revisar → corregir → revisar
-encadena en segundos en vez de perder hasta 5 min por salto. El aviso solo
-adelanta el reloj: no lanza nada, la decisión sigue saliendo de los marcadores
-del PR, y si el `touch` falla el bucle llega igual en el siguiente intervalo.
+crean con `touch /run/devkit/poke` como último paso, escrito tal cual: la regla
+de `allow` en `settings.json` es de coincidencia exacta y no cubre variantes con
+redirección o `|| true`. Así el ciclo revisar → corregir → revisar encadena en
+segundos en vez de perder hasta 5 min por salto. El aviso solo adelanta el
+reloj: no lanza nada, la decisión sigue saliendo de los marcadores del PR, y si
+el `touch` falla el bucle llega igual en el siguiente intervalo.
 
 Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
 trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
