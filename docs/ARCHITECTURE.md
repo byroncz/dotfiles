@@ -128,6 +128,7 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 |---|---|
 | Terminal en el Mac | Terminal.app, macOS 26. Color de 24 bits. Sin OSC 52: copiar del contenedor al Mac requiere apagar "Permitir informe del ratón" en el menú Ver, seleccionar y Cmd-C. Se asigna un atajo de teclado a ese menú |
 | Editor | Neovim con `kickstart.nvim`, ratón activo, `ruff` y `basedpyright` instalados con `uv tool` |
+| Explorador de archivos | `snacks.explorer`, en `<espacio>e`. `snacks.nvim` ya entraba como proveedor de terminal de `claudecode.nvim`, así que no se añade ningún plugin |
 | Integración con agentes | `coder/claudecode.nvim` en un "hueco de agente": un módulo Lua por agente con los mismos atajos. Codex se enchufa después |
 | Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
 | Multiplexor | tmux, invisible: el arranque entra directo; `Ctrl-b d` desconecta sin cerrar. Los splits los hace Neovim |
@@ -135,6 +136,38 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
 agente al arrancar.
+
+#### Cuándo el agente propone un diff y cuándo escribe al disco
+
+Una edición de Claude llega al editor por dos caminos distintos, y confundirlos
+es la causa habitual de "no veo lo que hizo el agente". El que manda no es
+Neovim: es el CLI de Claude Code, según con quién esté hablando y en qué modo de
+permisos esté.
+
+| Cómo corre Claude | Qué pasa con una edición |
+|---|---|
+| `claude` desde el shell del contenedor, sin pasar por Neovim | Escribe directo al disco. Si el archivo está abierto, el buffer se relee solo y `gitsigns` marca las líneas en el margen |
+| `claude` abierto con `<espacio>ac` desde Neovim, en modo manual (el de partida) | Llama a `openDiff` por el websocket: se abre un diff vertical y **el archivo en disco no cambia** hasta que aceptas con `<espacio>aa` (o `:w` en el diff). `<espacio>ad` lo descarta |
+| Igual, pero con `accept edits on` (shift-tab), o con la herramienta ya permitida | Escribe directo al disco, sin diff |
+| Ciclo automático: `watch.sh` lanza `claude -p` | Nunca usa el diff. En modo `-p` el CLI no se conecta a Neovim ni aunque tenga las variables de la integración |
+
+Medido con un Neovim headless que registra las invocaciones del websocket y los
+autocomandos `ClaudeCodeDiffOpened` y `ClaudeCodeDiffClosed`: en modo manual
+llegó `openDiff` y el archivo siguió intacto hasta ejecutar
+`ClaudeCodeDiffAccept`, que lo cerró con el motivo `diff tab closed after save`
+y escribió el cambio; con `accept edits on` no llegó ninguna invocación y el
+archivo cambió solo en disco; con `claude -p` el servidor ni siquiera registró
+una conexión.
+
+Forzar el diff para toda edición no es posible, y no por falta de configuración
+nuestra: `claudecode.nvim` solo implementa el lado servidor: atiende `openDiff`
+cuando el CLI lo pide. Sus `diff_opts` deciden cómo se ve el diff (vertical,
+pestaña propia, foco), nunca si aparece. La única palanca real es el modo de
+permisos de la sesión, que el propio CLI muestra en su barra inferior: en manual
+verás el diff, en `accept edits on` no. La regla práctica: si quieres revisar
+antes de que toque el disco, abre Claude desde Neovim y déjalo en manual; si lo
+que quieres es velocidad, cualquiera de los otros caminos escribe directo y
+`<espacio>e` más el margen de `gitsigns` te dicen qué cambió.
 
 ### 4.5 Notion
 
