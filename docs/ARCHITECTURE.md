@@ -126,7 +126,7 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 
 | Capa | Decisión |
 |---|---|
-| Terminal en el Mac | Terminal.app, macOS 26. Color de 24 bits. Sin OSC 52: copiar del contenedor al Mac requiere apagar "Permitir informe del ratón" en el menú Ver, seleccionar y Cmd-C. Se asigna un atajo de teclado a ese menú |
+| Terminal en el Mac | Terminal.app, macOS 26. Color de 24 bits. Sin Nerd Font: Neovim está configurado para no pedir ninguna (ver abajo). Sin OSC 52: copiar del contenedor al Mac requiere apagar "Permitir informe del ratón" en el menú Ver, seleccionar y Cmd-C. Se asigna un atajo de teclado a ese menú |
 | Editor | Neovim con `kickstart.nvim`, ratón activo, `ruff` y `basedpyright` instalados con `uv tool` |
 | Explorador de archivos | `snacks.explorer`, en `<espacio>e`. `snacks.nvim` ya entraba como proveedor de terminal de `claudecode.nvim`, así que no se añade ningún plugin |
 | Integración con agentes | `coder/claudecode.nvim` en un "hueco de agente": un módulo Lua por agente con los mismos atajos. Codex se enchufa después |
@@ -136,6 +136,37 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
 agente al arrancar.
+
+#### Neovim no necesita Nerd Font
+
+El contenedor no dibuja: emite texto y Terminal.app lo pinta con la fuente del
+Mac, Menlo o SF Mono. Ninguna de las dos trae los glifos de las Nerd Fonts, así
+que cada icono que un plugin pida sale como un cuadro con un signo de
+interrogación. Instalar una fuente dentro del contenedor no cambia nada: la que
+manda es la del Mac.
+
+Quedaban dos caminos. Uno, pedirle al humano que instale una Nerd Font en cada
+Mac y la elija en Terminal.app; funciona, pero rompe la decisión de esta misma
+sección —Terminal.app sin instalar nada— y habría que repetirlo en cada
+máquina que instancie un proyecto. El otro, no pedir esos glifos. Se tomó el
+segundo: los iconos son decoración, y el costo de no tenerlos es cero.
+
+`vim.g.have_nerd_font = false` no alcanza, y ese fue el error de partida: es
+una convención de kickstart que solo miran las partes de kickstart. Cada plugin
+trae su propia tabla de iconos y la usa igual. En `devkit/nvim/init.lua` se
+fijan a mano las de `snacks.picker` (explorador), `which-key`, `blink.cmp`
+(autocompletado), `fidget`, `gitsigns`, los diagnósticos y `listchars`. Detalle
+fino: `which-key` fusiona en profundidad, así que pasarle una tabla vacía no
+borra nada; hay que dar un texto por cada tecla.
+
+Sí se usa el bloque de dibujo de cajas (U+2500–U+257F): Menlo lo trae completo
+y de ahí salen los bordes de las ventanas flotantes y el árbol del explorador.
+
+Dos pruebas en `devkit/nvim/tests/` lo sostienen, una por cada lado del
+problema: `inventario-glifos.lua` recorre la configuración ya fusionada y falla
+si encuentra un glifo fuera de lo permitido, y `solo-ascii.lua` vuelca la
+pantalla del explorador y del autocompletado para pasarle un `grep`. Ver
+`devkit/nvim/tests/README.md`.
 
 #### Cuándo el agente propone un diff y cuándo escribe al disco
 

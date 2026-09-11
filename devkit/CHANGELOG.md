@@ -10,6 +10,21 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Neovim se ve bien en cualquier terminal, sin Nerd Font (DEVKIT-31)
+
+- El explorador, el menú de `<espacio>` y el autocompletado dibujaban cuadros
+  con un signo de interrogación: pedían glifos de Nerd Font y Terminal.app
+  pinta con la fuente del Mac, que no los tiene. `vim.g.have_nerd_font = false`
+  no bastaba, porque cada plugin trae su propia tabla de iconos.
+- `devkit/nvim/init.lua` fija en texto los iconos de `snacks.picker`,
+  `which-key`, `blink.cmp`, `fidget`, `gitsigns`, los diagnósticos y
+  `listchars`: `+` y `-` para carpetas, `M`/`A`/`?` para git, `E`/`W`/`I`/`H`
+  para diagnósticos, el nombre del tipo en el autocompletado. Se mantiene el
+  dibujo de cajas de bordes y árbol, que Menlo sí trae.
+- Dos pruebas nuevas en `devkit/nvim/tests/`, con su `README.md`. No se añadió
+  ningún plugin y `nvim-pack-lock.json` no cambia.
+- El cambio entra por el `Dockerfile`: se activa al reconstruir la imagen.
+
 ### En modo dev la imagen se construye desde el workspace (DEVKIT-30)
 
 - El contexto de build es `~/.devkit/<proyecto>/template/`, una copia del
