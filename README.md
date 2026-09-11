@@ -83,7 +83,7 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 | `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
 | `v`, `g`, `gs`, `gl`, `ll` | Alias: `nvim`, `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
-| `/opt/devkit/scripts/watch-test.sh` | Prueba la tabla de decisión de `watch.sh` con PRs sintéticos; sale con 1 si un caso falla. |
+| `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -118,9 +118,37 @@ la que quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin
 PR` si no lo hay, `PR desconocido` si `gh` no respondió). Es una observación de
 git y GitHub, no del Estado de la card: una rama de card sin PR es la señal de
 que la ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la
-card. Variables: `DEVKIT_WATCH_INTERVAL` (segundos, 300) y
-`DEVKIT_WATCH_MAX_CYCLES` (3). Para ver qué decidiría sobre un PR sin esperar
-al bucle:
+card.
+
+**Cuota agotada.** Si un `claude -p` muere porque se acabó la cuota de la
+suscripción, el agente no puede reaccionar: sin cuota no habla con el modelo y
+ninguna skill sirve, `task-block` incluida. Reacciona el bucle, que es bash. Lo
+reconoce por el código de salida distinto de cero más el aviso del límite en el
+log de la skill, saca de ahí la hora en que se reinicia la ventana y deja dos
+líneas en `watch.log`:
+
+```
+cuota agotada: pr-review-31-a1b2c3d en pausa hasta 2026-09-11T20:00:00Z (intento 2 de 3)
+cuota reanudada: relanzando pr-review-31-a1b2c3d
+```
+
+La espera corre en segundo plano, así que el bucle sigue atendiendo otros PRs,
+y el relanzamiento usa el mismo prompt y los mismos flags: las skills son
+reanudables. Si el aviso no trae hora legible, espera lo que diga
+`DEVKIT_WATCH_QUOTA_WAIT` y lo dice en el log. Un solo relanzamiento en curso
+por skill y PR, y como mucho `DEVKIT_WATCH_QUOTA_RETRIES` intentos; al llegar
+al tope escribe `sin más intentos` y lo deja para ti. No toca Notion ni comenta
+en el PR: una card puede morir antes de tener PR y el mecanismo vale igual para
+todas. Desde este cambio solo corre un `claude -p` a la vez: un relanzamiento
+puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el mismo
+workspace se pisarían la rama; el que llega segundo escribe `espera: otra skill
+ocupa el workspace` y arranca al quedar libre.
+
+Variables: `DEVKIT_WATCH_INTERVAL` (segundos, 300), `DEVKIT_WATCH_MAX_CYCLES`
+(3), `DEVKIT_WATCH_QUOTA_RETRIES` (3), `DEVKIT_WATCH_QUOTA_WAIT` (1800, la
+espera fija), `DEVKIT_WATCH_QUOTA_MIN_WAIT` (60) y `DEVKIT_WATCH_QUOTA_MAX_WAIT`
+(86400, tope por si el aviso trae una hora absurda). Para ver qué decidiría
+sobre un PR sin esperar al bucle:
 
 ```sh
 gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
@@ -135,7 +163,12 @@ La tabla de decisión tiene una prueba reproducible sin GitHub:
 `bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
 con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación, y
 la rama de cierre con y sin marcador) contra `watch.sh --decide` y
-`--decide-merged`, y falla si alguno no da la acción esperada.
+`--decide-merged`, y falla si alguno no da la acción esperada. El mismo archivo
+prueba la cuota agotada sin gastar cuota: `--quota-hit` y `--quota-reset`
+reciben avisos de límite de mentira y comprueban la detección y la hora
+extraída, y `--run-skill` corre `run_skill` contra un doble de `claude` que
+muere por cuota la primera vez, para ver las dos líneas del log, el
+relanzamiento y el tope de intentos.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee

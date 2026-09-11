@@ -332,6 +332,7 @@ revisión.
 | `watch.sh`: `CAMBIOS` para el head, sin respuesta | Máquina | Lanza `task-fix` headless: un commit por hallazgo, push, bloque `devkit-fixes`. El head nuevo vuelve a la fila anterior |
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
 | Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y lanza `task-block`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
+| `watch.sh`: una skill muere por cuota agotada | Máquina | Anota la pausa en `watch.log` y relanza la misma skill al reiniciarse la ventana. La card no cambia de Estado: solo falta tiempo |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
 | `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Lanza `task-close` headless; cierra la hija, documenta, deja el marcador `devkit-closed` en el PR y arranca la siguiente |
 | Todas las hijas en Hecha | Automático | La Épica pasa a Hecha con una entrada de Documentación consolidada |
@@ -362,6 +363,33 @@ minutos de espera. La corrección es la misma idea que el resto del ciclo:
 terminar, y `watch.sh` omite los PRs mergeados que ya lo llevan. Se descartó
 persistir `launched` en disco: guardaría en el contenedor un estado que ya
 existe en GitHub, y no serviría en otra máquina ni tras un `devkit rebuild`.
+
+La otra forma de perder trabajo no era una decisión equivocada sino una muerte
+súbita: un `claude -p` que agota la cuota de la suscripción termina con código
+distinto de cero y deja la card `En progreso` sin nadie trabajándola
+(DEVKIT-27). El agente no puede arreglarlo, porque sin cuota ya no habla con el
+modelo y ninguna skill corre, `task-block` incluida; y Claude Code no ofrece
+comando ni endpoint para consultar la cuota desde un script, ni hook para este
+fallo. Lo único legible es el aviso del límite en el log de la skill, así que
+quien reacciona es `watch.sh`, que es bash y sobrevive: `run_skill` reconoce el
+aviso, lee la hora de reinicio (el `Claude AI usage limit reached|<epoch>` que
+publica Claude Code, o la hora del texto para el humano, o una espera fija si
+no hay ninguna), escribe `cuota agotada: <skill> en pausa hasta <hora UTC>` y
+`cuota reanudada: relanzando <skill>`, y relanza la misma skill con el mismo
+prompt y los mismos flags. La espera corre en segundo plano para que el bucle
+siga atendiendo otros PRs, con un tope de intentos. La entrada de `launched` se
+reescribe como `cuota:<clave>` mientras dura la pausa: sigue contando como
+lanzada, así que el bucle no arranca una segunda copia, y vuelve a su forma
+justo antes del relanzamiento, así que tampoco lo impide. Como el relanzamiento
+puede despertar mientras el bucle atiende otro PR, `run_skill` toma un candado:
+un solo `claude -p` a la vez sobre el workspace.
+
+Se dejó fuera a propósito todo aviso: no se mueve la card a `Bloqueada` ni se
+comenta en el PR. `Bloqueada` significa "necesita al humano", y aquí solo hace
+falta tiempo; usarla obligaría al humano a devolver la card a mano. Y el PR no
+sirve de canal porque una card puede morir antes de tener PR, y el mecanismo
+debe valer igual para todas. Avisar desde bash exigiría un segundo camino a
+Notion, con su propio token de integración: es una decisión de diseño aparte.
 
 `/run/devkit/poke` es el otro archivo del bucle en tmpfs, y tampoco guarda
 estado (DEVKIT-26): `task-submit` y `task-fix` lo tocan al terminar, `watch.sh`
