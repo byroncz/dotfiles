@@ -316,9 +316,10 @@ Dos niveles en la misma base de datos, con subelementos nativos de Notion:
 
 Estados: Backlog, Lista, En progreso, Revisión automática, Lista para merge,
 Hecha, Bloqueada. Entre `Revisión automática` y `Lista para merge` corre el
-ciclo de revisor y corrector de DEVKIT-9: `watch.sh` lo orquesta cada cinco
-minutos leyendo los marcadores del PR, y el humano solo ve PRs que ya pasaron
-la revisión.
+ciclo de revisor y corrector de DEVKIT-9: `watch.sh` lo orquesta leyendo los
+marcadores del PR cada cinco minutos, o en segundos cuando la skill anterior
+lo despierta con `/run/devkit/poke`, y el humano solo ve PRs que ya pasaron la
+revisión.
 
 | Paso | Quién | Qué pasa |
 |---|---|---|
@@ -361,6 +362,18 @@ minutos de espera. La corrección es la misma idea que el resto del ciclo:
 terminar, y `watch.sh` omite los PRs mergeados que ya lo llevan. Se descartó
 persistir `launched` en disco: guardaría en el contenedor un estado que ya
 existe en GitHub, y no serviría en otra máquina ni tras un `devkit rebuild`.
+
+`/run/devkit/poke` es el otro archivo del bucle en tmpfs, y tampoco guarda
+estado (DEVKIT-26): `task-review` y `task-fix` lo tocan al terminar, `watch.sh`
+duerme en tramos de cinco segundos en vez de un `sleep` seguido y despierta en
+cuanto aparece, y lo borra antes de consultar GitHub para no perder un aviso
+llegado durante la consulta. Solo adelanta el reloj entre dos vueltas: no salta
+la guarda de `launched` y la decisión sigue saliendo de los marcadores del PR,
+así que el revisor sigue naciendo en un proceso sin memoria del autor y el
+autor sigue sin decidir cuándo lo revisan. Por eso se descartó que
+`task-review` invocara `pr-review` como skill: compartiría su conversación y
+rompería esa independencia. Perder el aviso no rompe nada, solo devuelve la
+espera al intervalo completo, y por eso las skills lo tocan con `|| true`.
 
 Reglas:
 

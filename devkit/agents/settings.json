@@ -38,6 +38,7 @@
       "Bash(rg:*)",
       "Bash(fd:*)",
       "Bash(devkit-net-denied:*)",
+      "Bash(touch /run/devkit/poke)",
       "mcp__plugin_Notion_notion",
       "mcp__plugin_Notion_notion__*"
     ],

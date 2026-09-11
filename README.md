@@ -100,6 +100,13 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `/task-close <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
 | Mergeado y con marcador `devkit-closed` | Nada: una línea `ya cerrado` en el log |
 
+El bucle no siempre espera el intervalo completo: duerme en tramos de 5 s y
+despierta en cuanto existe `/run/devkit/poke`, que `task-review` y `task-fix`
+crean con `touch` como último paso. Así el ciclo revisar → corregir → revisar
+encadena en segundos en vez de perder hasta 5 min por salto. El aviso solo
+adelanta el reloj: no lanza nada, la decisión sigue saliendo de los marcadores
+del PR, y si el `touch` falla el bucle llega igual en el siguiente intervalo.
+
 Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última línea
 trae el costo y los tokens, que es la medida de cada ciclo. Al terminar cada
 `claude -p`, el bucle registra además una línea `estado:` con la rama en la que

@@ -100,8 +100,13 @@ trabajo de `pr-review`.
    el `headRefOid` que leíste en el paso 2.
 9. `Estado` de la card = `Revisión automática`, venga de ahí o de
    `Lista para merge`. No comentes en la card: el ciclo vive en el PR.
-10. Limpia la copia de trabajo si la creaste (paso 4) y responde con una
-    línea: PR, hallazgos atendidos y descartados, head nuevo.
+10. Limpia la copia de trabajo si la creaste (paso 4).
+11. `touch /run/devkit/poke 2>/dev/null || true`. Despierta a `watch.sh`, que
+    duerme en tramos de 5 s, para que no espere el resto del intervalo antes
+    de revisar la corrección. Es solo un aviso, no lanza nada ni decide nada:
+    si el archivo no se puede crear, el bucle llega igual en el siguiente
+    intervalo.
+12. Responde con una línea: PR, hallazgos atendidos y descartados, head nuevo.
 
 ## Reglas
 
