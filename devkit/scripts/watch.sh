@@ -15,6 +15,10 @@
 # del contenedor; cada skill es idempotente, así que repetir tras un rebuild no
 # daña, pero cuesta dinero y tiempo: por eso el cierre también deja marcador.
 #
+# Si un `claude -p` muere porque se agotó la cuota de la suscripción, el bucle
+# lo anota, espera a que la ventana se reinicie y relanza la misma skill con el
+# mismo prompt, en segundo plano. Ver "Cuota agotada" más abajo.
+#
 # /run/devkit/poke: `task-submit` y `task-fix` lo tocan (`touch`) como último
 # paso, para no dejar el ciclo revisar → corregir → revisar esperando el
 # intervalo completo sin que nadie trabaje. El bucle duerme en tramos de 5 s y
@@ -24,14 +28,23 @@
 # Uso de prueba: `bash watch.sh --decide < pr.json` imprime la decisión para
 # el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
 # `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
-# de `gh pr view <N> --json comments`.
+# de `gh pr view <N> --json comments`. Los hooks `--quota-hit`, `--quota-reset`
+# y `--run-skill` prueban el relanzamiento por cuota agotada; ver watch-test.sh.
 set -u
-WS=/workspace
-RUN_DIR=/run/devkit
+WS="${DEVKIT_WS:-/workspace}"
+RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 LAUNCHED="$RUN_DIR/launched"
 POKE="$RUN_DIR/poke"
+LOCK="$RUN_DIR/skill.lock"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
+# El binario del agente sale a una variable para que watch-test.sh pueda
+# sustituirlo por un doble y probar el relanzamiento sin gastar cuota.
+CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
+QUOTA_RETRIES="${DEVKIT_WATCH_QUOTA_RETRIES:-3}"
+QUOTA_WAIT="${DEVKIT_WATCH_QUOTA_WAIT:-1800}"
+QUOTA_MIN_WAIT="${DEVKIT_WATCH_QUOTA_MIN_WAIT:-60}"
+QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cuatro campos separados por tabulador (acción, head, referencia,
@@ -133,10 +146,17 @@ cd "$WS" 2>/dev/null || exit 0
 mkdir -p "$RUN_DIR"
 touch "$LAUNCHED"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
-log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 
-launched() { grep -qxF "$1" "$LAUNCHED"; }
+# `cuota:<clave>` es la misma entrada, reescrita mientras la skill espera a que
+# se reinicie la cuota (DEVKIT-27): para el bucle cuenta como lanzada, así que
+# no nace una segunda copia en paralelo, y el relanzamiento la restituye al
+# despertar. La carrera entre el bucle y el relanzamiento al reescribir el
+# archivo es inocua: lo peor que pasa es repetir o perder una línea, y toda
+# skill es idempotente.
+launched() { grep -qxF "$1" "$LAUNCHED" || grep -qxF "cuota:$1" "$LAUNCHED"; }
+paused() { grep -qxF "cuota:$1" "$LAUNCHED"; }
 mark() { echo "$1" >> "$LAUNCHED"; }
+unmark() { grep -vxF "$1" "$LAUNCHED" > "$LAUNCHED.tmp" 2>/dev/null; mv "$LAUNCHED.tmp" "$LAUNCHED"; }
 
 # Duerme hasta completar $1 segundos, en tramos de 5, o hasta que aparezca
 # $POKE. Lo borra al despertar, antes de que el bucle vuelva a consultar
@@ -183,17 +203,134 @@ work_state() {
   log "  estado: ${key:-sin Clave} en $branch, $ahead commits sobre main, $pr"
 }
 
-# run_skill <nombre del log> <prompt>. Salida JSON de claude -p: la última
-# línea trae costo, tokens y turnos, que es la medida de cada ciclo. Al
-# terminar se registra el estado del trabajo, para que un corte sea visible.
+# --- Cuota agotada de la suscripción (DEVKIT-27) ----------------------------
+# Un `claude -p` que se queda sin cuota muere con rc distinto de cero y deja el
+# aviso del límite en su log. El agente ya no puede reaccionar (sin cuota no
+# habla con el modelo, así que ninguna skill sirve, `task-block` incluida);
+# quien reacciona es este bucle, que es bash y sobrevive: anota la pausa, espera
+# a que la ventana se reinicie y relanza la misma skill con el mismo prompt y
+# los mismos flags. No se toca Notion ni el PR: una card puede morir antes de
+# tener PR y el mecanismo debe valer igual para todas.
+
+# Formas conocidas del aviso. Claude Code no ofrece comando ni endpoint para
+# consultar la cuota desde un script, ni hook para este fallo: el texto del log
+# es lo único legible. Si aparece una forma nueva, se añade aquí y se cubre con
+# un caso en watch-test.sh.
+QUOTA_RE='usage limit reached|limit will reset|(hit|reached) your (usage |session |weekly |5-hour )*limit|(session|weekly|5-hour|five-hour|opus) limit reached'
+
+quota_hit() { grep -qiE "$QUOTA_RE" "$1" 2>/dev/null; }
+
+# Hora en que se reinicia la cuota. Lee el texto del log por stdin e imprime el
+# epoch en segundos; no imprime nada si no encuentra ninguna hora, y entonces
+# quien llama usa la espera fija.
+quota_reset_epoch() {
+  local text stamp frag tz day hhmm hh mm ampm spec now target
+  text=$(tr '\n' ' ' | tr -s ' ')
+
+  # 1. Forma legible por máquina: `Claude AI usage limit reached|1757558400`,
+  #    el epoch en segundos (o en milisegundos, de ahí los 13 dígitos).
+  stamp=$(printf '%s' "$text" | grep -oiE 'usage limit reached\|[0-9]{9,13}' | head -1)
+  if [ -n "$stamp" ]; then
+    stamp=${stamp##*|}
+    [ "${#stamp}" -ge 12 ] && stamp=$((stamp / 1000))
+    printf '%s' "$stamp"
+    return 0
+  fi
+
+  # 2. Forma para el humano: "resets 3pm (America/Los_Angeles)", "your limit
+  #    will reset at 10:30am", "weekly limit reached ∙ resets Feb 3 at 10am".
+  frag=$(printf '%s' "$text" | grep -oiE 'reset[s]?[^.;]{0,60}' | head -1)
+  [ -n "$frag" ] || return 1
+  tz=$(printf '%s' "$frag" | grep -oE '[A-Za-z]+/[A-Za-z_]+' | head -1)
+  day=$(printf '%s' "$frag" | grep -oiE '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* [0-9]{1,2}' | head -1)
+  hhmm=$(printf '%s' "$frag" | grep -oiE '[0-9]{1,2}(:[0-9]{2})? ?(am|pm)' | head -1)
+  if [ -n "$hhmm" ]; then
+    ampm=$(printf '%s' "$hhmm" | grep -oiE 'am|pm' | tr '[:upper:]' '[:lower:]')
+    mm=$(printf '%s' "$hhmm" | grep -oE ':[0-9]{2}' | tr -d ':')
+    hh=$(printf '%s' "$hhmm" | grep -oE '^[0-9]{1,2}')
+    hh=$((10#$hh % 12))
+    [ "$ampm" = "pm" ] && hh=$((hh + 12))
+  else
+    hhmm=$(printf '%s' "$frag" | grep -oE '[0-9]{1,2}:[0-9]{2}' | head -1)
+    [ -n "$hhmm" ] || return 1
+    hh=${hhmm%%:*}
+    mm=${hhmm##*:}
+  fi
+  spec=$(printf '%02d:%02d' "$((10#$hh))" "$((10#${mm:-0}))")
+  [ -n "$day" ] && spec="$day $spec"
+  # Sin zona en el mensaje se usa la del contenedor: es la única disponible y
+  # una hora mal interpretada solo alarga o acorta la espera, nunca pierde el
+  # relanzamiento, que además está acotado por QUOTA_MIN_WAIT y QUOTA_MAX_WAIT.
+  if [ -n "$tz" ]; then
+    target=$(TZ="$tz" date -d "$spec" +%s 2>/dev/null) || return 1
+  else
+    target=$(date -d "$spec" +%s 2>/dev/null) || return 1
+  fi
+  [ -n "$target" ] || return 1
+  now=$(date +%s)
+  # "3pm" sin fecha y ya pasado es el de mañana.
+  if [ -z "$day" ] && [ "$target" -le "$now" ]; then
+    target=$((target + 86400))
+  fi
+  printf '%s' "$target"
+}
+
+# Pausa por cuota agotada: anota hasta cuándo y relanza al reanudarse. La
+# espera corre en segundo plano para que el bucle siga atendiendo otros PRs; el
+# candado de run_skill impide que el relanzamiento coincida con otra skill.
+quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intento> <log>
+  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 epoch now wait until
+  if [ "$key" != "-" ] && paused "$key"; then
+    log "cuota agotada: $name ya tiene un relanzamiento programado; no se duplica"
+    return
+  fi
+  if [ "$attempt" -ge "$QUOTA_RETRIES" ]; then
+    log "cuota agotada: $name sin más intentos (tope de $QUOTA_RETRIES); no se relanza, ver $logf"
+    return
+  fi
+  now=$(date +%s)
+  epoch=$(quota_reset_epoch < "$logf")
+  if [ -n "$epoch" ]; then
+    wait=$((epoch - now))
+  else
+    wait=$QUOTA_WAIT
+    log "cuota agotada: $name sin hora de reinicio legible en el aviso; espera fija de ${QUOTA_WAIT}s"
+  fi
+  [ "$wait" -lt "$QUOTA_MIN_WAIT" ] && wait=$QUOTA_MIN_WAIT
+  [ "$wait" -gt "$QUOTA_MAX_WAIT" ] && wait=$QUOTA_MAX_WAIT
+  until=$(date -u -d "@$((now + wait))" +%FT%TZ)
+  if [ "$key" != "-" ]; then unmark "$key"; mark "cuota:$key"; fi
+  log "cuota agotada: $name en pausa hasta $until (intento $((attempt + 1)) de $QUOTA_RETRIES)"
+  (
+    sleep "$wait"
+    if [ "$key" != "-" ]; then unmark "cuota:$key"; mark "$key"; fi
+    log "cuota reanudada: relanzando $name"
+    run_skill "$name" "$prompt" "$key" "$((attempt + 1))"
+  ) &
+}
+
+# run_skill <nombre del log> <prompt> [clave de launched] [intento]. Salida JSON
+# de claude -p: la última línea trae costo, tokens y turnos, que es la medida de
+# cada ciclo. Al terminar se registra el estado del trabajo, para que un corte
+# sea visible, y si el corte fue por cuota se programa el relanzamiento.
 run_skill() {
-  local name=$1 prompt=$2 logf rc summary
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary
   logf="$RUN_DIR/$name.log"
-  claude -p "$prompt" --output-format json \
+  # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
+  # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
+  # mismo workspace se pisarían la rama.
+  exec 9>"$LOCK"
+  if ! flock -n 9; then
+    log "$name espera: otra skill ocupa el workspace"
+    flock 9
+  fi
+  "$CLAUDE_BIN" -p "$prompt" --output-format json \
     --permission-mode acceptEdits \
     --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" "mcp__plugin_Notion_notion" \
     >"$logf" 2>&1
   rc=$?
+  flock -u 9
+  exec 9>&-
   summary=$(tail -1 "$logf" | jq -r '
     "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
   [ -n "$summary" ] || summary="$(tail -1 "$logf" | cut -c1-160)"
@@ -203,6 +340,9 @@ run_skill() {
     log "$name falló (rc=$rc): $summary; ver $logf"
   fi
   work_state
+  if [ $rc -ne 0 ] && quota_hit "$logf"; then
+    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf"
+  fi
   return $rc
 }
 
@@ -215,6 +355,31 @@ key_of() {  # key_of <título> <código>
   [ "${key##*-}" != "0" ] || return 1
   printf '%s' "$key"
 }
+
+# Hooks de prueba del relanzamiento por cuota, sin GitHub y sin gastar cuota:
+#   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
+#   --quota-reset           imprime el epoch de reinicio que lee de ese texto
+#   --run-skill <n> <p>     una ejecución de run_skill, esperando su relanzamiento
+# Los tres se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR. Ver watch-test.sh.
+case "${1:-}" in
+  --quota-hit)
+    QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
+    quota_hit "$QHIT_TMP"; QHIT_RC=$?
+    rm -f "$QHIT_TMP"
+    exit $QHIT_RC
+    ;;
+  --quota-reset)
+    quota_reset_epoch
+    exit 0
+    ;;
+  --run-skill)
+    run_skill "${2:-prueba}" "${3:-/noop}" "${4:--}"
+    wait
+    exit 0
+    ;;
+esac
+
+log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 
 while true; do
   # Se relee en cada vuelta: en un proyecto nuevo, devkit.toml arranca con
@@ -242,13 +407,13 @@ while true; do
             launched "revisar:$num:$head" && continue
             mark "revisar:$num:$head"
             log "PR #$num ($key) head $short sin informe: lanzando pr-review"
-            run_skill "pr-review-$num-$short" "/pr-review $num"
+            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head"
             ;;
           fix)
             launched "fix:$num:$ref" && continue
             mark "fix:$num:$ref"
             log "PR #$num ($key) CAMBIOS en $short: lanzando task-fix"
-            run_skill "task-fix-$num-$short" "/task-fix $key"
+            run_skill "task-fix-$num-$short" "/task-fix $key" "fix:$num:$ref"
             ;;
           fix-humano)
             launched "fix-humano:$num:$ref" && continue
@@ -257,7 +422,7 @@ while true; do
             log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
             # La fecha del comentario en el nombre: un PR puede recibir varios
             # comentarios humanos y cada ejecución conserva su log.
-            run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text"
+            run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "fix-humano:$num:$ref"
             ;;
           bloquear)
             launched "bloquear:$num:$head" && continue
@@ -269,7 +434,7 @@ while true; do
 Tres ciclos de revisión y corrección sin veredicto OK. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
 Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
               || log "PR #$num: no se pudo publicar el marcador devkit-block"
-            run_skill "task-block-$num" "/task-block $key Tres ciclos de revisión y corrección sin veredicto OK en el PR $url; el bucle no lo toca hasta que decidas"
+            run_skill "task-block-$num" "/task-block $key Tres ciclos de revisión y corrección sin veredicto OK en el PR $url; el bucle no lo toca hasta que decidas" "bloquear:$num:$head"
             ;;
           bloqueado|nada) ;;
           *) log "PR #$num: decisión desconocida '$action'" ;;
@@ -299,7 +464,7 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
         # repiten; task-close es idempotente.
         mark "cerrar:$num"
         log "PR #$num mergeado ($key): lanzando task-close"
-        run_skill "task-close-$num" "/task-close $key $url"
+        run_skill "task-close-$num" "/task-close $key $url" "cerrar:$num"
       done
   fi
   sleep_or_poke "$INTERVAL"

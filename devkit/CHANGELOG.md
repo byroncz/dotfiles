@@ -10,6 +10,40 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### El bucle relanza la skill que murió por cuota agotada (DEVKIT-27)
+
+- Un `claude -p` que agota la cuota de la suscripción muere con código distinto
+  de cero y deja la card `En progreso` sin nadie trabajándola. El agente no
+  puede arreglarlo: sin cuota no habla con el modelo y ninguna skill corre,
+  `task-block` incluida. Ahora reacciona `watch.sh`, que es bash y sobrevive.
+- `run_skill` reconoce el fallo por el código de salida más el aviso del límite
+  en el log de la skill, saca de ahí la hora de reinicio y deja dos líneas en
+  `watch.log`: `cuota agotada: <skill> en pausa hasta <hora UTC>` y
+  `cuota reanudada: relanzando <skill>`. Relanza con el mismo prompt y los
+  mismos flags; las skills ya eran reanudables.
+- La hora sale del `Claude AI usage limit reached|<epoch>` que publica Claude
+  Code, o de la hora del texto para el humano ("resets 3pm
+  (America/Los_Angeles)", "resets Feb 3 at 10am"). Si no hay ninguna, espera lo
+  que diga `DEVKIT_WATCH_QUOTA_WAIT` (30 min) y lo dice en el log.
+- La espera corre en segundo plano: el bucle sigue atendiendo otros PRs. Un
+  solo relanzamiento en curso por skill y PR, y como mucho
+  `DEVKIT_WATCH_QUOTA_RETRIES` (3) intentos. La entrada de `launched` se
+  reescribe como `cuota:<clave>` mientras dura la pausa, para que el bucle no
+  lance una segunda copia, y vuelve a su forma justo antes del relanzamiento.
+- `run_skill` toma un candado: un solo `claude -p` a la vez sobre el workspace.
+  Sin él, un relanzamiento que despierta mientras el bucle atiende otro PR
+  pondría dos agentes a cambiar de rama en el mismo repo.
+- No se toca Notion ni se comenta en el PR. `Bloqueada` significa "necesita al
+  humano" y aquí solo falta tiempo; y una card puede morir antes de tener PR,
+  así que el PR no sirve de canal para todas. Decisión del humano del
+  2026-09-11; el aviso llegará cuando exista un canal que no dependa del PR.
+- Variables nuevas: `DEVKIT_WATCH_QUOTA_RETRIES`, `DEVKIT_WATCH_QUOTA_WAIT`,
+  `DEVKIT_WATCH_QUOTA_MIN_WAIT` y `DEVKIT_WATCH_QUOTA_MAX_WAIT`. Reemplazo
+  directo: nada que tocar en `devkit.env` ni en los volúmenes.
+- `watch-test.sh` prueba todo esto sin gastar cuota, con los hooks nuevos
+  `--quota-hit`, `--quota-reset` y `--run-skill` de `watch.sh`: avisos de
+  límite de mentira y un doble de `claude` que muere por cuota la primera vez.
+
 ### Dos skills se renombran para que el nombre diga lo que hacen (DEVKIT-10)
 
 - Cambio de nombre, sin cambio de comportamiento. Mapa viejo → nuevo:
