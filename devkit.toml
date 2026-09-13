@@ -2,5 +2,7 @@
 template = "dev"
 project  = "DEVKIT"
 # Provisional para la exploración DEVKIT-38: descarga de la extensión Claude
-# Code desde Open VSX. Se retira si el veredicto es "no" o al cerrar la Épica.
-domains  = ["open-vsx.org"]
+# Code desde Open VSX. open-vsx.org sirve el manifiesto pero redirige la
+# descarga del .vsix a su CDN, openvsx.eclipsecontent.org. Se retira si el
+# veredicto es "no" o al cerrar la Épica.
+domains  = ["open-vsx.org", "openvsx.eclipsecontent.org"]
