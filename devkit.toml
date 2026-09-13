@@ -1,3 +1,6 @@
 [devkit]
 template = "dev"
 project  = "DEVKIT"
+# Provisional para la exploración DEVKIT-38: descarga de la extensión Claude
+# Code desde Open VSX. Se retira si el veredicto es "no" o al cerrar la Épica.
+domains  = ["open-vsx.org"]

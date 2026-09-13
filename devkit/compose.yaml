@@ -62,6 +62,12 @@ services:
       # proxy: Mac localhost:54545 -> proxy:54546 -> dev:54546 -> 127.0.0.1:54545
       # dentro de dev, donde escucha Claude Code. Cada salto lo hace socat.
       - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
+      # Provisional para la exploración DEVKIT-38: editor VS Code en el
+      # contenedor. Mismo mecanismo que el retorno OAuth: Mac localhost:3000 ->
+      # proxy:3001 -> dev:3001 -> 127.0.0.1:3000 dentro de dev, donde escucha
+      # openvscode-server. Los saltos por socat se corren a mano dentro de cada
+      # contenedor, no se persisten en entrypoint.sh. Se retira con la card.
+      - "127.0.0.1:${DEVKIT_VSCODE_PORT:-3000}:3001"
     networks:
       - internal
       - egress
