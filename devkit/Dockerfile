@@ -21,6 +21,8 @@ ARG GH_VERSION=2.100.0
 ARG RCLONE_VERSION=1.75.1
 ARG BWS_VERSION=2.1.0
 ARG STARSHIP_VERSION=1.24.2
+ARG OPENVSCODE_VERSION=1.109.5
+ARG CLAUDE_CODE_EXT_VERSION=2.1.270
 ARG TOOLS_PYTHON=3.14
 ARG USERNAME=dev
 ARG USER_UID=1000
@@ -49,8 +51,8 @@ RUN apt-get update \
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \
-      x86_64)  nvim_arch=x86_64; gh_arch=amd64; rc_arch=amd64; triple=x86_64-unknown-linux-gnu; st_triple=x86_64-unknown-linux-musl ;; \
-      aarch64) nvim_arch=arm64;  gh_arch=arm64; rc_arch=arm64; triple=aarch64-unknown-linux-gnu; st_triple=aarch64-unknown-linux-musl ;; \
+      x86_64)  nvim_arch=x86_64; gh_arch=amd64; rc_arch=amd64; triple=x86_64-unknown-linux-gnu; st_triple=x86_64-unknown-linux-musl; ovs_arch=x64 ;; \
+      aarch64) nvim_arch=arm64;  gh_arch=arm64; rc_arch=arm64; triple=aarch64-unknown-linux-gnu; st_triple=aarch64-unknown-linux-musl; ovs_arch=arm64 ;; \
       *) echo "arquitectura no soportada: $arch" >&2; exit 1 ;; \
     esac; \
     tmp="$(mktemp -d)"; cd "$tmp"; \
@@ -76,9 +78,14 @@ RUN set -eux; \
     curl -fsSLo starship.tar.gz "https://github.com/starship/starship/releases/download/v${STARSHIP_VERSION}/starship-${st_triple}.tar.gz"; \
     tar -xzf starship.tar.gz; install -m 0755 starship /usr/local/bin/starship; \
     \
+    # openvscode-server (editor VS Code en el navegador, ver DEVKIT-38)
+    curl -fsSLo ovs.tar.gz "https://github.com/gitpod-io/openvscode-server/releases/download/openvscode-server-v${OPENVSCODE_VERSION}/openvscode-server-v${OPENVSCODE_VERSION}-linux-${ovs_arch}.tar.gz"; \
+    tar -xzf ovs.tar.gz; mv "openvscode-server-v${OPENVSCODE_VERSION}-linux-${ovs_arch}" /opt/openvscode-server; \
+    ln -s /opt/openvscode-server/bin/openvscode-server /usr/local/bin/openvscode-server; \
+    \
     cd /; rm -rf "$tmp"; \
     nvim --version | head -1; gh --version | head -1; rclone version | head -1; \
-    bws --version; starship --version | head -1
+    bws --version; starship --version | head -1; openvscode-server --version
 
 # uv y uvx desde la imagen oficial de Astral.
 COPY --from=uv /uv /uvx /usr/local/bin/
@@ -113,6 +120,23 @@ WORKDIR /workspace
 RUN curl -fsSL https://claude.ai/install.sh | bash \
  && claude --version
 
+# --- Extensión Claude Code para openvscode-server, desde Open VSX ----------
+# Versionada en el template (ARG de arriba), instalada al build: nunca a mano
+# en el contenedor. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
+# (redirección de descarga) van en `domains` de devkit.toml.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  ovx_platform=linux-x64 ;; \
+      aarch64) ovx_platform=linux-arm64 ;; \
+      *) echo "arquitectura no soportada: $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/claude-code.vsix \
+      "https://open-vsx.org/api/Anthropic/claude-code/${ovx_platform}/${CLAUDE_CODE_EXT_VERSION}/file/Anthropic.claude-code-${CLAUDE_CODE_EXT_VERSION}@${ovx_platform}.vsix"; \
+    openvscode-server --install-extension /tmp/claude-code.vsix \
+      --server-data-dir "$HOME/.openvscode-server/data" \
+      --extensions-dir "$HOME/.openvscode-server/extensions"; \
+    rm -f /tmp/claude-code.vsix
+
 # --- Herramientas de Python para el editor ---------------------------------
 # Un Python fijo solo para las herramientas. El de cada proyecto lo decide su
 # devkit.toml (clave `python`) al arrancar.
@@ -126,6 +150,7 @@ COPY --chown=${USER_UID}:${USER_GID} zsh/zshrc      /home/${USERNAME}/.zshrc
 COPY --chown=${USER_UID}:${USER_GID} zsh/starship.toml /home/${USERNAME}/.config/starship.toml
 COPY --chown=${USER_UID}:${USER_GID} tmux/tmux.conf /home/${USERNAME}/.tmux.conf
 COPY --chown=${USER_UID}:${USER_GID} nvim/          /home/${USERNAME}/.config/nvim/
+COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/data/User/settings.json
 
 # Plugins de Neovim instalados en la imagen. Versiones fijadas por
 # nvim/nvim-pack-lock.json (lockfile de vim.pack, Neovim 0.12).
@@ -145,6 +170,7 @@ COPY --chown=${USER_UID}:${USER_GID} nvim/      /opt/devkit/image/nvim/
 COPY --chown=${USER_UID}:${USER_GID} tmux/      /opt/devkit/image/tmux/
 COPY --chown=${USER_UID}:${USER_GID} zsh/       /opt/devkit/image/zsh/
 COPY --chown=${USER_UID}:${USER_GID} proxy/     /opt/devkit/image/proxy/
+COPY --chown=${USER_UID}:${USER_GID} vscode/    /opt/devkit/image/vscode/
 
 ENTRYPOINT ["/opt/devkit/entrypoint.sh"]
 CMD ["sleep", "infinity"]

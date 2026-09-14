@@ -19,4 +19,7 @@ fi
 touch /var/log/tinyproxy/tinyproxy.log; chown tinyproxy:tinyproxy /var/log/tinyproxy/tinyproxy.log
 # Retorno OAuth de MCP: lo que llega del Mac al 54546 va al contenedor dev.
 socat TCP-LISTEN:54546,fork,reuseaddr TCP:dev:54546 &
+# Editor VS Code: lo que llega del Mac al 3001 va al contenedor dev, mismo
+# patrón que el retorno OAuth.
+socat TCP-LISTEN:3001,fork,reuseaddr TCP:dev:3001 &
 exec tinyproxy -d -c "$conf"

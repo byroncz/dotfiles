@@ -8,9 +8,9 @@
 #  `entrypoint.sh` la usa en modo dev para avisar cuándo hace falta un
 #  `devkit recreate`. El arranque relee del workspace `entrypoint.sh` y
 #  `scripts/`, así que un cambio ahí se prueba con solo recrear el contenedor;
-#  `Dockerfile`, `nvim/`, `tmux/`, `zsh/` y `proxy/` se congelan en la imagen
-#  cuando se construye, y hasta que no se reconstruye siguen siendo los de
-#  antes. Esa asimetría es la que engañaba en DEVKIT-30.
+#  `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/` y `vscode/` se congelan en
+#  la imagen cuando se construye, y hasta que no se reconstruye siguen siendo
+#  los de antes. Esa asimetría es la que engañaba en DEVKIT-30.
 #
 #  Imprime un nombre por línea y sale con 0 aunque haya diferencias: es una
 #  sonda del arranque, no una compuerta que deba tumbarlo.
@@ -19,7 +19,7 @@ set -u
 
 # Lo que el Dockerfile copia a la imagen o usa para construirla. Única fuente
 # de esta lista: si el Dockerfile copia algo nuevo, se añade aquí.
-ITEMS='Dockerfile nvim tmux zsh proxy'
+ITEMS='Dockerfile nvim tmux zsh proxy vscode'
 
 drift() {  # drift <dir del template> <copia de la imagen>
   for item in $ITEMS; do
@@ -37,17 +37,18 @@ if [ "${1:-}" = "--test" ]; then
   # Un template y una imagen idénticos, más lo que solo vive en el workspace.
   base() {
     rm -rf "$tmp/ws" "$tmp/img"
-    mkdir -p "$tmp/ws/nvim" "$tmp/ws/tmux" "$tmp/ws/zsh" "$tmp/ws/proxy" "$tmp/ws/scripts" "$tmp/ws/agents"
+    mkdir -p "$tmp/ws/nvim" "$tmp/ws/tmux" "$tmp/ws/zsh" "$tmp/ws/proxy" "$tmp/ws/vscode" "$tmp/ws/scripts" "$tmp/ws/agents"
     echo FROM debian > "$tmp/ws/Dockerfile"
     echo 'vim.o.x=1' > "$tmp/ws/nvim/init.lua"
     echo 'set -g x'  > "$tmp/ws/tmux/tmux.conf"
     echo 'alias v=nvim' > "$tmp/ws/zsh/zshrc"
     echo 'allow a.com'  > "$tmp/ws/proxy/allowlist.base"
+    echo '{}'            > "$tmp/ws/vscode/settings.json"
     echo 'echo hola'    > "$tmp/ws/scripts/watch.sh"
     echo 'skills'       > "$tmp/ws/agents/notion.json"
     echo 'arranque'     > "$tmp/ws/entrypoint.sh"
     mkdir -p "$tmp/img"
-    for i in Dockerfile nvim tmux zsh proxy; do cp -R "$tmp/ws/$i" "$tmp/img/$i"; done
+    for i in Dockerfile nvim tmux zsh proxy vscode; do cp -R "$tmp/ws/$i" "$tmp/img/$i"; done
   }
 
   check() {  # check <nombre> <esperado> <obtenido>
@@ -80,6 +81,9 @@ if [ "${1:-}" = "--test" ]; then
 
   base; rm -rf "$tmp/ws/tmux"
   check "el template ya no trae el directorio" "" "$(got)"
+
+  base; echo '{"x":1}' > "$tmp/ws/vscode/settings.json"
+  check "vscode cambiado" "vscode" "$(got)"
 
   # Lo que el arranque relee del workspace no cuenta: cambiarlo no pide un
   # recreate, y avisar de ello sería ruido en cada sesión.

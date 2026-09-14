@@ -45,6 +45,7 @@ case "${1:-}" in
     case "$*" in
       "test -d /workspace/devkit") [ -d "$DEVKIT_TEST_WS/devkit" ]; exit $? ;;
       "cat /workspace/devkit.toml") cat "$DEVKIT_TEST_WS/devkit.toml" 2>/dev/null; exit $? ;;
+      "cat /run/devkit/vscode-token") printf '%s' "${DEVKIT_TEST_TOKEN:-}"; exit 0 ;;
       *) exit 0 ;;   # test -f ready, tmux new-session, ...
     esac ;;
 esac
@@ -81,6 +82,7 @@ corre() {
   : > "$DEVKIT_TEST_LOG"
   printf 'si\n' | env DEVKIT_HOME="$TMP/root" DEVKIT_TEST_WS="$TMP/ws" \
     DEVKIT_TEST_LOG="$DEVKIT_TEST_LOG" DEVKIT_TEST_DOWN="${2:-0}" \
+    DEVKIT_TEST_TOKEN="${3:-}" \
     sh "$DEVKIT" "$1" p >"$OUT" 2>&1
   ESTADO=$?
 }
@@ -164,5 +166,14 @@ check_salida "comando devkit desincronizado" "el comando devkit difiere del temp
 escenario dev; corre recreate
 check        "con todo al día no se avisa de nada" no \
              "$(grep -q 'difiere del template' "$OUT" && echo si || echo no)"
+
+# --- devkit code -------------------------------------------------------------
+escenario dev; corre code 0 secreto123
+check        "code con token termina bien" 0 "$ESTADO"
+check_salida "code con token imprime la URL" "http://127\.0\.0\.1:3000/\?tkn=secreto123"
+
+escenario dev; corre code
+check        "code sin token falla" 1 "$ESTADO"
+check_salida "code sin token lo explica" "sin token de VS Code"
 
 exit $fail

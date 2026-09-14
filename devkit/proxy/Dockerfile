@@ -7,5 +7,5 @@ RUN apk add --no-cache tinyproxy socat \
 COPY tinyproxy.conf allowlist.base /etc/tinyproxy/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-EXPOSE 8888 54546
+EXPOSE 8888 54546 3001
 ENTRYPOINT ["/entrypoint.sh"]

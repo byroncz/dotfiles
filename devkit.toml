@@ -1,3 +1,4 @@
 [devkit]
 template = "dev"
 project  = "DEVKIT"
+domains  = ["open-vsx.org", "openvsx.eclipsecontent.org"]
