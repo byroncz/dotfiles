@@ -121,6 +121,13 @@ reason_for_segment() {
       printf 'gh pr merge sin --auto está prohibido'
       return 0
     fi
+    # --auto es booleano (pflag/cobra): a diferencia de --admin y --approve,
+    # un "=valor" falsy invierte el sentido y desactiva el auto-merge, el
+    # mismo caso que el chequeo de arriba ya prohíbe.
+    if [[ "$nseg" =~ (^|[[:space:]])--auto=(0|[Ff](alse)?|off)([[:space:]]|$) ]]; then
+      printf 'gh pr merge sin --auto está prohibido'
+      return 0
+    fi
   fi
 
   if [[ "$nseg" =~ gh[[:space:]]+api ]] \
@@ -259,6 +266,11 @@ run_tests() {
   check 'gh pr review 42 --approve=true' block
   check 'gh pr review 42 -a=true' block
   check 'gh pr merge 42 --auto --admin=true' block
+
+  # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
+  # el mismo caso que "sin --auto" ya prohíbe.
+  check 'gh pr merge 42 --auto=false' block
+  check 'gh pr merge 42 --auto=0' block
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
