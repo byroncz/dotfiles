@@ -18,51 +18,56 @@ segments_of() {
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
   local seg="$1"
+  # Las comillas alrededor de un argumento rompen los límites [[:space:]] de
+  # las regex de abajo (ej. gh pr review 42 "--approve"): se matchea sobre
+  # una copia sin comillas, nunca sobre $seg.
+  local nseg
+  nseg="$(printf '%s' "$seg" | tr -d "\"'")"
 
-  if [[ "$seg" =~ gh[[:space:]]+pr[[:space:]]+review ]] \
-    && [[ "$seg" =~ (^|[[:space:]])(--approve|-a)([[:space:]]|$) ]]; then
+  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+review ]] \
+    && [[ "$nseg" =~ (^|[[:space:]])(--approve|-a)([[:space:]]|$) ]]; then
     printf 'gh pr review --approve está prohibido; usa --comment'
     return 0
   fi
 
-  if [[ "$seg" =~ gh[[:space:]]+api ]] \
-    && [[ "$seg" =~ /pulls/[^[:space:]\"\']*/reviews ]] \
-    && [[ "$seg" =~ event[\"\']?[[:space:]]*[:=][[:space:]]*[\"\']?APPROVE ]]; then
+  if [[ "$nseg" =~ gh[[:space:]]+api ]] \
+    && [[ "$nseg" =~ /pulls/[^[:space:]]*/reviews ]] \
+    && [[ "$nseg" =~ event[[:space:]]*[:=][[:space:]]*APPROVE ]]; then
     printf 'gh api con event=APPROVE sobre /pulls/*/reviews está prohibido'
     return 0
   fi
 
-  if [[ "$seg" =~ gh[[:space:]]+pr[[:space:]]+merge ]] \
-    && ! [[ "$seg" =~ (^|[[:space:]])--auto([[:space:]]|$) ]]; then
+  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+merge ]] \
+    && ! [[ "$nseg" =~ (^|[[:space:]])--auto([[:space:]]|$) ]]; then
     printf 'gh pr merge sin --auto está prohibido'
     return 0
   fi
 
-  if [[ "$seg" =~ gh[[:space:]]+api ]] \
-    && [[ "$seg" =~ /pulls/[^[:space:]\"\']*/merge ]] \
-    && [[ "$seg" =~ (-X[[:space:]]*PUT|--method[[:space:]]+PUT) ]]; then
+  if [[ "$nseg" =~ gh[[:space:]]+api ]] \
+    && [[ "$nseg" =~ /pulls/[^[:space:]]*/merge ]] \
+    && [[ "$nseg" =~ (-X[[:space:]]*PUT|--method[[:space:]]+PUT) ]]; then
     printf 'gh api PUT sobre /pulls/*/merge está prohibido; usa gh pr merge --auto'
     return 0
   fi
 
-  if [[ "$seg" =~ gh[[:space:]]+api ]] \
-    && [[ "$seg" =~ /git/refs/heads/main ]] \
-    && [[ "$seg" =~ (-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method[[:space:]]+(PUT|POST|PATCH|DELETE)) ]]; then
+  if [[ "$nseg" =~ gh[[:space:]]+api ]] \
+    && [[ "$nseg" =~ /git/refs/heads/main ]] \
+    && [[ "$nseg" =~ (-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method[[:space:]]+(PUT|POST|PATCH|DELETE)) ]]; then
     printf 'gh api de escritura sobre refs/heads/main está prohibido'
     return 0
   fi
 
-  if [[ "$seg" =~ git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push ]]; then
-    if [[ "$seg" =~ (--force(-with-lease)?)([[:space:]]|$) ]] \
-      || [[ "$seg" =~ (^|[[:space:]])-f([[:space:]]|$) ]]; then
+  if [[ "$nseg" =~ git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push ]]; then
+    if [[ "$nseg" =~ (--force(-with-lease)?)([[:space:]]|$) ]] \
+      || [[ "$nseg" =~ (^|[[:space:]])-f([[:space:]]|$) ]]; then
       printf 'git push --force está prohibido'
       return 0
     fi
-    if [[ "$seg" =~ origin[[:space:]]+main([[:space:]]|$) ]] \
-      || [[ "$seg" =~ origin[[:space:]]+:main([[:space:]]|$) ]] \
-      || [[ "$seg" =~ HEAD:main([[:space:]]|$) ]] \
-      || [[ "$seg" =~ refs/heads/main([[:space:]]|$) ]] \
-      || { [[ "$seg" =~ --delete ]] && [[ "$seg" =~ (^|[[:space:]])main([[:space:]]|$) ]]; }; then
+    if [[ "$nseg" =~ origin[[:space:]]+main([[:space:]]|$) ]] \
+      || [[ "$nseg" =~ origin[[:space:]]+:main([[:space:]]|$) ]] \
+      || [[ "$nseg" =~ HEAD:main([[:space:]]|$) ]] \
+      || [[ "$nseg" =~ refs/heads/main([[:space:]]|$) ]] \
+      || { [[ "$nseg" =~ --delete ]] && [[ "$nseg" =~ (^|[[:space:]])main([[:space:]]|$) ]]; }; then
       printf 'git push a main está prohibido'
       return 0
     fi
@@ -118,6 +123,10 @@ run_tests() {
   check 'git -C /tmp/repo push -f origin feat/x' block
   check 'git push --force-with-lease origin feat/x' block
   check 'echo hola && gh pr review 42 --approve' block
+  check 'gh pr review 42 "--approve"' block
+  check "gh pr review 42 '--approve'" block
+  check 'git push origin "main"' block
+  check "git push origin 'main'" block
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
