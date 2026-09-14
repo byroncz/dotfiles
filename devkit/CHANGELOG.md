@@ -42,10 +42,15 @@ versión que usa un proyecto y la destino.
   7,8 GiB asignados (2,9 %). El peso de la imagen previa a esta card (con
   Neovim y tmux) no se pudo recuperar: BuildKit sobrescribe la etiqueta
   `devkit:dev` al reconstruir y no dejó una copia `<none>`
-  (`docker images -f dangling=true` sin filas). La reducción se sostiene en
-  lo que salió del `Dockerfile` y del repo, no en una resta de bytes
-  verificada: el paquete `tmux`, el binario de Neovim en `/opt/nvim` y unas
-  830 líneas de configuración y pruebas en `devkit/nvim/`.
+  (`docker images -f dangling=true` sin filas). Tampoco hay una cifra de
+  referencia creíble en un PR anterior: DEVKIT-38 y DEVKIT-39 solo miden el
+  costo que agrega `openvscode-server` (~458 MB), no el peso total de la
+  imagen con Neovim y tmux todavía dentro. Excepción explícita al criterio de
+  aceptación que pide ambas cifras: se cierra la card con la cifra final sola
+  en vez de inventar o estimar la de "antes". La reducción se sostiene en lo
+  que salió del `Dockerfile` y del repo, no en una resta de bytes verificada:
+  el paquete `tmux`, el binario de Neovim en `/opt/nvim` y unas 830 líneas de
+  configuración y pruebas en `devkit/nvim/`.
 - Cambios requeridos: quien use `devkit attach` pasa a `devkit shell`. Nadie
   pierde el editor: Neovim ya no estaba documentado como camino recomendado
   desde DEVKIT-39.
