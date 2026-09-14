@@ -15,6 +15,13 @@ segments_of() {
   printf '%s\n' "$1" | sed -E 's/(&&|\|\||;|\|)/\n/g'
 }
 
+# Un token por línea, respetando comillas (ej. -b "texto con -a adentro" es
+# un solo token). Vacío y exit != 0 si las comillas del segmento no cierran:
+# el llamador cae entonces al chequeo por substring, más estricto.
+tokens_of() {
+  printf '%s' "$1" | xargs -n1 -- printf '%s\n' 2>/dev/null
+}
+
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
   local seg="$1"
@@ -24,10 +31,20 @@ reason_for_segment() {
   local nseg
   nseg="$(printf '%s' "$seg" | tr -d "\"'")"
 
-  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+review ]] \
-    && [[ "$nseg" =~ (^|[[:space:]])(--approve|-a)([[:space:]]|$) ]]; then
-    printf 'gh pr review --approve está prohibido; usa --comment'
-    return 0
+  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+review ]]; then
+    local tokens has_approve
+    if tokens="$(tokens_of "$seg")"; then
+      # Comillas bien formadas: solo bloquea si --approve/-a es un token
+      # completo, para no confundirlo con un -a suelto dentro de un texto
+      # citado (ej. --body "revisa -a detalle este cambio").
+      has_approve="$(printf '%s\n' "$tokens" | grep -qxE -- '--approve|-a' && echo 1)"
+    elif [[ "$nseg" =~ (^|[[:space:]])(--approve|-a)([[:space:]]|$) ]]; then
+      has_approve=1
+    fi
+    if [ -n "${has_approve:-}" ]; then
+      printf 'gh pr review --approve está prohibido; usa --comment'
+      return 0
+    fi
   fi
 
   if [[ "$nseg" =~ gh[[:space:]]+api ]] \
@@ -131,6 +148,7 @@ run_tests() {
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
+  check 'gh pr review 42 --comment -b "revisa -a detalle este cambio"' allow
   check 'gh api repos/o/r/pulls/42/reviews' allow
   check 'gh pr merge --auto 42' allow
   check 'git push -u origin feat/DEVKIT-20-hook-bloquear-aprobar-pr' allow
