@@ -64,8 +64,7 @@ reason_for_segment() {
       return 0
     fi
     if [[ "$nseg" =~ origin[[:space:]]+main([[:space:]]|$) ]] \
-      || [[ "$nseg" =~ origin[[:space:]]+:main([[:space:]]|$) ]] \
-      || [[ "$nseg" =~ HEAD:main([[:space:]]|$) ]] \
+      || [[ "$nseg" =~ :main([[:space:]]|$) ]] \
       || [[ "$nseg" =~ refs/heads/main([[:space:]]|$) ]] \
       || { [[ "$nseg" =~ --delete ]] && [[ "$nseg" =~ (^|[[:space:]])main([[:space:]]|$) ]]; }; then
       printf 'git push a main está prohibido'
@@ -127,6 +126,8 @@ run_tests() {
   check "gh pr review 42 '--approve'" block
   check 'git push origin "main"' block
   check "git push origin 'main'" block
+  check 'git push origin fix/algo:main' block
+  check 'git push origin feat/x:main' block
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
