@@ -36,8 +36,16 @@ versión que usa un proyecto y la destino.
 - `devkit.toml` de la raíz (este repo es a la vez template y proyecto) suma
   `domains = ["open-vsx.org", "openvsx.eclipsecontent.org"]`, con nota de que
   solo hacen falta para instalar extensiones desde dentro del editor.
-- Medidas de `devkit rebuild devkit` en el Mac: build de 126,9 s, imagen
-  `devkit:dev` en 2,72 GB y `devkit-proxy:dev` en 16,7 MB.
+- Medidas de `devkit rebuild devkit` en el Mac: build de 126,9 s, imagen final
+  `devkit:dev` en 2,54 GB y `devkit-proxy:dev` en 16,7 MB; memoria en reposo
+  del contenedor recién levantado (`docker stats --no-stream`), 235 MiB de
+  7,8 GiB asignados (2,9 %). El peso de la imagen previa a esta card (con
+  Neovim y tmux) no se pudo recuperar: BuildKit sobrescribe la etiqueta
+  `devkit:dev` al reconstruir y no dejó una copia `<none>`
+  (`docker images -f dangling=true` sin filas). La reducción se sostiene en
+  lo que salió del `Dockerfile` y del repo, no en una resta de bytes
+  verificada: el paquete `tmux`, el binario de Neovim en `/opt/nvim` y unas
+  830 líneas de configuración y pruebas en `devkit/nvim/`.
 - Cambios requeridos: quien use `devkit attach` pasa a `devkit shell`. Nadie
   pierde el editor: Neovim ya no estaba documentado como camino recomendado
   desde DEVKIT-39.
