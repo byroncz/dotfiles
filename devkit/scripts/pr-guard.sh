@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Hook PreToolUse para Bash. Cierra los rodeos que el deny por prefijo de
+# Hook PreToolUse para Bash. Reduce los rodeos que el deny por prefijo de
 # settings.json no ve porque compara el inicio exacto del comando: revisa el
-# comando completo, en cualquier posición de sus argumentos. El porqué de
-# cada regla vive en la entrada de Documentación "Stack y comandos del
-# devkit", no aquí.
+# comando completo, en cualquier posición de sus argumentos. Es una
+# inspección de texto, no una sandbox: no ve variables de shell, alias de
+# gh ni una API que no conozca, así que reduce evasiones accidentales o
+# perezosas, no las garantiza. La compuerta real es GitHub (ruleset de
+# main + cuenta máquina sin permiso de aprobar). El porqué de cada regla
+# vive en la entrada de Documentación "Stack y comandos del devkit", no aquí.
 # Uso normal: recibe por stdin el JSON del hook y responde con el protocolo
 # de Claude Code (sale 2 y el motivo por stderr si bloquea).
 #      pr-guard.sh --test   corre la tabla de autoprueba y sale 1 si falla.
@@ -22,20 +25,59 @@ tokens_of() {
   printf '%s' "$1" | xargs -n1 -- printf '%s\n' 2>/dev/null
 }
 
+# True si algún token de $1 (separado por espacios) es exactamente uno de
+# $2... Usa read -ra en vez de un `for tok in $1` para no arriesgar
+# expansión de comodines sobre el texto del comando.
+has_token() {
+  local hay="$1"; shift
+  local -a toks
+  read -ra toks <<< "$hay"
+  local tok want
+  for tok in "${toks[@]}"; do
+    for want in "$@"; do
+      [ "$tok" = "$want" ] && return 0
+    done
+  done
+  return 1
+}
+
+# True si algún token de $1 es exactamente uno de $2... o ese prefijo con
+# "=valor" pegado: gh y git tratan --flag X y --flag=X igual.
+has_flag() {
+  local hay="$1"; shift
+  local -a toks
+  read -ra toks <<< "$hay"
+  local tok want
+  for tok in "${toks[@]}"; do
+    for want in "$@"; do
+      if [ "$tok" = "$want" ] || [[ "$tok" == "$want"=* ]]; then
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
-  local seg="$1"
+  local raw="$1"
   # $'...' es el quoting ANSI-C de bash, distinto de "..."/'...': el $ queda
-  # pegado al valor citado y sobrevive al tr -d de abajo, rompiendo los
+  # pegado al valor citado y sobrevive a un tr -d ingenuo, rompiendo los
   # límites [[:space:]] de las regex (ej. gh pr review 42 $'--approve'). Se
-  # colapsa a comillas simples normales antes de todo lo demás, así tr y
-  # tokens_of lo tratan igual que --approve entre comillas comunes.
-  seg="$(printf '%s' "$seg" | sed "s/\$'/'/g")"
-  # Las comillas alrededor de un argumento rompen los límites [[:space:]] de
-  # las regex de abajo (ej. gh pr review 42 "--approve"): se matchea sobre
-  # una copia sin comillas, nunca sobre $seg.
+  # colapsa a comillas simples normales antes de todo lo demás, así el resto
+  # del normalizado lo trata igual que --approve entre comillas comunes.
+  local seg
+  seg="$(printf '%s' "$raw" | sed "s/\$'/'/g")"
+  # Comillas y barras invertidas rompen los límites [[:space:]] de las
+  # regex de abajo (ej. gh pr review 42 "--approve", git push origin
+  # ma\in): se matchea sobre una copia normalizada, nunca sobre $seg.
   local nseg
-  nseg="$(printf '%s' "$seg" | tr -d "\"'")"
+  nseg="$(printf '%s' "$seg" | tr -d '\\' | tr -d "\"'")"
+
+  if [[ "$nseg" =~ gh[[:space:]]+alias[[:space:]]+set ]]; then
+    printf 'gh alias set está prohibido: esconde el comando real de este hook'
+    return 0
+  fi
 
   if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+review ]]; then
     local tokens has_approve
@@ -53,46 +95,84 @@ reason_for_segment() {
     fi
   fi
 
-  if [[ "$nseg" =~ gh[[:space:]]+api ]] \
-    && [[ "$nseg" =~ /pulls/[^[:space:]]*/reviews ]] \
-    && [[ "$nseg" =~ event[[:space:]]*[:=][[:space:]]*APPROVE ]]; then
-    printf 'gh api con event=APPROVE sobre /pulls/*/reviews está prohibido'
+  if [[ "$nseg" =~ gh[[:space:]]+api[[:space:]]+graphql ]] \
+    && [[ "$nseg" =~ (APPROVE|addPullRequestReview|mergePullRequest) ]]; then
+    printf 'gh api graphql que apruebe o mergee un PR está prohibido'
     return 0
   fi
 
-  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+merge ]] \
-    && ! [[ "$nseg" =~ (^|[[:space:]])--auto([[:space:]]|$) ]]; then
-    printf 'gh pr merge sin --auto está prohibido'
-    return 0
+  if [[ "$nseg" =~ gh[[:space:]]+api ]] && [[ "$nseg" =~ /pulls/[^[:space:]]*/reviews ]]; then
+    # Cualquier flag de escritura, no solo event=APPROVE: el valor puede
+    # viajar en un archivo (--input) o en un campo tipado (-F).
+    if has_flag "$nseg" -X --method -f -F --raw-field --input; then
+      printf 'gh api de escritura sobre /pulls/*/reviews está prohibido'
+      return 0
+    fi
+  fi
+
+  if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+merge ]]; then
+    if has_token "$nseg" --admin; then
+      printf 'gh pr merge --admin está prohibido'
+      return 0
+    fi
+    if ! has_token "$nseg" --auto; then
+      printf 'gh pr merge sin --auto está prohibido'
+      return 0
+    fi
   fi
 
   if [[ "$nseg" =~ gh[[:space:]]+api ]] \
     && [[ "$nseg" =~ /pulls/[^[:space:]]*/merge ]] \
-    && [[ "$nseg" =~ (-X[[:space:]]*PUT|--method[[:space:]]+PUT) ]]; then
+    && [[ "$nseg" =~ (-X[[:space:]]*PUT|--method[[:space:]=]+PUT) ]]; then
     printf 'gh api PUT sobre /pulls/*/merge está prohibido; usa gh pr merge --auto'
     return 0
   fi
 
   if [[ "$nseg" =~ gh[[:space:]]+api ]] \
     && [[ "$nseg" =~ /git/refs/heads/main ]] \
-    && [[ "$nseg" =~ (-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method[[:space:]]+(PUT|POST|PATCH|DELETE)) ]]; then
+    && [[ "$nseg" =~ (-X[[:space:]]*(PUT|POST|PATCH|DELETE)|--method[[:space:]=]+(PUT|POST|PATCH|DELETE)) ]]; then
     printf 'gh api de escritura sobre refs/heads/main está prohibido'
     return 0
   fi
 
   if [[ "$nseg" =~ git([[:space:]]+-C[[:space:]]+[^[:space:]]+)?[[:space:]]+push ]]; then
-    if [[ "$nseg" =~ (--force(-with-lease)?)([[:space:]]|$) ]] \
-      || [[ "$nseg" =~ (^|[[:space:]])-f([[:space:]]|$) ]]; then
+    # $VAR, $(comando) o $'...' en un git push no son evaluables por este
+    # hook: el texto que ve no es el comando que bash termina ejecutando.
+    # Los agentes no necesitan un push con destino dinámico.
+    if [[ "$raw" == *'$'* ]]; then
+      printf 'git push con expansión de shell ($) está prohibido'
+      return 0
+    fi
+
+    if has_flag "$nseg" --force --force-with-lease --force-if-includes; then
       printf 'git push --force está prohibido'
       return 0
     fi
-    if [[ "$nseg" =~ origin[[:space:]]+main([[:space:]]|$) ]] \
-      || [[ "$nseg" =~ :main([[:space:]]|$) ]] \
-      || [[ "$nseg" =~ refs/heads/main([[:space:]]|$) ]] \
-      || { [[ "$nseg" =~ --delete ]] && [[ "$nseg" =~ (^|[[:space:]])main([[:space:]]|$) ]]; }; then
-      printf 'git push a main está prohibido'
-      return 0
-    fi
+
+    local -a toks
+    read -ra toks <<< "$nseg"
+    local tok
+    for tok in "${toks[@]}"; do
+      # -f suelto o dentro de cualquier grupo de flags cortos (-fu, -uf),
+      # pero nunca una opción larga (--force ya se cubrió arriba).
+      if [[ "$tok" =~ ^-[a-zA-Z]*f[a-zA-Z]*$ ]]; then
+        printf 'git push --force está prohibido'
+        return 0
+      fi
+    done
+
+    for tok in "${toks[@]}"; do
+      case "$tok" in
+        main|+main|*:main)
+          printf 'git push a main está prohibido'
+          return 0
+          ;;
+      esac
+      if [[ "$tok" == *refs/heads/main* ]]; then
+        printf 'git push a main está prohibido'
+        return 0
+      fi
+    done
   fi
 
   return 1
@@ -154,14 +234,34 @@ run_tests() {
   check "gh pr review 42 \$'--approve'" block
   check "git push origin \$'main'" block
 
+  # DEVKIT-20, segunda ronda: evasiones que la tabla de arriba no cubría.
+  check 'git push origin +main' block
+  check 'git push upstream main' block
+  check 'git push https://github.com/byroncz/dotfiles.git main' block
+  check 'git push -fu origin feat/x' block
+  check 'git push -uf origin feat/x' block
+  check 'git push --force-with-lease=main origin feat/x' block
+  check 'git push --force-if-includes origin feat/x' block
+  check 'git push origin ma\in' block
+  check 'gh api --method=PUT repos/o/r/pulls/42/merge' block
+  check 'gh api repos/o/r/pulls/42/reviews --input body.json' block
+  check "gh api graphql -f query='mutation { addPullRequestReview(input:{pullRequestId:\"X\", event:APPROVE}) {clientMutationId} }'" block
+  check "gh api graphql -f query='mutation { mergePullRequest(input:{pullRequestId:\"X\"}) {clientMutationId} }'" block
+  check "gh alias set ap \"pr review --approve\" && gh ap 42" block
+  check 'B=main; git push origin $B' block
+  check 'git push origin $(echo main)' block
+  check 'gh pr merge 42 --auto --admin' block
+
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
   check 'gh pr review 42 --comment -b "revisa -a detalle este cambio"' allow
   check 'gh api repos/o/r/pulls/42/reviews' allow
   check 'gh pr merge --auto 42' allow
+  check 'gh pr merge --auto --squash 42' allow
   check 'git push -u origin feat/DEVKIT-20-hook-bloquear-aprobar-pr' allow
   check 'git push -u origin feat/DEVKIT-20-main-algo' allow
   check 'git push origin fix/DEVKIT-9-algo' allow
+  check 'git push origin chore/main-cleanup' allow
   check 'git status' allow
 
   return $fail
