@@ -117,7 +117,7 @@ reason_for_segment() {
       printf 'gh pr merge --admin está prohibido'
       return 0
     fi
-    if ! has_token "$nseg" --auto; then
+    if ! has_flag "$nseg" --auto; then
       printf 'gh pr merge sin --auto está prohibido'
       return 0
     fi
@@ -266,6 +266,7 @@ run_tests() {
   check 'gh api repos/o/r/pulls/42/reviews' allow
   check 'gh pr merge --auto 42' allow
   check 'gh pr merge --auto --squash 42' allow
+  check 'gh pr merge 42 --auto=true' allow
   check 'git push -u origin feat/DEVKIT-20-hook-bloquear-aprobar-pr' allow
   check 'git push -u origin feat/DEVKIT-20-main-algo' allow
   check 'git push origin fix/DEVKIT-9-algo' allow
