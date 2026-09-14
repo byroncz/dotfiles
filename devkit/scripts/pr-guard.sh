@@ -25,6 +25,12 @@ tokens_of() {
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
   local seg="$1"
+  # $'...' es el quoting ANSI-C de bash, distinto de "..."/'...': el $ queda
+  # pegado al valor citado y sobrevive al tr -d de abajo, rompiendo los
+  # límites [[:space:]] de las regex (ej. gh pr review 42 $'--approve'). Se
+  # colapsa a comillas simples normales antes de todo lo demás, así tr y
+  # tokens_of lo tratan igual que --approve entre comillas comunes.
+  seg="$(printf '%s' "$seg" | sed "s/\$'/'/g")"
   # Las comillas alrededor de un argumento rompen los límites [[:space:]] de
   # las regex de abajo (ej. gh pr review 42 "--approve"): se matchea sobre
   # una copia sin comillas, nunca sobre $seg.
@@ -145,6 +151,8 @@ run_tests() {
   check "git push origin 'main'" block
   check 'git push origin fix/algo:main' block
   check 'git push origin feat/x:main' block
+  check "gh pr review 42 \$'--approve'" block
+  check "git push origin \$'main'" block
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
