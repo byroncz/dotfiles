@@ -64,6 +64,19 @@
       "Read(~/.config/rclone/**)"
     ]
   },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/workspace/devkit/scripts/pr-guard.sh"
+          }
+        ]
+      }
+    ]
+  },
   "env": {
     "DISABLE_TELEMETRY": "1",
     "DISABLE_ERROR_REPORTING": "1"

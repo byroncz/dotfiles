@@ -458,6 +458,14 @@ proceso y aparecen en `docker inspect`.
   El bucle headless lanza cada skill con una lista fija de herramientas
   (`--allowedTools`); las negaciones de `settings.json` siguen aplicando,
   porque una negación gana a cualquier permiso.
+- Hook `PreToolUse` (`devkit/scripts/pr-guard.sh`) para `Bash`: las reglas
+  `deny` de `settings.json` son prefijos exactos, así que un comando
+  reordenado o compuesto las evade (`gh pr review 42 --approve`, `git -C
+  <dir> push origin main`, `gh api` crudo sobre `/pulls/*/reviews` o
+  `/pulls/*/merge`). El hook recibe el comando completo por `stdin` y lo
+  busca en cualquier posición: sale con código 2 y un mensaje si encuentra
+  aprobar un PR, mergearlo sin `--auto` o empujar a `main`. Las reglas
+  `deny` siguen igual, como segunda barrera si el hook falla.
 - Proxy de salida con lista blanca. Lista base en el template; dominios del
   proyecto en `devkit.env`; interruptor de red abierta por sesión para
   depurar; `net-denied.sh` muestra los destinos bloqueados.
@@ -690,7 +698,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Sesión interactiva con el token de Bitwarden | El asistente de primer arranque exige un login propio | Login OAuth una vez por proyecto; queda en el volumen `claude-<proyecto>`. El token de Bitwarden sirve para el modo headless |
 | Las skills buscan cards por la fórmula `Clave` | El MCP de Notion devuelve las fórmulas y rollups como referencias opacas, no como texto | Las skills filtran por `ID` (número) y `Proyecto`, y construyen la Clave como `<Código>-<ID>`. `Clave` queda como columna legible para el humano |
 | `settings.json` niega todo `gh pr merge` | `task-submit` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
-| `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que no pueden impedir aprobar. La compuerta real es GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana. Queda expuesto el caso de un PR abierto por el humano; la skill lo prohíbe por regla y una card en DEVKIT-18 propone un hook `PreToolUse` que bloquee `approve` por contenido del comando |
+| `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que solas no pueden impedir aprobar. El hook `pr-guard.sh` (DEVKIT-20, 8.2) cierra ese hueco: revisa el comando completo, no solo el prefijo. La compuerta real sigue siendo GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana; el hook cubre el caso de un PR abierto por el humano, que la cuenta máquina sí podría aprobar |
 | `DEVKIT_VERSION`, `.python-version` y `{{CODE}}` en `AGENTS.md` como fuentes sueltas | Tres archivos/placeholders para configuración que un proyecto declara una sola vez; tres skills asumían un `DEVKIT_VERSION` que ni siquiera existía como archivo (DEVKIT-2) | `devkit.toml` único en la raíz del repo, plano y leído con expresiones regulares. Regla de reparto: al repo lo que hace falta para reconstruir el proyecto igual (`template`, `project`, `python`, `apt`, `domains`); al Mac solo lo personal e irreproducible (`devkit.env`: repo, identidad git, remoto de Dropbox). Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el template a Python). `new-project.sh` no puede crear `devkit.toml` porque nunca toca el repo del proyecto: lo crea `entrypoint.sh` con placeholders en el primer arranque (DEVKIT-6) |
 
 ## 13. Referencias
