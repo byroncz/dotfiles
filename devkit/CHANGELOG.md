@@ -10,6 +10,8 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+## 1.0.0 - 2026-09-14
+
 ### Neovim y tmux fuera de la imagen; openvscode-server como único editor (DEVKIT-40)
 
 - Con el servidor VS Code ya permanente (DEVKIT-39), Neovim y tmux salen por
@@ -37,20 +39,21 @@ versión que usa un proyecto y la destino.
   `domains = ["open-vsx.org", "openvsx.eclipsecontent.org"]`, con nota de que
   solo hacen falta para instalar extensiones desde dentro del editor.
 - Medidas de `devkit rebuild devkit` en el Mac: build de 126,9 s, imagen final
-  `devkit:dev` en 2,54 GB y `devkit-proxy:dev` en 16,7 MB; memoria en reposo
-  del contenedor recién levantado (`docker stats --no-stream`), 235 MiB de
-  7,8 GiB asignados (2,9 %). El peso de la imagen previa a esta card (con
-  Neovim y tmux) no se pudo recuperar: BuildKit sobrescribe la etiqueta
-  `devkit:dev` al reconstruir y no dejó una copia `<none>`
-  (`docker images -f dangling=true` sin filas). Tampoco hay una cifra de
-  referencia creíble en un PR anterior: DEVKIT-38 y DEVKIT-39 solo miden el
-  costo que agrega `openvscode-server` (~458 MB), no el peso total de la
-  imagen con Neovim y tmux todavía dentro. Excepción explícita al criterio de
-  aceptación que pide ambas cifras: se cierra la card con la cifra final sola
-  en vez de inventar o estimar la de "antes". La reducción se sostiene en lo
-  que salió del `Dockerfile` y del repo, no en una resta de bytes verificada:
-  el paquete `tmux`, el binario de Neovim en `/opt/nvim` y unas 830 líneas de
-  configuración y pruebas en `devkit/nvim/`.
+  `devkit:dev` en 2,54 GB (`bb48fe816d53`) y `devkit-proxy:dev` en 16,7 MB;
+  memoria en reposo del contenedor recién levantado (`docker stats
+  --no-stream`), 235 MiB de 7,8 GiB asignados (2,9 %). El peso de la imagen
+  previa a esta card (con Neovim y tmux) no se pudo recuperar: BuildKit
+  sobrescribe la etiqueta `devkit:dev` al reconstruir y no dejó una copia
+  `<none>` (`docker images -f dangling=true` sin filas). Tampoco hay una
+  cifra de referencia creíble en un PR anterior: DEVKIT-38 y DEVKIT-39 solo
+  miden el costo que agrega `openvscode-server` (~458 MB), no el peso total
+  de la imagen con Neovim y tmux todavía dentro. Excepción explícita al
+  criterio de aceptación que pide ambas cifras: se cierra la card con la
+  cifra final sola en vez de inventar o estimar la de "antes". La reducción
+  se sostiene en lo que salió del `Dockerfile` y del repo, no en una resta
+  de bytes verificada: el paquete `tmux`, el binario de Neovim en
+  `/opt/nvim` y unas 830 líneas de configuración y pruebas en
+  `devkit/nvim/`.
 - Cambios requeridos: quien use `devkit attach` pasa a `devkit shell`. Nadie
   pierde el editor: Neovim ya no estaba documentado como camino recomendado
   desde DEVKIT-39.
@@ -400,11 +403,12 @@ versión que usa un proyecto y la destino.
 
 ### Cambios requeridos
 
-Proyectos en `0.1.0`: al actualizar, dentro del contenedor,
+Salto MAJOR desde `0.1.0`: el punto de `devkit.env` de abajo no es reemplazo
+directo (regla de `docs/ARCHITECTURE.md`, 4.7). Proyectos en `0.1.0`, al
+actualizar:
 
 - el bucle nuevo llega con la imagen: `devkit update` (o `devkit rebuild`)
   tras subir `template`;
-
 - crear `devkit.toml` en la raíz del repo con `template` y `project` (el
   código de Notion que antes estaba en `AGENTS.md`); commit y push;
 - borrar `.python-version` si existe, y declarar esa versión en `devkit.toml`
@@ -413,7 +417,22 @@ Proyectos en `0.1.0`: al actualizar, dentro del contenedor,
   `DEVKIT_PROJECT_CODE`, `DEVKIT_EXTRA_APT` y `DEVKIT_ALLOW_DOMAINS` si están
   presentes: ya no los lee nada. Si el proyecto usaba paquetes apt o dominios
   extra, declararlos en `devkit.toml` (`apt`, `domains`) y correr
-  `devkit rebuild`.
+  `devkit rebuild`;
+- PRs ya mergeados y cerrados que no llevan el marcador `devkit-closed`: se
+  les pone una vez con el comando de la sección "Cierre de PRs" del README,
+  para que el próximo `recreate` no los reprocese;
+- quien usaba `devkit attach` pasa a `devkit shell <proyecto>`
+  (`docker exec -it devkit-<proyecto> zsh`): sin la persistencia de sesión
+  que daba tmux, cubierta ahora por la terminal integrada de
+  `openvscode-server`, con tres horas de gracia de reconexión;
+- para adoptar el editor: crear el secreto `vscode-token` en Bitwarden,
+  declarar `open-vsx.org` y `openvsx.eclipsecontent.org` en `domains` de
+  `devkit.toml` y correr `devkit recreate`. `devkit code <proyecto>`, en el
+  Mac, abre el editor en el navegador contra `127.0.0.1:3000` del
+  contenedor (publicado por el proxy con el mismo patrón `socat` de dos
+  saltos que el retorno OAuth) y con el token de conexión ya en la URL: sin
+  el secreto, el editor no arranca. Nadie pierde el editor si no lo adopta:
+  Neovim ya no estaba documentado como camino recomendado desde DEVKIT-39.
 
 ## 0.1.0 - 2026-09-06
 
