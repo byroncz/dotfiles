@@ -10,6 +10,19 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Hook que reduce evasiones al aprobar o mergear un PR desde la sesión (DEVKIT-20)
+
+- `devkit/scripts/pr-guard.sh`, declarado como hook `PreToolUse` de `Bash` en
+  `devkit/agents/settings.json`, inspecciona el texto completo del comando
+  (no solo su prefijo, como el `deny` de `settings.json`) y bloquea `gh pr
+  review --approve`/`-a`, `gh pr merge` sin `--auto` o con `--admin`, `gh
+  api` de escritura sobre reviews, merge o `refs/heads/main`, `gh alias set`
+  y `git push` a `main` en cualquiera de sus formas (refspecs cortos,
+  `--force*`, comillas, expansiones de shell). Es una inspección de texto,
+  no una sandbox: reduce evasiones accidentales o perezosas, no las
+  garantiza. La compuerta real sigue siendo GitHub (ruleset de `main` con
+  aprobación humana obligatoria y la cuenta máquina sin permiso de aprobar).
+
 ## 1.0.0 - 2026-09-14
 
 ### Neovim y tmux fuera de la imagen; openvscode-server como único editor (DEVKIT-40)
