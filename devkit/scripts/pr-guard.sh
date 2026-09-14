@@ -83,10 +83,12 @@ reason_for_segment() {
     local tokens has_approve
     if tokens="$(tokens_of "$seg")"; then
       # Comillas bien formadas: solo bloquea si --approve/-a es un token
-      # completo, para no confundirlo con un -a suelto dentro de un texto
-      # citado (ej. --body "revisa -a detalle este cambio").
-      has_approve="$(printf '%s\n' "$tokens" | grep -qxE -- '--approve|-a' && echo 1)"
-    elif [[ "$nseg" =~ (^|[[:space:]])(--approve|-a)([[:space:]]|$) ]]; then
+      # completo (o esa forma con "=valor" pegado, ej. --approve=true: gh
+      # trata sus flags booleanos igual con o sin "=valor"), para no
+      # confundirlo con un -a suelto dentro de un texto citado (ej. --body
+      # "revisa -a detalle este cambio").
+      has_approve="$(printf '%s\n' "$tokens" | grep -qxE -- '(--approve|-a)(=.*)?' && echo 1)"
+    elif [[ "$nseg" =~ (^|[[:space:]])(--approve|-a)(=[^[:space:]]*)?([[:space:]]|$) ]]; then
       has_approve=1
     fi
     if [ -n "${has_approve:-}" ]; then
@@ -111,7 +113,7 @@ reason_for_segment() {
   fi
 
   if [[ "$nseg" =~ gh[[:space:]]+pr[[:space:]]+merge ]]; then
-    if has_token "$nseg" --admin; then
+    if has_flag "$nseg" --admin; then
       printf 'gh pr merge --admin está prohibido'
       return 0
     fi
@@ -251,6 +253,12 @@ run_tests() {
   check 'B=main; git push origin $B' block
   check 'git push origin $(echo main)' block
   check 'gh pr merge 42 --auto --admin' block
+
+  # DEVKIT-20, tercera ronda: gh acepta "--flag=valor" en sus flags
+  # booleanos (pflag/cobra), no solo "--flag valor".
+  check 'gh pr review 42 --approve=true' block
+  check 'gh pr review 42 -a=true' block
+  check 'gh pr merge 42 --auto --admin=true' block
 
   check 'gh pr review --comment 42' allow
   check 'gh pr review 42 --comment "listo"' allow
