@@ -37,7 +37,7 @@ case "${1:-}" in
     while [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done
     shift   # nombre del contenedor
     # Un contenedor "caído" empieza a responder en cuanto compose lo levanta:
-    # así el caso de la copia vieja no cuelga el attach del final, igual que en
+    # así el caso de la copia vieja no cuelga el `exec` final, igual que en
     # un recreate de verdad.
     if [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && ! grep -q 'up -d' "$DEVKIT_TEST_LOG"; then
       exit 1
