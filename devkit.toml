@@ -1,4 +1,6 @@
 [devkit]
 template = "dev"
 project  = "DEVKIT"
+# Solo hacen falta para instalar extensiones desde dentro del editor: la
+# extensión Claude Code ya viene en la imagen (DEVKIT-39).
 domains  = ["open-vsx.org", "openvsx.eclipsecontent.org"]

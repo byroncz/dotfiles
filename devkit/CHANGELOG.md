@@ -10,6 +10,38 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Neovim y tmux fuera de la imagen; openvscode-server como único editor (DEVKIT-40)
+
+- Con el servidor VS Code ya permanente (DEVKIT-39), Neovim y tmux salen por
+  completo: `devkit/nvim/` (init, plugins, lockfile, pruebas de DEVKIT-31),
+  `NVIM_VERSION` y `/opt/nvim` del `Dockerfile`, el paquete `tmux` y
+  `devkit/tmux/tmux.conf`. `git grep -i -E "nvim|neovim|tmux"` queda limpio
+  fuera de este changelog.
+- El único papel de tmux era sostener la sesión de terminal si se cerraba
+  Terminal.app; la terminal integrada de VS Code Server ya lo cubre, con un
+  período de gracia de reconexión de tres horas, y ni `watch.sh` ni las
+  skills dependían de él. `devkit attach` se retira; `devkit shell
+  <proyecto>` (`docker exec -it devkit-<proyecto> zsh`) es su reemplazo para
+  una shell suelta, sin esa persistencia. `up`, `recreate` y `rebuild` dejan
+  de encadenar una sesión al final.
+- Inventario de la imagen, con justificación por herramienta: se quedan zsh,
+  starship y sus plugins (terminal del editor y de los agentes), Claude
+  Code y el plugin de Notion, gh y git, uv, ruff y basedpyright (este último
+  en la lista de permisos de los agentes para type-checking), ripgrep y fd
+  (también en esa lista), bws, rclone, socat y openvscode-server. Todo lo
+  que solo existía para Neovim o tmux, fuera.
+- `image-drift.sh` deja de vigilar `nvim/` y `tmux/`; `devkit-test.sh` y
+  `image-drift.sh --test` actualizan sus casos. README, `docs/ARCHITECTURE.md`
+  (sección 4.4) y la entrada "Stack y comandos del devkit" de Notion, al día.
+- `devkit.toml` de la raíz (este repo es a la vez template y proyecto) suma
+  `domains = ["open-vsx.org", "openvsx.eclipsecontent.org"]`, con nota de que
+  solo hacen falta para instalar extensiones desde dentro del editor.
+- Medidas de `devkit rebuild devkit` en el Mac: build de 126,9 s, imagen
+  `devkit:dev` en 2,72 GB y `devkit-proxy:dev` en 16,7 MB.
+- Cambios requeridos: quien use `devkit attach` pasa a `devkit shell`. Nadie
+  pierde el editor: Neovim ya no estaba documentado como camino recomendado
+  desde DEVKIT-39.
+
 ### Editor VS Code en el navegador, con `devkit code` (DEVKIT-39)
 
 - `openvscode-server` (1.109.5) entra a la imagen como alternativa a Neovim,
