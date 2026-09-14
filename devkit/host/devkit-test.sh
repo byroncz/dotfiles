@@ -46,7 +46,7 @@ case "${1:-}" in
       "test -d /workspace/devkit") [ -d "$DEVKIT_TEST_WS/devkit" ]; exit $? ;;
       "cat /workspace/devkit.toml") cat "$DEVKIT_TEST_WS/devkit.toml" 2>/dev/null; exit $? ;;
       "cat /run/devkit/vscode-token") printf '%s' "${DEVKIT_TEST_TOKEN:-}"; exit 0 ;;
-      *) exit 0 ;;   # test -f ready, tmux new-session, ...
+      *) exit 0 ;;   # test -f ready, zsh, ...
     esac ;;
 esac
 exit 0
@@ -60,11 +60,11 @@ export PATH="$TMP/bin:$PATH"
 # que el workspace ya no tiene; el workspace lleva MARCA-NUEVA.
 escenario() {
   rm -rf "$TMP/root" "$TMP/ws"
-  mkdir -p "$TMP/root/bin" "$TMP/root/p/template/nvim" "$TMP/root/p/template/host" \
-           "$TMP/ws/devkit/nvim" "$TMP/ws/devkit/host"
-  echo MARCA-VIEJA > "$TMP/root/p/template/nvim/init.lua"
+  mkdir -p "$TMP/root/bin" "$TMP/root/p/template/marca" "$TMP/root/p/template/host" \
+           "$TMP/ws/devkit/marca" "$TMP/ws/devkit/host"
+  echo MARCA-VIEJA > "$TMP/root/p/template/marca/archivo.txt"
   echo sobra       > "$TMP/root/p/template/obsoleto.txt"
-  echo MARCA-NUEVA > "$TMP/ws/devkit/nvim/init.lua"
+  echo MARCA-NUEVA > "$TMP/ws/devkit/marca/archivo.txt"
   printf 'name: devkit-p\n' > "$TMP/ws/devkit/compose.yaml"
   cp "$TMP/ws/devkit/compose.yaml" "$TMP/root/p/template/compose.yaml"
   cp "$TMP/ws/devkit/compose.yaml" "$TMP/root/p/compose.yaml"
@@ -109,11 +109,11 @@ check_docker() {  # check_docker <nombre> <si|no> <patrón>
   grep -qE "$3" "$DEVKIT_TEST_LOG" && got=si
   check "$1" "$2" "$got"
 }
-marca() { cat "$TMP/root/p/template/nvim/init.lua" 2>/dev/null; }
+marca() { cat "$TMP/root/p/template/marca/archivo.txt" 2>/dev/null; }
 
 # --- Modo dev, contenedor arriba --------------------------------------------
 escenario dev; corre recreate
-check        "recreate en dev trae el nvim/ del workspace" MARCA-NUEVA "$(marca)"
+check        "recreate en dev trae el contexto del workspace" MARCA-NUEVA "$(marca)"
 check        "recreate en dev deja de arrastrar lo que se borró" no \
              "$([ -e "$TMP/root/p/template/obsoleto.txt" ] && echo si || echo no)"
 check_salida "recreate en dev lo dice" "contexto de build actualizado desde el workspace"
@@ -121,11 +121,11 @@ check_docker "recreate en dev copia desde el contenedor" si 'docker cp devkit-p:
 check        "recreate en dev termina bien" 0 "$ESTADO"
 
 escenario dev; corre rebuild
-check        "rebuild en dev trae el nvim/ del workspace" MARCA-NUEVA "$(marca)"
+check        "rebuild en dev trae el contexto del workspace" MARCA-NUEVA "$(marca)"
 check_docker "rebuild en dev construye desde cero" si 'build --no-cache'
 
 escenario dev; corre up
-check        "up en dev trae el nvim/ del workspace" MARCA-NUEVA "$(marca)"
+check        "up en dev trae el contexto del workspace" MARCA-NUEVA "$(marca)"
 
 # --- Modo dev, contenedor que no responde -----------------------------------
 escenario dev; corre recreate 1

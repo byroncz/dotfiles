@@ -16,7 +16,6 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM ${BASE_IMAGE}
 
-ARG NVIM_VERSION=0.12.5
 ARG GH_VERSION=2.100.0
 ARG RCLONE_VERSION=1.75.1
 ARG BWS_VERSION=2.1.0
@@ -36,11 +35,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 # --- Paquetes de sistema ---------------------------------------------------
 # ncurses-base trae la base terminfo (evita el fallo de borrado en el REPL de
-# python-build-standalone). ripgrep y fd-find los usa Neovim para buscar.
+# python-build-standalone). ripgrep y fd-find van en la lista de permisos de
+# los agentes.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git gnupg unzip zip jq less procps \
-      ncurses-base ncurses-term tmux zsh ripgrep fd-find openssh-client socat \
+      ncurses-base ncurses-term zsh ripgrep fd-find openssh-client socat \
       ${EXTRA_APT} \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
@@ -51,16 +51,11 @@ RUN apt-get update \
 RUN set -eux; \
     arch="$(uname -m)"; \
     case "$arch" in \
-      x86_64)  nvim_arch=x86_64; gh_arch=amd64; rc_arch=amd64; triple=x86_64-unknown-linux-gnu; st_triple=x86_64-unknown-linux-musl; ovs_arch=x64 ;; \
-      aarch64) nvim_arch=arm64;  gh_arch=arm64; rc_arch=arm64; triple=aarch64-unknown-linux-gnu; st_triple=aarch64-unknown-linux-musl; ovs_arch=arm64 ;; \
+      x86_64)  gh_arch=amd64; rc_arch=amd64; triple=x86_64-unknown-linux-gnu; st_triple=x86_64-unknown-linux-musl; ovs_arch=x64 ;; \
+      aarch64) gh_arch=arm64; rc_arch=arm64; triple=aarch64-unknown-linux-gnu; st_triple=aarch64-unknown-linux-musl; ovs_arch=arm64 ;; \
       *) echo "arquitectura no soportada: $arch" >&2; exit 1 ;; \
     esac; \
     tmp="$(mktemp -d)"; cd "$tmp"; \
-    \
-    # Neovim
-    curl -fsSLo nvim.tar.gz "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-${nvim_arch}.tar.gz"; \
-    tar -xzf nvim.tar.gz; mv "nvim-linux-${nvim_arch}" /opt/nvim; \
-    ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim; \
     \
     # GitHub CLI
     curl -fsSLo gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${gh_arch}.tar.gz"; \
@@ -84,7 +79,7 @@ RUN set -eux; \
     ln -s /opt/openvscode-server/bin/openvscode-server /usr/local/bin/openvscode-server; \
     \
     cd /; rm -rf "$tmp"; \
-    nvim --version | head -1; gh --version | head -1; rclone version | head -1; \
+    gh --version | head -1; rclone version | head -1; \
     bws --version; starship --version | head -1; openvscode-server --version
 
 # uv y uvx desde la imagen oficial de Astral.
@@ -148,13 +143,7 @@ RUN uv python install "${TOOLS_PYTHON}" \
 # --- Configuración de shell y editor ---------------------------------------
 COPY --chown=${USER_UID}:${USER_GID} zsh/zshrc      /home/${USERNAME}/.zshrc
 COPY --chown=${USER_UID}:${USER_GID} zsh/starship.toml /home/${USERNAME}/.config/starship.toml
-COPY --chown=${USER_UID}:${USER_GID} tmux/tmux.conf /home/${USERNAME}/.tmux.conf
-COPY --chown=${USER_UID}:${USER_GID} nvim/          /home/${USERNAME}/.config/nvim/
 COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/data/User/settings.json
-
-# Plugins de Neovim instalados en la imagen. Versiones fijadas por
-# nvim/nvim-pack-lock.json (lockfile de vim.pack, Neovim 0.12).
-RUN nvim --headless +qa && ls "$HOME/.local/share/nvim/site/pack/core/opt"
 
 COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
 COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
@@ -166,8 +155,6 @@ COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 # imagen. Son los mismos del contexto de build y de los COPY de arriba, no otra
 # fuente. Va al final para no invalidar las capas anteriores.
 COPY --chown=${USER_UID}:${USER_GID} Dockerfile /opt/devkit/image/Dockerfile
-COPY --chown=${USER_UID}:${USER_GID} nvim/      /opt/devkit/image/nvim/
-COPY --chown=${USER_UID}:${USER_GID} tmux/      /opt/devkit/image/tmux/
 COPY --chown=${USER_UID}:${USER_GID} zsh/       /opt/devkit/image/zsh/
 COPY --chown=${USER_UID}:${USER_GID} proxy/     /opt/devkit/image/proxy/
 COPY --chown=${USER_UID}:${USER_GID} vscode/    /opt/devkit/image/vscode/
