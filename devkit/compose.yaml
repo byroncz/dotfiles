@@ -62,6 +62,11 @@ services:
       # proxy: Mac localhost:54545 -> proxy:54546 -> dev:54546 -> 127.0.0.1:54545
       # dentro de dev, donde escucha Claude Code. Cada salto lo hace socat.
       - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
+      # Editor VS Code (openvscode-server), gateado por token de conexión:
+      # Mac localhost:3000 -> proxy:3001 -> dev:3001 -> 127.0.0.1:3000 dentro
+      # de dev, donde escucha el servidor. Mismo patrón que el OAuth de
+      # arriba. `devkit code <proyecto>` arma la URL con el token.
+      - "127.0.0.1:${DEVKIT_VSCODE_PORT:-3000}:3001"
     networks:
       - internal
       - egress

@@ -36,6 +36,7 @@ ti.
 | ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
 | ![Neovim](https://img.shields.io/badge/Neovim-57A143?logo=neovim&logoColor=white) | **Neovim** | Editor en terminal, con plugins fijados por lockfile: LSP, autocompletado, Telescope, gitsigns, el explorador de archivos de `snacks.nvim` y `claudecode.nvim` para hablar con Claude desde el editor. Los archivos que un agente cambia en disco se releen solos cada segundo, sin `:e`, y el árbol y el margen de git se actualizan con ellos. La interfaz va en ASCII a propósito, sin iconos: se ve igual en cualquier terminal y no hay que instalar una Nerd Font en el Mac ([por qué](docs/ARCHITECTURE.md#44-neovim-terminal-shell-y-tmux)). Atajos: [Neovim en cinco atajos](#neovim-en-cinco-atajos). |
+| ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Editor en el navegador, alternativa a Neovim: `devkit code <proyecto>` abre la URL con token. Con la extensión Claude Code instalada desde Open VSX. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
 | ![tmux](https://img.shields.io/badge/tmux-1BB91F?logo=tmux&logoColor=white) | **tmux** | Sesión persistente dentro del contenedor: si cierras la terminal, el trabajo sigue. `devkit attach` vuelve a ella. |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. |
 | ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) revisa, corrige y cierra cards sin intervención. |
@@ -48,7 +49,8 @@ ti.
 | ![Terminal](https://img.shields.io/badge/Terminal.app-000000?logo=apple&logoColor=white) | **Terminal.app** | La terminal de macOS, sin instalar nada. Truco para copiar URLs largas desde tmux: `pbpaste \| tr -d ' \n' \| pbcopy`. |
 
 Versiones fijadas en [`devkit/Dockerfile`](devkit/Dockerfile): uv 0.12.7,
-Neovim 0.12.5, gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2.
+Neovim 0.12.5, gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2,
+openvscode-server 1.109.5, extensión Claude Code 2.1.270.
 
 ## Comandos
 
@@ -60,6 +62,7 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 |---|---|
 | `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta) y entra. |
 | `devkit attach <proyecto>` | Vuelve a la sesión de tmux. |
+| `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador, con el token de conexión ya en la URL. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
@@ -87,7 +90,7 @@ Qué llega al contenedor y cuándo:
 |---|---|
 | `devkit/entrypoint.sh`, `devkit/scripts/` | Solo con recrear el contenedor: el arranque los lee del workspace. |
 | `devkit/agents/` (skills, `settings.json`, `notion.json`) | Al instante: están enlazados al workspace. |
-| `devkit/Dockerfile`, `devkit/nvim/`, `devkit/tmux/`, `devkit/zsh/`, `devkit/proxy/` | Solo reconstruyendo la imagen: `devkit recreate <proyecto>`. |
+| `devkit/Dockerfile`, `devkit/nvim/`, `devkit/tmux/`, `devkit/zsh/`, `devkit/proxy/`, `devkit/vscode/` | Solo reconstruyendo la imagen: `devkit recreate <proyecto>`. |
 
 El contexto de build es `~/.devkit/<proyecto>/template/`, una copia del
 template en el Mac. En modo dev, `devkit up`, `recreate` y `rebuild` la rearman

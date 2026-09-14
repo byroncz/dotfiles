@@ -4,6 +4,7 @@
 #
 #   devkit up <proyecto>        levantar (construye la imagen si falta) y entrar
 #   devkit attach <proyecto>    entrar a la sesión de tmux
+#   devkit code <proyecto>      abrir el editor VS Code del proyecto en el navegador
 #   devkit stop <proyecto>      detener sin perder nada
 #   devkit down <proyecto>      destruir el contenedor (el código no committeado se pierde)
 #   devkit recreate <proyecto>  recrear los contenedores: relee secretos y devkit.env, y
@@ -18,7 +19,7 @@ set -eu
 ROOT="${DEVKIT_HOME:-$HOME/.devkit}"
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,16p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,17p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -79,9 +80,9 @@ warn_host_stale() {
   fi
 }
 compose() { docker compose --project-directory "$dir" "$@"; }
-attach() {
+wait_ready() {
   # El arranque tarda unos segundos (lee secretos, clona). Esperar al marcador
-  # evita abrir un shell sin las variables cargadas.
+  # evita seguir sin las variables cargadas.
   i=0
   until docker exec "devkit-$proj" test -f /run/devkit/ready 2>/dev/null; do
     i=$((i+1)); [ "$i" -gt 120 ] && { echo "el arranque no terminó en 120 s; mira 'devkit logs $proj'" >&2; return 1; }
@@ -89,12 +90,24 @@ attach() {
     printf '.'; sleep 1
   done
   [ "$i" -gt 0 ] && echo
-  docker exec -it "devkit-$proj" tmux new-session -A -s main
+  return 0
+}
+attach() { wait_ready && docker exec -it "devkit-$proj" tmux new-session -A -s main; }
+code() {
+  wait_ready || return 1
+  token="$(docker exec "devkit-$proj" cat /run/devkit/vscode-token 2>/dev/null)"
+  [ -n "$token" ] || { echo "sin token de VS Code; crea el secreto vscode-token en Bitwarden y corre 'devkit recreate $proj'" >&2; return 1; }
+  port="$(sed -n 's/^DEVKIT_VSCODE_PORT=//p' "$dir/.env" 2>/dev/null | head -1)"; port="${port:-3000}"
+  url="http://127.0.0.1:${port}/?tkn=${token}"
+  echo "$url"
+  command -v open >/dev/null 2>&1 && open "$url"
+  return 0
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
   up)       sync_dev_template; compose up -d --build && attach ;;
   attach)   attach ;;
+  code)     code ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
   recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate && attach ;;

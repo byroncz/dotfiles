@@ -10,6 +10,37 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Editor VS Code en el navegador, con `devkit code` (DEVKIT-39)
+
+- `openvscode-server` (1.109.5) entra a la imagen como alternativa a Neovim,
+  con la extensión Claude Code (2.1.270) instalada desde Open VSX durante el
+  build, no a mano en el contenedor. Veredicto y medición completa en la
+  exploración DEVKIT-38: 354 MB de RAM adicionales, ~458 MB de imagen.
+- Arranca en `entrypoint.sh`, como usuario `dev`, escuchando solo en
+  `127.0.0.1:3000` del contenedor. Gateado por
+  `--connection-token-file /run/devkit/vscode-token`: el secreto llega de
+  Bitwarden (clave `vscode-token`) igual que el resto, y si el archivo no
+  existe el editor no arranca, sin inventar un token.
+- Publicado por el mismo patrón `socat` de dos saltos que el retorno OAuth:
+  Mac `127.0.0.1:3000` → proxy:3001 → `dev:3001` → `127.0.0.1:3000` dentro
+  de `dev`, donde escucha el servidor.
+- `devkit code <proyecto>` arma la URL con el token y la abre en el
+  navegador del Mac; sin proyecto, explica el uso y sale con código
+  distinto de cero (la validación genérica que ya tenían el resto de los
+  subcomandos).
+- Dominios `open-vsx.org` y `openvsx.eclipsecontent.org` (la CDN a la que
+  redirige la descarga) van en `domains` de `devkit.toml`, por proyecto: solo
+  quien usa el editor los necesita, así que no entran a la lista base del
+  proxy.
+- `devkit/vscode/` (los ajustes del editor) se suma a lo que solo entra por
+  imagen: `image-drift.sh` lo compara igual que `nvim/`, `tmux/`, `zsh/` y
+  `proxy/`.
+- Amenazas y mitigaciones del puerto y del token en
+  `docs/ARCHITECTURE.md`, sección 8.
+- Cambios requeridos: ninguno para quien no lo use. Para adoptar el editor en
+  un proyecto: crear el secreto `vscode-token` en Bitwarden, declarar los dos
+  dominios de Open VSX en `devkit.toml` y correr `devkit recreate`.
+
 ### Neovim se ve bien en cualquier terminal, sin Nerd Font (DEVKIT-31)
 
 - El explorador, el menú de `<espacio>` y el autocompletado dibujaban cuadros

@@ -11,7 +11,7 @@
 #    6. Sandbox        -> restaurar desde Dropbox ANTES de sincronizar hacia
 #                         Dropbox. Un sync desde un directorio vacío borraría
 #                         el respaldo. El marcador .restored lo impide.
-#    7. Claude         -> settings y plugins por proyecto.
+#    7. Claude         -> settings y plugins por proyecto, editor VS Code.
 #    8. Bucles         -> sync del sandbox y vigilancia de PRs mergeados.
 #
 #  Variables (vienen de devkit.env vía compose):
@@ -137,7 +137,7 @@ if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$WS/devkit/scripts" ]; then
 fi
 
 # /opt/devkit/image es la copia del template con la que se construyó la imagen.
-# Lo que está ahí (Dockerfile, nvim, tmux, zsh, proxy) no se refresca al
+# Lo que está ahí (Dockerfile, nvim, tmux, zsh, proxy, vscode) no se refresca al
 # arrancar, a diferencia de entrypoint.sh y scripts/: si difiere del workspace,
 # lo que está mergeado todavía no está activo (DEVKIT-30). La lista y la
 # comparación viven en image-drift.sh, con su propia autoprueba.
@@ -229,6 +229,25 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
       && log "plugin de Notion instalado" \
       || warn "no se pudo instalar el plugin de Notion: $(tail -1 "$RUN_DIR/plugin.log")"
   fi
+fi
+# Editor VS Code (openvscode-server), gateado por token de conexión. El
+# secreto vive en Bitwarden (clave vscode-token) y llega como archivo, nunca
+# como variable de entorno (ver docs/ARCHITECTURE.md sección 8.1). Sin él no
+# se inventa un token: el editor simplemente no arranca.
+VSCODE_TOKEN="$RUN_DIR/vscode-token"
+if [ -s "$VSCODE_TOKEN" ]; then
+  nohup openvscode-server \
+    --host 127.0.0.1 --port 3000 \
+    --connection-token-file "$VSCODE_TOKEN" \
+    --server-data-dir "$HOME/.openvscode-server/data" \
+    --extensions-dir "$HOME/.openvscode-server/extensions" \
+    >"$RUN_DIR/vscode.log" 2>&1 &
+  # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
+  # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
+  nohup socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:3000 >/dev/null 2>&1 &
+  log "editor VS Code activo en el puerto 3000"
+else
+  warn "falta el secreto vscode-token en Bitwarden: el editor VS Code no arranca"
 fi
 
 # --- 8. Bucles -----------------------------------------------------------------

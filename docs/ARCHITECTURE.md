@@ -498,6 +498,7 @@ por estado y tiempo con una vista filtrada y con `project-status`.
 | Token de GitHub de la cuenta máquina | Bitwarden | Permisos finos: solo los repos listados; contenido y PRs en escritura; caduca en un año | `GH_TOKEN` y `gh auth setup-git` |
 | Token de Dropbox | Bitwarden | App propia con acceso "App folder": solo `/Apps/devkit` | `rclone.conf` generado al arrancar |
 | Notion | Volumen `claude-<proyecto>` | Páginas autorizadas en OAuth: el árbol "Ingeniería" | Plugin oficial, puerto en `127.0.0.1` |
+| Token del editor VS Code, por proyecto | Bitwarden | Solo abre el editor; el panel hereda los mismos permisos del contenedor, no es un shell aparte | Archivo `/run/devkit/vscode-token`, `--connection-token-file` |
 
 Los secretos obtenidos de Bitwarden se escriben en un directorio `tmpfs` con
 permisos 600. Nunca en la imagen ni en un volumen. El secreto cero entra como
@@ -520,6 +521,17 @@ proceso y aparecen en `docker inspect`.
 - Proxy de salida con lista blanca. Lista base en el template; dominios del
   proyecto en `devkit.env`; interruptor de red abierta por sesión para
   depurar; `net-denied.sh` muestra los destinos bloqueados.
+- Editor VS Code (`openvscode-server`) publicado solo en `127.0.0.1` del Mac,
+  nunca en una interfaz pública, y gateado por un token de conexión: sin él
+  la URL no abre (`403`). El token nunca se escribe en una card, un
+  comentario ni un log; solo `devkit code <proyecto>` lo lee, en el Mac, y lo
+  arma en la URL. Si el archivo `/run/devkit/vscode-token` no existe al
+  arrancar, el servidor simplemente no arranca: no se inventa un token.
+  Dentro del panel, las mismas reglas `deny` de `settings.json` siguen
+  aplicando (un `git push origin main` desde su terminal integrada lo
+  rechaza igual que desde `tmux`), y una extensión de terceros instalada ahí
+  corre con los mismos permisos del contenedor, sin escalar privilegios: no
+  hay `sudo` en la imagen.
 
 Riesgo residual aceptado: el túnel por DNS. Ningún enfoque casero lo cierra.
 
@@ -567,7 +579,7 @@ hechas (DEVKIT-21 y DEVKIT-23, verificado el 2026-09-11):
 | Canal | Qué viaja | Cuándo se activa |
 |---|---|---|
 | Lectura en vivo | `entrypoint.sh` (re-exec), `scripts/` (`SCRIPTS_DIR`), `agents/` (enlaces simbólicos) | Al recrear el contenedor, o al instante en el caso de `agents/` |
-| Imagen | `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/` | Solo al reconstruir la imagen |
+| Imagen | `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/`, `vscode/` | Solo al reconstruir la imagen |
 
 El contexto de build de Compose es `~/.devkit/<proyecto>/template/`, una copia
 que `new-project.sh` baja una vez y que `devkit update` reemplaza por la
