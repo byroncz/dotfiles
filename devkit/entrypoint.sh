@@ -241,6 +241,7 @@ if [ -s "$VSCODE_TOKEN" ]; then
     --connection-token-file "$VSCODE_TOKEN" \
     --server-data-dir "$HOME/.openvscode-server/data" \
     --extensions-dir "$HOME/.openvscode-server/extensions" \
+    --default-folder /workspace \
     >"$RUN_DIR/vscode.log" 2>&1 &
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
