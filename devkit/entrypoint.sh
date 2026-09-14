@@ -137,7 +137,7 @@ if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$WS/devkit/scripts" ]; then
 fi
 
 # /opt/devkit/image es la copia del template con la que se construyó la imagen.
-# Lo que está ahí (Dockerfile, nvim, tmux, zsh, proxy, vscode) no se refresca al
+# Lo que está ahí (Dockerfile, zsh, proxy, vscode) no se refresca al
 # arrancar, a diferencia de entrypoint.sh y scripts/: si difiere del workspace,
 # lo que está mergeado todavía no está activo (DEVKIT-30). La lista y la
 # comparación viven en image-drift.sh, con su propia autoprueba.

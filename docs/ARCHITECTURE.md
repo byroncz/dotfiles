@@ -16,7 +16,7 @@ Un entorno de desarrollo en contenedor que:
 - Depende del host solo para correr Docker. Ni Node, ni git, ni Python, ni
   Dropbox instalados en el Mac.
 - Se reconstruye sin perder nada que importe.
-- Trae Neovim integrado con Claude Code y preparado para Codex.
+- Trae un editor integrado con Claude Code y preparado para Codex.
 - Usa Notion como centro de gestión: un kanban por proyecto donde los agentes
   toman tareas, abren ramas y PRs, y documentan al cerrar.
 - Vive como template versionado en este repo y se instancia por proyecto.
@@ -55,7 +55,7 @@ Mac (host)                         Contenedor de trabajo               Servicios
 Docker Desktop / OrbStack          debian:trixie-slim, usuario sin     GitHub
 Terminal.app                       sudo                                Notion
 ~/.devkit/bws-token  (600)   --->  entrypoint: secretos, clon, sync    Dropbox (/Apps/devkit)
-~/.devkit/<proy>/compose.yaml      tmux -> zsh -> Neovim -> Claude     Bitwarden Secrets Manager
+~/.devkit/<proy>/compose.yaml      zsh -> Claude, VS Code en navegador  Bitwarden Secrets Manager
 ~/.devkit/<proy>/devkit.env        /workspace  (capa del contenedor)   Anthropic
                                    /workspace/sandbox.local -> rclone  PyPI
                                    ~/.claude   (volumen)
@@ -115,90 +115,31 @@ Solo dos, ambos por proyecto:
 | `history-<proyecto>` | `/commandhistory` | Historial de shell |
 
 Todo lo demás vive en la imagen o se regenera al arrancar: intérpretes de
-Python, caché de `uv`, plugins de Neovim, configuración de git, tokens.
+Python, caché de `uv`, configuración de git, tokens.
 
 `CLAUDE_CONFIG_DIR` apunta al volumen para que `~/.claude.json` no quede fuera.
 Los puntos de montaje se pre-crean en la imagen con el usuario correcto.
 
 Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 
-### 4.4 Neovim, terminal, shell y tmux
+### 4.4 Terminal, shell y editor
 
 | Capa | Decisión |
 |---|---|
-| Terminal en el Mac | Terminal.app, macOS 26. Color de 24 bits. Sin Nerd Font: Neovim está configurado para no pedir ninguna (ver abajo). Sin OSC 52: copiar del contenedor al Mac requiere apagar "Permitir informe del ratón" en el menú Ver, seleccionar y Cmd-C. Se asigna un atajo de teclado a ese menú |
-| Editor | Neovim con `kickstart.nvim`, ratón activo, `ruff` y `basedpyright` instalados con `uv tool` |
-| Explorador de archivos | `snacks.explorer`, en `<espacio>e`. `snacks.nvim` ya entraba como proveedor de terminal de `claudecode.nvim`, así que no se añade ningún plugin |
-| Integración con agentes | `coder/claudecode.nvim` en un "hueco de agente": un módulo Lua por agente con los mismos atajos. Codex se enchufa después |
+| Terminal en el Mac | Terminal.app, macOS 26. Corre solo el comando `devkit`: el trabajo real pasa por el editor en el navegador o por `devkit shell` |
 | Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
-| Multiplexor | tmux, invisible: el arranque entra directo; `Ctrl-b d` desconecta sin cerrar. Los splits los hace Neovim |
+| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensión Claude Code instalada desde Open VSX, `ruff` y `basedpyright` instalados con `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2 |
 
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
 agente al arrancar.
 
-#### Neovim no necesita Nerd Font
-
-El contenedor no dibuja: emite texto y Terminal.app lo pinta con la fuente del
-Mac, Menlo o SF Mono. Ninguna de las dos trae los glifos de las Nerd Fonts, así
-que cada icono que un plugin pida sale como un cuadro con un signo de
-interrogación. Instalar una fuente dentro del contenedor no cambia nada: la que
-manda es la del Mac.
-
-Quedaban dos caminos. Uno, pedirle al humano que instale una Nerd Font en cada
-Mac y la elija en Terminal.app; funciona, pero rompe la decisión de esta misma
-sección —Terminal.app sin instalar nada— y habría que repetirlo en cada
-máquina que instancie un proyecto. El otro, no pedir esos glifos. Se tomó el
-segundo: los iconos son decoración, y el costo de no tenerlos es cero.
-
-`vim.g.have_nerd_font = false` no alcanza, y ese fue el error de partida: es
-una convención de kickstart que solo miran las partes de kickstart. Cada plugin
-trae su propia tabla de iconos y la usa igual. En `devkit/nvim/init.lua` se
-fijan a mano las de `snacks.picker` (explorador), `which-key`, `blink.cmp`
-(autocompletado), `fidget`, `gitsigns`, los diagnósticos y `listchars`. Detalle
-fino: `which-key` fusiona en profundidad, así que pasarle una tabla vacía no
-borra nada; hay que dar un texto por cada tecla.
-
-Sí se usa el bloque de dibujo de cajas (U+2500–U+257F): Menlo lo trae completo
-y de ahí salen los bordes de las ventanas flotantes y el árbol del explorador.
-
-Dos pruebas en `devkit/nvim/tests/` lo sostienen, una por cada lado del
-problema: `inventario-glifos.lua` recorre la configuración ya fusionada y falla
-si encuentra un glifo fuera de lo permitido, y `solo-ascii.lua` vuelca la
-pantalla del explorador y del autocompletado para pasarle un `grep`. Ver
-`devkit/nvim/tests/README.md`.
-
-#### Cuándo el agente propone un diff y cuándo escribe al disco
-
-Una edición de Claude llega al editor por dos caminos distintos, y confundirlos
-es la causa habitual de "no veo lo que hizo el agente". El que manda no es
-Neovim: es el CLI de Claude Code, según con quién esté hablando y en qué modo de
-permisos esté.
-
-| Cómo corre Claude | Qué pasa con una edición |
-|---|---|
-| `claude` desde el shell del contenedor, sin pasar por Neovim | Escribe directo al disco. Si el archivo está abierto, el buffer se relee solo y `gitsigns` marca las líneas en el margen |
-| `claude` abierto con `<espacio>ac` desde Neovim, en modo manual (el de partida) | Llama a `openDiff` por el websocket: se abre un diff vertical y **el archivo en disco no cambia** hasta que aceptas con `<espacio>aa` (o `:w` en el diff). `<espacio>ad` lo descarta |
-| Igual, pero con `accept edits on` (shift-tab), o con la herramienta ya permitida | Escribe directo al disco, sin diff |
-| Ciclo automático: `watch.sh` lanza `claude -p` | Nunca usa el diff. En modo `-p` el CLI no se conecta a Neovim ni aunque tenga las variables de la integración |
-
-Medido con un Neovim headless que registra las invocaciones del websocket y los
-autocomandos `ClaudeCodeDiffOpened` y `ClaudeCodeDiffClosed`: en modo manual
-llegó `openDiff` y el archivo siguió intacto hasta ejecutar
-`ClaudeCodeDiffAccept`, que lo cerró con el motivo `diff tab closed after save`
-y escribió el cambio; con `accept edits on` no llegó ninguna invocación y el
-archivo cambió solo en disco; con `claude -p` el servidor ni siquiera registró
-una conexión.
-
-Forzar el diff para toda edición no es posible, y no por falta de configuración
-nuestra: `claudecode.nvim` solo implementa el lado servidor: atiende `openDiff`
-cuando el CLI lo pide. Sus `diff_opts` deciden cómo se ve el diff (vertical,
-pestaña propia, foco), nunca si aparece. La única palanca real es el modo de
-permisos de la sesión, que el propio CLI muestra en su barra inferior: en manual
-verás el diff, en `accept edits on` no. La regla práctica: si quieres revisar
-antes de que toque el disco, abre Claude desde Neovim y déjalo en manual; si lo
-que quieres es velocidad, cualquiera de los otros caminos escribe directo y
-`<espacio>e` más el margen de `gitsigns` te dicen qué cambió.
+Hasta DEVKIT-40 un multiplexor de terminal mantenía viva la sesión del humano
+si cerraba Terminal.app. Se retiró: la terminal integrada del editor cubre el
+mismo papel, con un periodo de gracia de reconexión de tres horas
+(`reconnection-grace-time` en su log de arranque), y ni el bucle en segundo
+plano ni las skills dependían de él. `devkit shell` sigue disponible para una
+shell suelta, sin esa persistencia.
 
 ### 4.5 Notion
 
@@ -256,8 +197,7 @@ devkit/
   compose.yaml            # contenedor de trabajo + proxy de salida
   entrypoint.sh
   proxy/                  # configuración del proxy y lista blanca base
-  nvim/                   # kickstart + hueco de agente
-  zsh/  tmux/  starship.toml
+  zsh/  starship.toml
   agents/
     AGENTS.template.md    # incluye la guía de redacción
     settings.json         # permisos de Claude Code
@@ -529,9 +469,9 @@ proceso y aparecen en `docker inspect`.
   arrancar, el servidor simplemente no arranca: no se inventa un token.
   Dentro del panel, las mismas reglas `deny` de `settings.json` siguen
   aplicando (un `git push origin main` desde su terminal integrada lo
-  rechaza igual que desde `tmux`), y una extensión de terceros instalada ahí
-  corre con los mismos permisos del contenedor, sin escalar privilegios: no
-  hay `sudo` en la imagen.
+  rechaza igual que desde cualquier shell del contenedor), y una extensión de
+  terceros instalada ahí corre con los mismos permisos del contenedor, sin
+  escalar privilegios: no hay `sudo` en la imagen.
 
 Riesgo residual aceptado: el túnel por DNS. Ningún enfoque casero lo cierra.
 
@@ -579,7 +519,7 @@ hechas (DEVKIT-21 y DEVKIT-23, verificado el 2026-09-11):
 | Canal | Qué viaja | Cuándo se activa |
 |---|---|---|
 | Lectura en vivo | `entrypoint.sh` (re-exec), `scripts/` (`SCRIPTS_DIR`), `agents/` (enlaces simbólicos) | Al recrear el contenedor, o al instante en el caso de `agents/` |
-| Imagen | `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/`, `vscode/` | Solo al reconstruir la imagen |
+| Imagen | `Dockerfile`, `zsh/`, `proxy/`, `vscode/` | Solo al reconstruir la imagen |
 
 El contexto de build de Compose es `~/.devkit/<proyecto>/template/`, una copia
 que `new-project.sh` baja una vez y que `devkit update` reemplaza por la
@@ -613,9 +553,9 @@ etiqueta, que es lo que hace reproducible una versión.
 
 ### 10.1 Dentro
 
-Imagen, Compose con proxy, arranque completo, Neovim con `claudecode.nvim`,
-`AGENTS.md` y `settings.json`, las diez skills, las tres bases de datos de
-Notion, `new-project.sh`.
+Imagen, Compose con proxy, arranque completo, editor integrado con Claude Code
+(ver 4.4), `AGENTS.md` y `settings.json`, las diez skills, las tres bases de
+datos de Notion, `new-project.sh`.
 
 ### 10.2 Fuera, en orden de probable llegada
 
@@ -639,7 +579,7 @@ variables internas, pruebas en amd64, Claude Squad como orquestador.
 
 1. **Cinco pruebas de riesgo**, una hora cada una como máximo:
    - OAuth de Notion a través del puerto publicado.
-   - `claudecode.nvim` con `CLAUDE_CONFIG_DIR` en volumen.
+   - Integración del editor con Claude Code, con `CLAUDE_CONFIG_DIR` en volumen.
    - `rclone` con la app de Dropbox sin navegador.
    - `claude -p` headless con el token de Max y el MCP de Notion.
    - Todas las herramientas hablando a través del proxy.
@@ -660,8 +600,8 @@ curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.s
 ```
 
 El script descarga el tarball de la etiqueta, construye la imagen, crea los
-volúmenes, levanta el contenedor y entra a tmux. Dentro, `dotfiles` ya es el
-workspace. En el Mac no queda ningún clon.
+volúmenes y levanta el contenedor. Dentro, `dotfiles` ya es el workspace. En
+el Mac no queda ningún clon.
 
 ### 10.6 Publicación de 0.1.0
 
@@ -733,7 +673,6 @@ Documentación, y los demás textos enlazan a ella.
 | Un `sync` prematuro borraría Dropbox | Restaurar antes de sincronizar; archivo marcador; `--backup-dir` |
 | Latencia de hasta cinco minutos entre approve y arranque de la siguiente hija | Comando manual para arrancar sin esperar el bucle |
 | Rebuild descarga Python y paquetes | Imagen preconstruida por etiqueta, fuera del mínimo viable |
-| Copiar del contenedor al Mac requiere un gesto extra en Terminal.app | Atajo de teclado al menú "Permitir informe del ratón" |
 | Exfiltración por túnel DNS | Riesgo residual; ningún enfoque casero lo cierra |
 | Tokens que caducan | Fallo claro al arrancar; fechas en Bitwarden |
 
@@ -749,8 +688,6 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Retorno OAuth de MCP por puerto publicado en `dev` | Claude Code escucha solo en 127.0.0.1, y Docker no publica puertos de un contenedor que solo está en una red interna | El puerto lo publica el proxy, que sí toca la red de salida: Mac 127.0.0.1:54545 → proxy:54546 → dev:54546 → 127.0.0.1:54545. Un `socat` en cada contenedor |
 | Notion solo vía plugin | El login de Claude Code expone además los conectores de claude.ai | Ambos caminos funcionan; el plugin se instala al arrancar y su MCP se autoriza una vez por proyecto |
 | Sesión interactiva con el token de Bitwarden | El asistente de primer arranque exige un login propio | Login OAuth una vez por proyecto; queda en el volumen `claude-<proyecto>`. El token de Bitwarden sirve para el modo headless |
-| Copiar direcciones largas desde tmux | Terminal.app inserta saltos de línea al copiar texto envuelto | En el Mac: `pbpaste \| tr -d ' \n' \| pbcopy` antes de pegar en Safari |
-| Ratón en Neovim y en Claude Code | Ambos capturan el ratón; la selección nativa exige apagar "Permitir informe del ratón" | Documentado en 4.4; se recomienda un atajo de teclado al menú |
 | Las skills buscan cards por la fórmula `Clave` | El MCP de Notion devuelve las fórmulas y rollups como referencias opacas, no como texto | Las skills filtran por `ID` (número) y `Proyecto`, y construyen la Clave como `<Código>-<ID>`. `Clave` queda como columna legible para el humano |
 | `settings.json` niega todo `gh pr merge` | `task-submit` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
 | `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que no pueden impedir aprobar. La compuerta real es GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana. Queda expuesto el caso de un PR abierto por el humano; la skill lo prohíbe por regla y una card en DEVKIT-18 propone un hook `PreToolUse` que bloquee `approve` por contenido del comando |
@@ -767,10 +704,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 - HashiCorp: fin de vida de HCP Vault Secrets. https://support.hashicorp.com/hc/en-us/articles/41802449287955-HCP-Vault-Secrets-End-Of-Life
 - Astral: `uv`, versiones de Python y uso en Docker. https://docs.astral.sh/uv/concepts/python-versions/ y https://docs.astral.sh/uv/guides/integration/docker/
 - python-build-standalone: quirks. https://github.com/astral-sh/python-build-standalone/blob/main/docs/quirks.rst
-- Neovim: releases y OSC 52. https://github.com/neovim/neovim/releases
-- coder/claudecode.nvim y su protocolo. https://github.com/coder/claudecode.nvim
 - Agent Skills, estándar abierto. https://agentskills.io
-- Apple: informe del ratón en Terminal. https://support.apple.com/guide/terminal/turn-on-mouse-reporting-trmlc69728a5/mac
 - Notion: ID único, subelementos, plantillas por API. https://www.notion.com/help/unique-id y https://developers.notion.com/guides/data-apis/creating-pages-from-templates
 - Claude Code: autenticación, worktrees, OAuth en entornos remotos. https://code.claude.com/docs/en/authentication y https://code.claude.com/docs/en/worktrees y https://github.com/anthropics/claude-code/issues/69326
 - GitHub: auto-merge, cuentas máquina. https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request

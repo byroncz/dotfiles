@@ -35,10 +35,8 @@ ti.
 | ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
 | ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
-| ![Neovim](https://img.shields.io/badge/Neovim-57A143?logo=neovim&logoColor=white) | **Neovim** | Editor en terminal, con plugins fijados por lockfile: LSP, autocompletado, Telescope, gitsigns, el explorador de archivos de `snacks.nvim` y `claudecode.nvim` para hablar con Claude desde el editor. Los archivos que un agente cambia en disco se releen solos cada segundo, sin `:e`, y el árbol y el margen de git se actualizan con ellos. La interfaz va en ASCII a propósito, sin iconos: se ve igual en cualquier terminal y no hay que instalar una Nerd Font en el Mac ([por qué](docs/ARCHITECTURE.md#44-neovim-terminal-shell-y-tmux)). Atajos: [Neovim en cinco atajos](#neovim-en-cinco-atajos). |
-| ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Editor en el navegador, alternativa a Neovim: `devkit code <proyecto>` abre la URL con token. Con la extensión Claude Code instalada desde Open VSX. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
-| ![tmux](https://img.shields.io/badge/tmux-1BB91F?logo=tmux&logoColor=white) | **tmux** | Sesión persistente dentro del contenedor: si cierras la terminal, el trabajo sigue. `devkit attach` vuelve a ella. |
-| ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. |
+| ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Con la extensión Claude Code instalada desde Open VSX. Su terminal integrada sostiene la sesión: si cierras la pestaña, se reconecta hasta tres horas después. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
+| ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. `devkit shell` abre una shell suelta, sin la persistencia del editor. |
 | ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) revisa, corrige y cierra cards sin intervención. |
 | ![Codex](https://img.shields.io/badge/Codex-000000?logo=openai&logoColor=white) | **Codex** | Segundo agente, preparado pero no instalado: lee el mismo `AGENTS.md` y las mismas skills (estándar Agent Skills). |
 | ![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white) | **GitHub + gh** | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge y borrado de ramas activados. Los agentes actúan con la cuenta máquina `byroncz-bot`. |
@@ -46,10 +44,10 @@ ti.
 | ![Notion](https://img.shields.io/badge/Notion-000000?logo=notion&logoColor=white) | **Notion** | Centro de tareas: bases Proyectos, Tareas y Documentación. Los agentes la leen y escriben con el plugin oficial de Notion para Claude Code. |
 | ![Bitwarden](https://img.shields.io/badge/Bitwarden_Secrets-175DDC?logo=bitwarden&logoColor=white) | **Bitwarden Secrets Manager** | Único lugar de los secretos. Un token en `~/.devkit/bws-token` los trae al arrancar a un `tmpfs` que muere con el contenedor. |
 | ![rclone](https://img.shields.io/badge/rclone_+_Dropbox-0061FF?logo=dropbox&logoColor=white) | **rclone + Dropbox** | Respaldo continuo de `sandbox.local/`, el único directorio fuera de git que sobrevive a un rebuild. Cada minuto, con papelera por día. |
-| ![Terminal](https://img.shields.io/badge/Terminal.app-000000?logo=apple&logoColor=white) | **Terminal.app** | La terminal de macOS, sin instalar nada. Truco para copiar URLs largas desde tmux: `pbpaste \| tr -d ' \n' \| pbcopy`. |
+| ![Terminal](https://img.shields.io/badge/Terminal.app-000000?logo=apple&logoColor=white) | **Terminal.app** | La terminal de macOS, sin instalar nada. Ahí corre el comando `devkit`. |
 
 Versiones fijadas en [`devkit/Dockerfile`](devkit/Dockerfile): uv 0.12.7,
-Neovim 0.12.5, gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2,
+gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2,
 openvscode-server 1.109.5, extensión Claude Code 2.1.270.
 
 ## Comandos
@@ -60,8 +58,8 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 
 | Comando | Qué hace |
 |---|---|
-| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta) y entra. |
-| `devkit attach <proyecto>` | Vuelve a la sesión de tmux. |
+| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). |
+| `devkit shell <proyecto>` | Abre una shell dentro del contenedor. |
 | `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador, con el token de conexión ya en la URL. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
@@ -90,7 +88,7 @@ Qué llega al contenedor y cuándo:
 |---|---|
 | `devkit/entrypoint.sh`, `devkit/scripts/` | Solo con recrear el contenedor: el arranque los lee del workspace. |
 | `devkit/agents/` (skills, `settings.json`, `notion.json`) | Al instante: están enlazados al workspace. |
-| `devkit/Dockerfile`, `devkit/nvim/`, `devkit/tmux/`, `devkit/zsh/`, `devkit/proxy/`, `devkit/vscode/` | Solo reconstruyendo la imagen: `devkit recreate <proyecto>`. |
+| `devkit/Dockerfile`, `devkit/zsh/`, `devkit/proxy/`, `devkit/vscode/` | Solo reconstruyendo la imagen: `devkit recreate <proyecto>`. |
 
 El contexto de build es `~/.devkit/<proyecto>/template/`, una copia del
 template en el Mac. En modo dev, `devkit up`, `recreate` y `rebuild` la rearman
@@ -114,7 +112,7 @@ workspace, `recreate` avisa y se reinstalan con
 |---|---|
 | `claude` | Abre Claude Code en el workspace. |
 | `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
-| `v`, `g`, `gs`, `gl`, `ll` | Alias: `nvim`, `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
+| `g`, `gs`, `gl`, `ll` | Alias: `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
@@ -240,28 +238,6 @@ cerrado, o para poner al día un repo que viene de una versión anterior:
 ```sh
 gh pr comment <N> --body "<!-- devkit-closed sha=$(gh pr view <N> --json mergeCommit --jq .mergeCommit.oid) -->"
 ```
-
-### Neovim en cinco atajos
-
-La tecla líder es `<espacio>`: púlsala y espera, que `which-key` te lista lo que
-hay. Con estos cinco te mueves por el proyecto sin saber Vim.
-
-| Atajo | Qué hace |
-|---|---|
-| `<espacio>e` | Abre el explorador de archivos a la izquierda. Un clic abre el archivo, un doble clic expande o pliega la carpeta, y el margen marca lo que git ve modificado (`M`) o sin seguimiento (`??`). Se actualiza solo cuando el agente crea, borra o renombra algo. |
-| `<espacio>sf` | Busca un archivo por nombre. Escribe trozos sueltos del nombre, `Enter` abre. |
-| `<espacio>sg` | Busca un texto en todo el proyecto. |
-| `Ctrl-h`, `Ctrl-j`, `Ctrl-k`, `Ctrl-l` | Salta al panel de la izquierda, abajo, arriba o la derecha. |
-| `Esc` `Esc` | Sale del panel de Claude sin cerrarlo: el panel es un terminal y esto devuelve el teclado a Neovim. Desde ahí, `Ctrl-h` te lleva al código. |
-
-Claude vive en `<espacio>a`: `<espacio>ac` abre o cierra su panel, `<espacio>as`
-le manda el archivo actual (o la selección, en modo visual), `<espacio>aa`
-acepta el diff que propone y `<espacio>ad` lo rechaza. Cuándo verás un diff y
-cuándo el agente escribe directo al disco está en
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), sección 4.4: en resumen, solo
-hay diff si abriste Claude desde Neovim y lo dejaste en modo manual.
-
-Para salir: `:w` guarda, `:q` cierra la ventana, `:qa` cierra Neovim.
 
 ### Skills (comandos `/nombre` dentro de `claude`)
 

@@ -2,8 +2,8 @@
 # devkit: comandos del día a día, desde el Mac. Lo instala new-project.sh en
 # ~/.devkit/bin/devkit. Solo necesita Docker.
 #
-#   devkit up <proyecto>        levantar (construye la imagen si falta) y entrar
-#   devkit attach <proyecto>    entrar a la sesión de tmux
+#   devkit up <proyecto>        levantar (construye la imagen si falta)
+#   devkit shell <proyecto>     abrir una shell dentro del contenedor
 #   devkit code <proyecto>      abrir el editor VS Code del proyecto en el navegador
 #   devkit stop <proyecto>      detener sin perder nada
 #   devkit down <proyecto>      destruir el contenedor (el código no committeado se pierde)
@@ -48,7 +48,7 @@ sync_toml_env() {
 # new-project.sh y `devkit update` refrescan. En modo dev el template es el
 # `devkit/` del workspace, que vive únicamente dentro del contenedor: no hay
 # bind mount desde el Mac, así que `docker cp` es la única vía para llevarlo al
-# contexto. Sin esto, un cambio en nvim/, zsh/, tmux/, proxy/ o el Dockerfile
+# contexto. Sin esto, un cambio en zsh/, proxy/, vscode/ o el Dockerfile
 # se mergeaba y la imagen seguía construyéndose con la copia vieja (DEVKIT-30).
 sync_dev_template() {
   [ "$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" | head -1)" = dev ] || return 0
@@ -92,7 +92,7 @@ wait_ready() {
   [ "$i" -gt 0 ] && echo
   return 0
 }
-attach() { wait_ready && docker exec -it "devkit-$proj" tmux new-session -A -s main; }
+shell() { wait_ready && docker exec -it "devkit-$proj" zsh; }
 code() {
   wait_ready || return 1
   token="$(docker exec "devkit-$proj" cat /run/devkit/vscode-token 2>/dev/null)"
@@ -105,13 +105,13 @@ code() {
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
-  up)       sync_dev_template; compose up -d --build && attach ;;
-  attach)   attach ;;
+  up)       sync_dev_template; compose up -d --build ;;
+  shell)    shell ;;
   code)     code ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate && attach ;;
-  rebuild)  confirm && sync_toml_env && sync_dev_template && compose build --no-cache && compose up -d --force-recreate && attach ;;
+  recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate ;;
+  rebuild)  confirm && sync_toml_env && sync_dev_template && compose build --no-cache && compose up -d --force-recreate ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
@@ -137,7 +137,7 @@ case "$cmd" in
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
-    sync_toml_env && compose up -d --build --force-recreate && attach
+    sync_toml_env && compose up -d --build --force-recreate
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;

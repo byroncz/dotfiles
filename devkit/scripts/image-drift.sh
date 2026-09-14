@@ -8,7 +8,7 @@
 #  `entrypoint.sh` la usa en modo dev para avisar cuándo hace falta un
 #  `devkit recreate`. El arranque relee del workspace `entrypoint.sh` y
 #  `scripts/`, así que un cambio ahí se prueba con solo recrear el contenedor;
-#  `Dockerfile`, `nvim/`, `tmux/`, `zsh/`, `proxy/` y `vscode/` se congelan en
+#  `Dockerfile`, `zsh/`, `proxy/` y `vscode/` se congelan en
 #  la imagen cuando se construye, y hasta que no se reconstruye siguen siendo
 #  los de antes. Esa asimetría es la que engañaba en DEVKIT-30.
 #
@@ -19,7 +19,7 @@ set -u
 
 # Lo que el Dockerfile copia a la imagen o usa para construirla. Única fuente
 # de esta lista: si el Dockerfile copia algo nuevo, se añade aquí.
-ITEMS='Dockerfile nvim tmux zsh proxy vscode'
+ITEMS='Dockerfile zsh proxy vscode'
 
 drift() {  # drift <dir del template> <copia de la imagen>
   for item in $ITEMS; do
@@ -37,18 +37,16 @@ if [ "${1:-}" = "--test" ]; then
   # Un template y una imagen idénticos, más lo que solo vive en el workspace.
   base() {
     rm -rf "$tmp/ws" "$tmp/img"
-    mkdir -p "$tmp/ws/nvim" "$tmp/ws/tmux" "$tmp/ws/zsh" "$tmp/ws/proxy" "$tmp/ws/vscode" "$tmp/ws/scripts" "$tmp/ws/agents"
+    mkdir -p "$tmp/ws/zsh" "$tmp/ws/proxy" "$tmp/ws/vscode" "$tmp/ws/scripts" "$tmp/ws/agents"
     echo FROM debian > "$tmp/ws/Dockerfile"
-    echo 'vim.o.x=1' > "$tmp/ws/nvim/init.lua"
-    echo 'set -g x'  > "$tmp/ws/tmux/tmux.conf"
-    echo 'alias v=nvim' > "$tmp/ws/zsh/zshrc"
+    echo 'alias g=git'  > "$tmp/ws/zsh/zshrc"
     echo 'allow a.com'  > "$tmp/ws/proxy/allowlist.base"
     echo '{}'            > "$tmp/ws/vscode/settings.json"
     echo 'echo hola'    > "$tmp/ws/scripts/watch.sh"
     echo 'skills'       > "$tmp/ws/agents/notion.json"
     echo 'arranque'     > "$tmp/ws/entrypoint.sh"
     mkdir -p "$tmp/img"
-    for i in Dockerfile nvim tmux zsh proxy vscode; do cp -R "$tmp/ws/$i" "$tmp/img/$i"; done
+    for i in Dockerfile zsh proxy vscode; do cp -R "$tmp/ws/$i" "$tmp/img/$i"; done
   }
 
   check() {  # check <nombre> <esperado> <obtenido>
@@ -67,19 +65,19 @@ if [ "${1:-}" = "--test" ]; then
   base; echo 'FROM debian:trixie' > "$tmp/ws/Dockerfile"
   check "Dockerfile cambiado" "Dockerfile" "$(got)"
 
-  base; echo 'vim.o.x=2' > "$tmp/ws/nvim/init.lua"
-  check "archivo dentro de un directorio" "nvim" "$(got)"
+  base; echo 'alias x=git' > "$tmp/ws/zsh/zshrc"
+  check "archivo dentro de un directorio" "zsh" "$(got)"
 
-  base; echo 'export X=1' > "$tmp/ws/zsh/extra.zsh"
-  check "archivo nuevo en el workspace" "zsh" "$(got)"
+  base; echo 'allow c.com' > "$tmp/ws/proxy/extra.base"
+  check "archivo nuevo en el workspace" "proxy" "$(got)"
 
-  base; echo 'allow b.com' > "$tmp/ws/proxy/allowlist.base"; echo 'vim.o.x=2' > "$tmp/ws/nvim/init.lua"
-  check "dos a la vez, en el orden de la lista" "nvim proxy" "$(got)"
+  base; echo 'alias x=git' > "$tmp/ws/zsh/zshrc"; echo '{"x":1}' > "$tmp/ws/vscode/settings.json"
+  check "dos a la vez, en el orden de la lista" "zsh vscode" "$(got)"
 
   base; rm -rf "$tmp/img/proxy"
   check "la imagen no trae el directorio" "proxy" "$(got)"
 
-  base; rm -rf "$tmp/ws/tmux"
+  base; rm -rf "$tmp/ws/vscode"
   check "el template ya no trae el directorio" "" "$(got)"
 
   base; echo '{"x":1}' > "$tmp/ws/vscode/settings.json"
