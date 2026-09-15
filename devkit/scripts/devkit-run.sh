@@ -376,6 +376,14 @@ FIN
   check "pregunta abierta alarma y relanza task-block forzado" 'relanza task-block forzado: DEVKIT-3' \
     "$(grep -oE 'relanza task-block forzado: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
 
+  # --modelo/--esfuerzo sin valor deben salir con el mensaje de uso, no
+  # colgar el proceso (DEVKIT-50, H3).
+  local rc
+  timeout 5 bash "$HERE/devkit-run.sh" --modelo >/dev/null 2>&1; rc=$?
+  check "--modelo sin valor no cuelga" 64 "$rc"
+  timeout 5 bash "$HERE/devkit-run.sh" --esfuerzo >/dev/null 2>&1; rc=$?
+  check "--esfuerzo sin valor no cuelga" 64 "$rc"
+
   return $fail
 }
 
@@ -448,11 +456,34 @@ esac
 # humano sube o baja modelo/esfuerzo puntualmente, por ejemplo para forzar el
 # modelo fuerte en una card que se ve difícil. Van antes de <skill> <Clave>
 # porque son opcionales y `shift 2` de más abajo asume esa posición fija.
+
+# Sin esto, --modelo o --esfuerzo como último argumento cuelgan el proceso:
+# `shift 2` falla por falta de argumentos, el error se traga y el bucle no
+# avanza (DEVKIT-50, hallazgo H3 de pr-review).
+falta_valor() {  # falta_valor <valor>
+  case "${1-}" in
+    ''|-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 modelo_manual="" esfuerzo_manual=""
 while true; do
   case "${1:-}" in
-    --modelo) modelo_manual="${2:-}"; shift 2 2>/dev/null ;;
-    --esfuerzo) esfuerzo_manual="${2:-}"; shift 2 2>/dev/null ;;
+    --modelo)
+      if falta_valor "${2:-}"; then
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "     devkit-run --test   corre la autoprueba" >&2
+        exit 64
+      fi
+      modelo_manual="$2"; shift 2 ;;
+    --esfuerzo)
+      if falta_valor "${2:-}"; then
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "     devkit-run --test   corre la autoprueba" >&2
+        exit 64
+      fi
+      esfuerzo_manual="$2"; shift 2 ;;
     *) break ;;
   esac
 done
