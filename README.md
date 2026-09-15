@@ -209,7 +209,10 @@ relanzamiento y el tope de intentos.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
-el diff de forma adversarial y publica el informe en el PR con el marcador
+el diff de forma adversarial y agota en el mismo ciclo la clase de un
+hallazgo que tenga variantes (por ejemplo, una sintaxis con varios flags):
+busca y reporta cada variante, no una por ciclo. Publica el informe en el PR
+con el marcador
 `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Con `OK` mueve la
 card a `Lista para merge` y te pide el review; con `CAMBIOS` deja los
 hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
@@ -237,7 +240,10 @@ Corrección de PRs: `/task-fix <Clave> [texto]` es el corrector del ciclo.
 Sin texto, lee el bloque `devkit-findings` del último informe con veredicto
 `CAMBIOS` y solo los archivos que nombra; con texto, o si la card está en
 `Lista para merge` y hay un comentario tuyo en el PR, atiende ese comentario
-como un hallazgo único `C<n>`. Un commit por hallazgo con la Clave como
+como un hallazgo único `C<n>`. Si un hallazgo pide retirar un dato que el
+revisor no pudo verificar porque vive en un comentario de la card (el
+revisor tiene prohibido leerlos), no lo retira: cita la fuente exacta en el
+commit. Un commit por hallazgo con la Clave como
 ámbito, push sin `--force`, y una respuesta en el PR dentro del bloque
 `devkit-fixes` (`id | atendido o descartado | commit o motivo`) que es lo
 único que `pr-review` relee en el ciclo siguiente. Al terminar deja la card
@@ -281,16 +287,21 @@ quien conteste: una pregunta al humano mata el proceso y deja la card a medias,
 así que equivale a `/task-block`. Toda ejecución headless termina en un estado
 observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
-- `/task-start` no se detiene tras crear la rama y comentar el plan: implementa
-  la card hasta cumplir todos los criterios de aceptación y termina ejecutando
-  `/task-submit`. Si falta una decisión, un acceso o un criterio de aceptación,
-  o se atasca más de dos intentos en el mismo problema, ejecuta `/task-block`
-  con la petición concreta. Una ejecución que no deja la card en `Revisión
-  automática` o `Bloqueada` es un corte, no un avance.
+- `/task-start` lee los comentarios de la card antes de publicar el plan:
+  cualquiera que amplíe, corrija o precise el alcance original es una
+  ampliación, y el plan cita cada una en una línea aparte. No se detiene tras
+  crear la rama y comentar el plan: implementa la card hasta cumplir todos
+  los criterios de aceptación y termina ejecutando `/task-submit`. Si falta
+  una decisión, un acceso o un criterio de aceptación, o se atasca más de dos
+  intentos en el mismo problema, ejecuta `/task-block` con la petición
+  concreta. Una ejecución que no deja la card en `Revisión automática` o
+  `Bloqueada` es un corte, no un avance.
 - `/task-close`, al cerrar una hija de una Épica que aún tiene hermanas
   pendientes, toma la siguiente con `/task-start` y la trabaja completa en la
   misma ejecución, hasta `/task-submit` o `/task-block`. Arrancarla y devolver
-  el control no cuenta: nadie la retomaría.
+  el control no cuenta: nadie la retomaría. Cuando todas las hijas terminan,
+  cierra la Épica solo si está `En progreso` y tiene Criterios de aceptación;
+  si no cumple alguna, lo deja anotado en la Épica y no la mueve a `Hecha`.
 
 ## Qué declara cada proyecto
 

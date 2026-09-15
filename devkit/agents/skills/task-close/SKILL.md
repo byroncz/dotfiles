@@ -90,10 +90,16 @@ Argumento: Clave. Opcional: URL del PR.
 7. Limpieza local: `git switch main && git pull --ff-only && git branch -d
    <rama>` si la rama existe localmente.
 8. Si la card tiene `Padre`:
-   - Si todas las hijas del Padre están `Hecha`: pon la Épica en `Hecha` con
-     `Cierre`, y crea una entrada de Documentación de tipo `cambio` para la
-     Épica que consolide: una línea por hija con enlace a su entrada, y la
-     sección "Cambios requeridos" unificada.
+   - Si todas las hijas del Padre están `Hecha`: antes de cerrarla, verifica
+     que la Épica está `En progreso` y que su sección "Criterios de
+     aceptación" existe y no dice algo como "pendientes de definir". Si
+     cumple ambas, ponla en `Hecha` con `Cierre`, y crea una entrada de
+     Documentación de tipo `cambio` para la Épica que consolide: una línea
+     por hija con enlace a su entrada, y la sección "Cambios requeridos"
+     unificada. Si no cumple alguna, no la cierres: comenta en la Épica que
+     sus hijas terminaron pero le falta `En progreso` o Criterios de
+     aceptación para cerrarse, y termina. Cerrar sin este chequeo dejó
+     DEVKIT-19 en `Hecha` con todo su contenido sin ejecutar.
    - Si quedan hijas: ejecuta `task-start` sin argumento para tomar la
      siguiente libre y trabájala completa en esta misma ejecución, hasta
      `task-submit` o `task-block`. Arrancarla y devolver el control no

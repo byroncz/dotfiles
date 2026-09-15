@@ -29,11 +29,18 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 5. `git switch -c <rama>` y `git push -u origin <rama>`.
 6. Actualiza la card: `Estado` = `En progreso`, `Agente` = tu nombre
    (`claude` o `codex`), `Rama` = `https://github.com/<owner>/<repo>/tree/<rama>`.
-7. Comenta en la card el plan en dos a cuatro líneas: qué vas a cambiar y en
-   qué orden. Sin justificaciones largas.
-8. Trabaja la card. Commits con Conventional Commits y la Clave como ámbito:
+7. Lee los comentarios de la card completa, no solo Objetivo y Criterios de
+   aceptación. Cualquier comentario que amplíe, corrija o precise el alcance
+   original es una ampliación: anótala para el plan del paso siguiente.
+   Ignorar un comentario dejó el CHANGELOG de `1.0.0` con un dato falso
+   (DEVKIT-41).
+8. Comenta en la card el plan en dos a cuatro líneas: qué vas a cambiar y en
+   qué orden. Si el paso anterior encontró ampliaciones, una línea por cada
+   una, citando qué comentario la originó. Sin justificaciones largas.
+9. Trabaja la card, incluidas las ampliaciones del paso 7. Commits con
+   Conventional Commits y la Clave como ámbito:
    `feat(DEVKIT-3): crear skill task-start`. Haz push con frecuencia.
-9. Al cumplir los criterios de aceptación, ejecuta `task-submit`.
+10. Al cumplir los criterios de aceptación, ejecuta `task-submit`.
 
 ## Modo headless
 
@@ -41,7 +48,7 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 No hay quien conteste: si terminas preguntando, el proceso muere con la card
 `En progreso` y nadie trabajándola.
 
-- No hagas preguntas. Tras comentar el plan (paso 7) sigue de largo:
+- No hagas preguntas. Tras comentar el plan (paso 8) sigue de largo:
   implementa la card hasta cumplir todos los criterios de aceptación y
   termina ejecutando `task-submit`.
 - Una ejecución que no deja la card en `Revisión automática` o `Bloqueada`
