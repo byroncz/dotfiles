@@ -41,6 +41,10 @@ versión que usa un proyecto y la destino.
   archivos locales de este repo en vez de descargarlos: ya está parado en la
   última etiqueta. Sin este paso, los PRs que abre habrían subido `template`
   sin poner `AGENTS.md` al día, la misma laguna que originó esta card.
+- Sin acción manual para quien arrastre los nombres viejos de skill del
+  renombre de DEVKIT-10 (`session-start`, `task-review`): `template-update`
+  los corrige solo al actualizar a esta versión, la primera que trae
+  `agents-sync.sh`.
 - Cambios requeridos para quien venga de 0.1.0: ver la sección de la
   versión 1.0.0.
 
@@ -494,10 +498,6 @@ actualizar:
   saltos que el retorno OAuth) y con el token de conexión ya en la URL: sin
   el secreto, el editor no arranca. Nadie pierde el editor si no lo adopta:
   Neovim ya no estaba documentado como camino recomendado desde DEVKIT-39.
-- `AGENTS.md` conserva los nombres viejos de skill del renombre de DEVKIT-10
-  (`session-start`, `task-review`) porque el arranque solo escribe ese
-  archivo la primera vez. Sin acción manual: `template-update` los corrige
-  solo desde esta versión, la primera que trae `agents-sync.sh` (DEVKIT-28).
 
 ## 0.1.0 - 2026-09-06
 
