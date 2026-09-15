@@ -261,4 +261,30 @@ RETRIES=2 corre_doble 9
 check_log "tope de intentos alcanzado" 'cuota agotada: pr-review-9-abc1234 sin más intentos \(tope de 2\)'
 check_igual "no pasa del tope" 2 "$LLAMADAS"
 
+# --- devkit-run como único punto de lanzamiento (DEVKIT-45) -----------------
+# run_skill delega en devkit-run.sh, que resuelve modelo y esfuerzo por rol
+# desde roles.toml; pr-review siempre cae en el rol "revision" (el modelo
+# fuerte), sin importar el Tipo de la card.
+corre_doble 0
+check_log "la línea de resumen trae el modelo del rol de revisión" \
+  'modelo=claude-opus-5 esfuerzo=high'
+
+# --- Costo total del ciclo de un PR (DEVKIT-45) ------------------------------
+# cycle_cost suma "costo=" de todas las líneas de un PR en watch.log, no solo
+# la del último task-close: una card puede pasar por varias rondas.
+CYCLE_LOG=$(mktemp -p "$TMP")
+cat >"$CYCLE_LOG" <<'FIN'
+2026-09-15T10:00:00Z pr-review-31-a1b2c3d terminado: modelo=claude-opus-5 esfuerzo=high costo=0.10 turnos=5 :: revisado
+2026-09-15T10:05:00Z task-fix-31-a1b2c3d terminado: modelo=claude-sonnet-5 esfuerzo=medium costo=0.20 turnos=8 :: corregido
+2026-09-15T10:10:00Z pr-review-31-e4f5g6h terminado: modelo=claude-opus-5 esfuerzo=high costo=0.15 turnos=4 :: revisado otra vez
+2026-09-15T10:20:00Z task-close-31 terminado: modelo=claude-haiku-4-5-20251001 esfuerzo=low costo=0.01 turnos=2 :: cerrada
+2026-09-15T09:00:00Z pr-review-310-zzzzzzz terminado: modelo=claude-opus-5 esfuerzo=high costo=9.00 turnos=1 :: otro PR, no debe sumar
+2026-09-15T10:25:00Z task-fix-31-humano-20260915T102500Z terminado: modelo=claude-sonnet-5 esfuerzo=medium costo=0.05 turnos=3 :: comentario humano
+FIN
+CYCLE_TOTAL=$(bash "$WATCH" --cycle-cost 31 "$CYCLE_LOG")
+check_igual "costo total del ciclo suma todas las rondas del PR" "0.5100" "$CYCLE_TOTAL"
+
+CYCLE_EMPTY=$(bash "$WATCH" --cycle-cost 999 "$CYCLE_LOG")
+check_igual "costo del ciclo de un PR sin líneas es 0" "0.0000" "$CYCLE_EMPTY"
+
 exit $fail
