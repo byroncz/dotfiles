@@ -507,7 +507,8 @@ read -r modelo esfuerzo presupuesto < <(model_effort_of "$prompt")
 manual=""
 if [ -n "$modelo_manual" ]; then modelo="$modelo_manual"; manual=1; fi
 if [ -n "$esfuerzo_manual" ]; then esfuerzo="$esfuerzo_manual"; manual=1; fi
-# Sin anulación no hay presupuesto de roles.toml que comparar con el turno real.
+# Con anulación manual no hay presupuesto de roles.toml que comparar con el
+# turno real: el rol resuelto ya no aplica.
 [ -z "$manual" ] || presupuesto="-"
 
 nohup "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
