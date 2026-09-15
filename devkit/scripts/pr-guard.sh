@@ -185,7 +185,8 @@ reason_for_segment() {
     done
   fi
 
-  if [[ "$nseg" =~ /run/devkit/vscode-token ]] && has_token "$nseg" cat tail grep; then
+  if [[ "$nseg" =~ /run/devkit/vscode-token ]] \
+    && has_token "$nseg" cat tail grep head less more od xxd strings base64 cp mv; then
     printf 'leer /run/devkit/vscode-token expone el token; no se pega en un chat ni en una card (ver runbook "El editor no abre")'
     return 0
   fi
@@ -278,6 +279,16 @@ run_tests() {
   check 'docker exec devkit-x cat /run/devkit/vscode-token' block
   check 'tail /run/devkit/vscode-token' block
   check 'grep tkn /run/devkit/vscode-token' block
+  check 'head /run/devkit/vscode-token' block
+  check 'less /run/devkit/vscode-token' block
+  check 'more /run/devkit/vscode-token' block
+  check 'od -c /run/devkit/vscode-token' block
+  check 'xxd /run/devkit/vscode-token' block
+  check 'strings /run/devkit/vscode-token' block
+  check 'base64 /run/devkit/vscode-token' block
+  check 'cp /run/devkit/vscode-token /tmp/t' block
+  check 'mv /run/devkit/vscode-token /tmp/t' block
+  check 'docker cp devkit-x:/run/devkit/vscode-token .' block
 
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
