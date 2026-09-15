@@ -37,6 +37,10 @@ versión que usa un proyecto y la destino.
   descarga `AGENTS.template.md` y `agents-sync.sh` de la versión destino
   (no los del template local, que pueden ir atrás si la imagen no se ha
   reconstruido), renderiza `{{PROJECT}}` y corre la fusión.
+- `template-propagate` corre la misma fusión antes de su commit, con los
+  archivos locales de este repo en vez de descargarlos: ya está parado en la
+  última etiqueta. Sin este paso, los PRs que abre habrían subido `template`
+  sin poner `AGENTS.md` al día, la misma laguna que originó esta card.
 - Cambios requeridos para quien venga de 0.1.0: ver la sección de la
   versión 1.0.0.
 

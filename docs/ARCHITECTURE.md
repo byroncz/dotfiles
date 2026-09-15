@@ -533,8 +533,9 @@ vencimiento en la nota de cada secreto.
 - Para `DEVKIT`, el clon de `dotfiles` es su workspace: ahí los cambios se
   prueban en vivo antes de etiquetar, con `template = "dev"` en su propio
   `devkit.toml`.
-- `template-update` también funde `AGENTS.md` con la plantilla destino, con
-  `devkit/scripts/agents-sync.sh` (DEVKIT-28). `AGENTS.template.md` declara
+- `template-update` y `template-propagate` también funden `AGENTS.md` con la
+  plantilla destino, con `devkit/scripts/agents-sync.sh` (DEVKIT-28).
+  `AGENTS.template.md` declara
   el marcador `## Reglas del proyecto`: todo lo de arriba es del template,
   todo lo de abajo es del proyecto. Con el marcador presente, la fusión es
   mecánica (reemplazar texto por encima de una línea fija) y se aplica sola,
