@@ -117,6 +117,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -210,10 +211,16 @@ el diff de forma adversarial y publica el informe en el PR con el marcador
 card a `Lista para merge` y te pide el review; con `CAMBIOS` deja los
 hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
 `id | severidad | archivo:línea | qué falla | qué hacer`) para que `task-fix`
-los atienda. El revisor nunca corrige ni aprueba: `settings.json` niega
-`gh pr review --approve` y todo `gh pr merge` que no sea `--auto`, y la
-compuerta real es GitHub (sin autoaprobación, ruleset de `main`); el detalle
-está en `docs/ARCHITECTURE.md`, sección 12b.
+los atienda. El revisor nunca corrige ni aprueba: el hook `pr-guard.sh`
+inspecciona el texto del comando y bloquea `gh pr review --approve`, `gh pr
+merge` sin `--auto` o con `--admin`, `git push` a `main` y mutaciones de
+GraphQL que aprueben o mergeen, y las reglas `deny` de `settings.json` quedan
+como segunda barrera. Es una inspección de texto: reduce las evasiones
+accidentales o perezosas, no las garantiza contra variables de shell, alias
+de `gh` o una API que el hook no conozca. La compuerta real es GitHub: la
+cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige
+PR y aprobación humana. El detalle está en `docs/ARCHITECTURE.md`, secciones
+8.2 y 12b.
 
 Corrección de PRs: `/task-fix <Clave> [texto]` es el corrector del ciclo.
 Sin texto, lee el bloque `devkit-findings` del último informe con veredicto
