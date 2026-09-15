@@ -10,6 +10,36 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Documentación corregida: CHANGELOG, poke, permisos del token y devkit-net-denied (DEVKIT-47)
+
+- La entrada `1.0.0` de este CHANGELOG decía que el peso de la imagen antes
+  de retirar Neovim y tmux no se pudo recuperar. Sí estaba, en un comentario
+  de la card DEVKIT-40 que el corrector no citó (DEVKIT-41, deuda técnica):
+  2,72 GB (`b33709ccd140`) antes, 2,54 GB (`bb48fe816d53`) después, 180 MB
+  menos. Corregido con la fuente.
+- README: la frase sobre los 5 s entre el `touch` de `/run/devkit/poke` y la
+  línea `consultando GitHub` solo valía si el bucle estaba durmiendo; en el
+  ciclo automático normal, con el bucle despierto atendiendo otro PR, la
+  línea sale al terminar esa vuelta, no a los 5 s. Acotada en el README y en
+  la entrada "Stack y comandos del devkit" de Notion.
+- README y `docs/ARCHITECTURE.md` (8.1 y 12b) documentan los alcances
+  exactos que necesita el token de GitHub de la cuenta máquina: `repo` y
+  `read:org`, este último porque `gh pr edit --add-reviewer` (lo usa
+  `pr-review` para pedir el review al humano) lo exige incluso sin
+  organización. Faltaba y `gh pr edit --add-reviewer` falló con 403 en el
+  PR 30; el humano añadió el alcance a mano el 2026-09-15.
+- `devkit-net-denied` leía el log completo del proxy sin ventana de tiempo,
+  así que un rechazo de días atrás aparecía junto a uno de ahora mismo y
+  producía un bloqueo falso (DEVKIT-38, con `open-vsx.org` ya resuelto).
+  Ahora acota a los últimos `DEVKIT_NET_DENIED_WINDOW` minutos (15 por
+  defecto) y confirma con `curl`, a través del proxy, cuál de esos dominios
+  sigue bloqueado de verdad antes de sugerir añadirlo a `domains`.
+- La línea `estado:` de `work_state` en `watch.sh` ya era una observación de
+  git y GitHub ("rama X, N commits sobre main, PR..."), no una orden ni una
+  afirmación sobre el Estado real de la card en Notion: ya la había corregido
+  DEVKIT-17. Sin cambios; se deja constancia de que el criterio de esta card
+  ya estaba cubierto.
+
 ### Monitoreo mínimo sin modelo en watch.sh (DEVKIT-46)
 
 - Cuatro alarmas en bash dentro de `watch.sh`, sin gastar tokens, como líneas
@@ -185,19 +215,14 @@ versión que usa un proyecto y la destino.
 - Medidas de `devkit rebuild devkit` en el Mac: build de 126,9 s, imagen final
   `devkit:dev` en 2,54 GB (`bb48fe816d53`) y `devkit-proxy:dev` en 16,7 MB;
   memoria en reposo del contenedor recién levantado (`docker stats
-  --no-stream`), 235 MiB de 7,8 GiB asignados (2,9 %). El peso de la imagen
-  previa a esta card (con Neovim y tmux) no se pudo recuperar: BuildKit
-  sobrescribe la etiqueta `devkit:dev` al reconstruir y no dejó una copia
-  `<none>` (`docker images -f dangling=true` sin filas). Tampoco hay una
-  cifra de referencia creíble en un PR anterior: DEVKIT-38 y DEVKIT-39 solo
-  miden el costo que agrega `openvscode-server` (~458 MB), no el peso total
-  de la imagen con Neovim y tmux todavía dentro. Excepción explícita al
-  criterio de aceptación que pide ambas cifras: se cierra la card con la
-  cifra final sola en vez de inventar o estimar la de "antes". La reducción
-  se sostiene en lo que salió del `Dockerfile` y del repo, no en una resta
-  de bytes verificada: el paquete `tmux`, el binario de Neovim en
-  `/opt/nvim` y unas 830 líneas de configuración y pruebas en
-  `devkit/nvim/`.
+  --no-stream`), 235 MiB de 7,8 GiB asignados (2,9 %). Peso de la imagen
+  antes de esta card (con Neovim y tmux): 2,72 GB (`b33709ccd140`), medido
+  con `docker image ls` en la card (DEVKIT-40, comentario de las 17:20)
+  justo antes del rebuild que produjo la imagen final `bb48fe816d53`.
+  Diferencia: 180 MB menos, 6,6 %. La reducción se sostiene en lo que salió
+  del `Dockerfile` y del repo, no solo en la resta de bytes: el paquete
+  `tmux`, el binario de Neovim en `/opt/nvim` y unas 830 líneas de
+  configuración y pruebas en `devkit/nvim/`.
 - Cambios requeridos: quien use `devkit attach` pasa a `devkit shell`. Nadie
   pierde el editor: Neovim ya no estaba documentado como camino recomendado
   desde DEVKIT-39.
