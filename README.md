@@ -113,7 +113,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `claude` | Abre Claude Code en el workspace. |
 | `devkit-net-denied` | Lista los dominios que el proxy rechazó en los últimos 15 min (`DEVKIT_NET_DENIED_WINDOW`) y confirma con `curl` cuál sigue bloqueado ahora mismo; sin la ventana ni la confirmación, un rechazo de hace días parecía de ahora y producía un bloqueo falso (DEVKIT-38). |
 | `g`, `gs`, `gl`, `ll` | Alias: `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
-| `devkit-run` | Alias a `/opt/devkit/scripts/devkit-run.sh` (ver la fila de más abajo): así se lanza sin escribir la ruta completa. |
+| `devkit-run` | Alias a `$DEVKIT_SCRIPTS_DIR/devkit-run.sh` (ver la fila de más abajo): así se lanza sin escribir la ruta completa. `DEVKIT_SCRIPTS_DIR` lo exporta el arranque a `/run/devkit/env`, y es `/workspace/devkit/scripts` en modo dev o `/opt/devkit/scripts` si no: el mismo `SCRIPTS_DIR` que usa `watch.sh`, para que un cambio al script en dev corra igual desde la skill y a mano, sin esperar a un `devkit recreate`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos, el relanzamiento por cuota agotada con logs falsos y las cuatro alarmas del monitoreo mínimo; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |

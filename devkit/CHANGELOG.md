@@ -17,9 +17,16 @@ versión que usa un proyecto y la destino.
   trabajarla en su propia ejecución: antes corría con el rol de contabilidad
   de `task-close` (Haiku, esfuerzo bajo) en vez del que le toca por su propio
   `Tipo` (DEVKIT-45 nunca se aplicaba a la hija siguiente).
-- Alias `devkit-run` en `zshrc`, hacia `/opt/devkit/scripts/devkit-run.sh`:
+- Alias `devkit-run` en `zshrc`, hacia `$DEVKIT_SCRIPTS_DIR/devkit-run.sh`:
   antes solo funcionaba con la ruta completa, pese a que el README lo
-  documentaba como comando.
+  documentaba como comando. `DEVKIT_SCRIPTS_DIR` lo exporta el arranque
+  (mismo `SCRIPTS_DIR` que usa `watch.sh`), así que en modo dev el alias
+  corre el script del workspace, no la copia vieja de la imagen.
+- Sin `DEVKIT_ROLES_FILE`, `devkit-run.sh` resuelve `roles.toml` contra un
+  hermano `../agents` que no existe cuando corre desde `/opt/devkit/scripts`
+  (el Dockerfile solo copia `scripts/`): cae ahora al `agents/` de
+  `TEMPLATE_DIR`, que sí existe siempre. `--modelo`/`--esfuerzo` sin valor ya
+  no cuelgan el proceso: salen con el mensaje de uso y rc 64.
 - `epic-plan` entra al rol `revision` (modelo fuerte, esfuerzo alto) en
   `devkit-run.sh`: un mal desglose de Épica cuesta más que cualquier card.
 - `devkit-run` acepta `--modelo <alias>` y `--esfuerzo <low|medium|high>`
