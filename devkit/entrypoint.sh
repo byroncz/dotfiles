@@ -244,13 +244,16 @@ if [ -s "$VSCODE_TOKEN" ]; then
   # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server
   # imprime "Web UI available at ...?tkn=<token>" al levantar, y ese grep -v
   # lo saca del log para que un tail no filtre el token (ver DEVKIT-51).
+  # --line-buffered es obligatorio: sin él, grep escribe en bloques de 4096
+  # bytes al no ser una terminal, y la salida del servidor nunca llena el
+  # buffer, así que el log queda vacío toda la vida del contenedor.
   : > "$RUN_DIR/vscode.log"; chmod 600 "$RUN_DIR/vscode.log"
   nohup bash -c "openvscode-server \
     --host 127.0.0.1 --port 3000 \
     --connection-token-file '$VSCODE_TOKEN' \
     --server-data-dir '$HOME/.openvscode-server/data' \
     --extensions-dir '$HOME/.openvscode-server/extensions' \
-    --default-folder /workspace 2>&1 | grep -v 'tkn='" \
+    --default-folder /workspace 2>&1 | grep --line-buffered -v 'tkn='" \
     >"$RUN_DIR/vscode.log" &
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
