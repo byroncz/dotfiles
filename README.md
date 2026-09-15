@@ -60,7 +60,7 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 |---|---|
 | `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). |
 | `devkit shell <proyecto>` | Abre una shell dentro del contenedor. |
-| `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador, con el token de conexión ya en la URL. |
+| `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador. Solo imprime la URL con el token en la terminal si `open` falta o falla. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
@@ -69,6 +69,12 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit ls` | Proyectos instanciados. |
+
+Si el editor no abre: `docker exec devkit-<proyecto> pgrep -af server-main.js`
+para ver si el servidor está vivo, y `devkit logs <proyecto>` para el log de
+arranque. Diagnóstico completo, causas y rotación del token en el runbook "El
+editor no abre" (Documentación,
+https://app.notion.com/p/3db27957d23d81d690f1ea533a6a652c).
 
 Crear un proyecto nuevo:
 
@@ -119,7 +125,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea un `cat`, `tail` o `grep` sobre `/run/devkit/vscode-token`: ese archivo es el token del editor en crudo y no se pega en un chat ni en una card (DEVKIT-51). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (`devkit/agents/roles.toml`) y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca por su propio `Tipo`. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 

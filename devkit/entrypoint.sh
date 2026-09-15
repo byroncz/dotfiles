@@ -241,13 +241,17 @@ fi
 # se inventa un token: el editor simplemente no arranca.
 VSCODE_TOKEN="$RUN_DIR/vscode-token"
 if [ -s "$VSCODE_TOKEN" ]; then
-  nohup openvscode-server \
+  # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server
+  # imprime "Web UI available at ...?tkn=<token>" al levantar, y ese grep -v
+  # lo saca del log para que un tail no filtre el token (ver DEVKIT-51).
+  : > "$RUN_DIR/vscode.log"; chmod 600 "$RUN_DIR/vscode.log"
+  nohup bash -c "openvscode-server \
     --host 127.0.0.1 --port 3000 \
-    --connection-token-file "$VSCODE_TOKEN" \
-    --server-data-dir "$HOME/.openvscode-server/data" \
-    --extensions-dir "$HOME/.openvscode-server/extensions" \
-    --default-folder /workspace \
-    >"$RUN_DIR/vscode.log" 2>&1 &
+    --connection-token-file '$VSCODE_TOKEN' \
+    --server-data-dir '$HOME/.openvscode-server/data' \
+    --extensions-dir '$HOME/.openvscode-server/extensions' \
+    --default-folder /workspace 2>&1 | grep -v 'tkn='" \
+    >"$RUN_DIR/vscode.log" &
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
   nohup socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:3000 >/dev/null 2>&1 &

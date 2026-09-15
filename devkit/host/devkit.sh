@@ -99,8 +99,10 @@ code() {
   [ -n "$token" ] || { echo "sin token de VS Code; crea el secreto vscode-token en Bitwarden y corre 'devkit recreate $proj'" >&2; return 1; }
   port="$(sed -n 's/^DEVKIT_VSCODE_PORT=//p' "$dir/.env" 2>/dev/null | head -1)"; port="${port:-3000}"
   url="http://127.0.0.1:${port}/?tkn=${token}"
+  if command -v open >/dev/null 2>&1 && open "$url"; then
+    return 0
+  fi
   echo "$url"
-  command -v open >/dev/null 2>&1 && open "$url"
   return 0
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }

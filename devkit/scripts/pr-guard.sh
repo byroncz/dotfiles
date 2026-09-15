@@ -185,6 +185,11 @@ reason_for_segment() {
     done
   fi
 
+  if [[ "$nseg" =~ /run/devkit/vscode-token ]] && has_token "$nseg" cat tail grep; then
+    printf 'leer /run/devkit/vscode-token expone el token; no se pega en un chat ni en una card (ver runbook "El editor no abre")'
+    return 0
+  fi
+
   return 1
 }
 
@@ -268,6 +273,12 @@ run_tests() {
   check 'gh pr review 42 -a=true' block
   check 'gh pr merge 42 --auto --admin=true' block
 
+  # DEVKIT-51: leer el token del editor en crudo no se pega en un chat.
+  check 'cat /run/devkit/vscode-token' block
+  check 'docker exec devkit-x cat /run/devkit/vscode-token' block
+  check 'tail /run/devkit/vscode-token' block
+  check 'grep tkn /run/devkit/vscode-token' block
+
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
   check 'gh pr merge 42 --auto=false' block
@@ -285,6 +296,8 @@ run_tests() {
   check 'git push origin fix/DEVKIT-9-algo' allow
   check 'git push origin chore/main-cleanup' allow
   check 'git status' allow
+  check 'docker exec devkit-x test -f /run/devkit/vscode-token && echo ok' allow
+  check 'docker exec devkit-x cat /run/devkit/vscode.log' allow
 
   # El hook completo (stdin -> denials.log), no solo reason_to_block: el
   # registro de denegaciones de DEVKIT-45 vive en el bloque de más abajo, que
