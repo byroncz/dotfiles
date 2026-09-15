@@ -31,6 +31,16 @@
 # `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
 # de `gh pr view <N> --json comments`. Los hooks `--quota-hit`, `--quota-reset`
 # y `--run-skill` prueban el relanzamiento por cuota agotada; ver watch-test.sh.
+#
+# Monitoreo mínimo sin modelo (DEVKIT-46): cuatro alarmas en bash, todas como
+# líneas "ALARMA: ..." en watch.log, sin costo de tokens: skill que terminó
+# con error, skill de más de `DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo
+# (1200 por defecto), `result` que termina en pregunta en vez de un estado
+# observable, y rama de una card sin PR y sin `claude -p` vivo hace más de
+# `DEVKIT_WATCH_ORPHAN_AGE` segundos (1800 por defecto). `bash watch.sh
+# --agentes-vivos` lista PID, Clave y paso de cada skill en curso. El hook
+# `--orphan-branch <edad> <tiene PR: si|no> <skill viva: si|no>` prueba la
+# cuarta alarma sin git ni gh; ver watch-test.sh.
 set -u
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
@@ -50,6 +60,12 @@ QUOTA_RETRIES="${DEVKIT_WATCH_QUOTA_RETRIES:-3}"
 QUOTA_WAIT="${DEVKIT_WATCH_QUOTA_WAIT:-1800}"
 QUOTA_MIN_WAIT="${DEVKIT_WATCH_QUOTA_MIN_WAIT:-60}"
 QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
+# Monitoreo mínimo sin modelo (DEVKIT-46): cuatro alarmas en bash, todas como
+# líneas "ALARMA: ..." en watch.log. `SKILL_TIMEOUT`/`SKILL_POLL` gobiernan la
+# alarma de skill lenta; `ORPHAN_MAX_AGE`, la de rama huérfana.
+SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
+SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
+ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cuatro campos separados por tabulador (acción, head, referencia,
@@ -326,6 +342,22 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
   ) &
 }
 
+# Alarma 1 de 4 (DEVKIT-46): mientras el `claude -p` de un skill corre en
+# segundo plano, avisa una sola vez si supera SKILL_TIMEOUT segundos. Sondea
+# cada SKILL_POLL segundos con `kill -0`; ambos son configurables para que la
+# prueba no tenga que esperar 20 minutos de verdad.
+watch_long_running() {  # watch_long_running <nombre> <pid>
+  local name=$1 pid=$2 waited=0 alarmed=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$SKILL_POLL"
+    waited=$((waited + SKILL_POLL))
+    if [ "$alarmed" -eq 0 ] && [ "$waited" -ge "$SKILL_TIMEOUT" ]; then
+      log "ALARMA: $name lleva $((waited / 60)) min corriendo (límite ${SKILL_TIMEOUT}s)"
+      alarmed=1
+    fi
+  done
+}
+
 # run_skill <nombre del log> <prompt> [clave de launched] [intento]. Lanza el
 # prompt con `devkit-run.sh --sync`, que resuelve modelo y esfuerzo por rol y
 # corre `claude -p`; la última línea de su JSON trae costo, tokens y turnos,
@@ -333,7 +365,7 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
 # trabajo, para que un corte sea visible, y si el corte fue por cuota se
 # programa el relanzamiento.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary modelo esfuerzo presupuesto
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado
   logf="$RUN_DIR/$name.log"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
@@ -344,15 +376,27 @@ run_skill() {
     flock 9
   fi
   read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --modelo "$prompt")
-  "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1
+  "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
+  skill_pid=$!
+  watch_long_running "$name" "$skill_pid" &
+  watcher_pid=$!
+  wait "$skill_pid"
   rc=$?
+  kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
   flock -u 9
   exec 9>&-
   summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")
   if [ $rc -eq 0 ]; then
     log "$name terminado: $summary"
+    # Alarma 2 de 4: un `result` que termina en pregunta es la card en curso
+    # cortando en seco en vez de resolver en un estado observable (AGENTS.md).
+    resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
+    if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
+      log "ALARMA: $name terminó con una pregunta abierta en vez de un estado observable"
+    fi
   else
-    log "$name falló (rc=$rc): $summary; ver $logf"
+    # Alarma 3 de 4: cualquier skill que termina con error.
+    log "ALARMA: $name terminó con error (rc=$rc): $summary; ver $logf"
   fi
   work_state
   if [ $rc -ne 0 ] && quota_hit "$logf"; then
@@ -384,6 +428,60 @@ key_of() {  # key_of <título> <código>
   printf '%s' "$key"
 }
 
+# Alarma 4 de 4 (DEVKIT-46): decisión pura, sin git ni gh, para que
+# watch-test.sh la pruebe con datos sintéticos. `check_orphan_branch` reúne
+# los tres datos (edad del último commit, si ya tiene PR, si una skill sigue
+# viva) y llama a esta función.
+orphan_branch_alarm() {  # orphan_branch_alarm <edad en segundos> <tiene PR: si|no> <skill viva: si|no>
+  local age=$1 has_pr=$2 skill_alive=$3
+  [ "$age" -ge "$ORPHAN_MAX_AGE" ] || return 1
+  [ "$has_pr" = "no" ] || return 1
+  [ "$skill_alive" = "no" ] || return 1
+  return 0
+}
+
+# Rama en la que quedó el workspace, sin PR y sin ningún `claude -p` vivo hace
+# más de ORPHAN_MAX_AGE segundos: la señal de que una ejecución se cortó a
+# medias y nadie la está retomando. "Skill viva" se lee del candado de
+# run_skill, no de la lista de procesos: si nadie tiene `skill.lock`, no hay
+# un `claude -p` en curso sobre este workspace.
+check_orphan_branch() {
+  local branch key committed now age has_pr skill_alive prs
+  branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null) || return
+  case "$branch" in HEAD|main|"") return ;; esac
+  committed=$(git -C "$WS" log -1 --format=%ct 2>/dev/null) || return
+  now=$(date +%s)
+  age=$((now - committed))
+  exec 8>"$LOCK"
+  if flock -n 8; then skill_alive=no; flock -u 8; else skill_alive=si; fi
+  exec 8>&-
+  if prs=$(gh pr list --head "$branch" --state all --limit 1 --json number --jq 'length' 2>/dev/null); then
+    { [ "${prs:-0}" -gt 0 ] 2>/dev/null && has_pr=si; } || has_pr=no
+  else
+    return  # gh no respondió: se reintenta en la vuelta siguiente
+  fi
+  key=$(printf '%s' "$branch" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  if orphan_branch_alarm "$age" "$has_pr" "$skill_alive"; then
+    log "ALARMA: rama $branch (${key:-sin Clave}) sin PR y sin skill viva hace $((age / 60)) min"
+  fi
+}
+
+# Comando que lista los agentes vivos con su Clave y su paso (DEVKIT-46,
+# contenido de DEVKIT-19). Un agente vivo es un `devkit-run.sh --worker` en
+# curso: su línea de proceso trae "--worker /<skill> <Clave> ...", que es el
+# mismo prompt que arma `devkit-run` (skill.sh y devkit-run.sh comparten esa
+# forma). No depende de watch.sh: un `devkit-run` lanzado a mano también sale.
+agentes_vivos() {
+  ps -eo pid=,args= 2>/dev/null | grep -- '--worker' | grep -v grep | while IFS= read -r linea; do
+    local pid args paso clave
+    pid=$(printf '%s' "$linea" | awk '{print $1}')
+    args=$(printf '%s' "$linea" | cut -d' ' -f2-)
+    paso=$(printf '%s' "$args" | grep -oE -- '--worker[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
+    clave=$(printf '%s' "$args" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+    printf '%s\t%s\t%s\n' "$pid" "${clave:-?}" "${paso:-?}"
+  done
+}
+
 # Hooks de prueba, sin GitHub y sin gastar cuota:
 #   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
 #   --quota-reset           imprime el epoch de reinicio que lee de ese texto
@@ -410,6 +508,14 @@ case "${1:-}" in
     cycle_cost "${2:-}" "${3:-}"
     exit 0
     ;;
+  --orphan-branch)
+    if orphan_branch_alarm "${2:-0}" "${3:-no}" "${4:-si}"; then echo si; else echo no; fi
+    exit 0
+    ;;
+  --agentes-vivos)
+    agentes_vivos
+    exit 0
+    ;;
 esac
 
 log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
@@ -423,6 +529,7 @@ while true; do
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     BOT="$(gh api user --jq .login 2>/dev/null)"
     log "consultando GitHub"
+    check_orphan_branch
 
     # --- PRs abiertos: revisar, corregir o bloquear ------------------------
     gh pr list --state open --limit 30 --json number,title,url \
