@@ -10,6 +10,29 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### El token del editor deja de filtrarse por logs y terminal (DEVKIT-51)
+
+- `/run/devkit/vscode.log` nace en `600` (antes `644`) y el arranque de
+  `openvscode-server` filtra con `grep --line-buffered -v 'tkn='` la línea
+  que trae el token, para que un `tail`/`cat` normal no lo muestre.
+- `devkit code` deja de imprimir la URL con el token cuando `open` la abre
+  bien en el Mac; solo la imprime si `open` falla o no está.
+- `pr-guard.sh` pasa de lista negra a lista blanca para
+  `/run/devkit/vscode-token`: bloquea cualquier segmento que mencione la
+  ruta, incluidas la redirección (`< vscode-token`), la sustitución de
+  comando y los intérpretes, salvo que solo compruebe que el archivo existe
+  (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`). `ls` y `stat` salieron
+  de la lista blanca: su salida (listado, `%n`) reinyecta la ruta o el
+  nombre del archivo a un segundo comando en el mismo pipe (ej. `ls
+  /run/devkit/vscode-token | xargs cat`), que esta inspección de texto por
+  segmento no veía.
+- Runbook "El editor no abre" actualizado con el procedimiento de rotación
+  del token y qué no pegar nunca en un chat ni en una card.
+- Cambios requeridos: quien tenga el comando `devkit code` instalado en el
+  Mac desde antes de esta card lo reinstala con
+  `new-project.sh <proyecto> --ref <rama>` para tomar el cambio; `devkit
+  recreate` alcanza para el resto (imagen).
+
 ### `devkit-run` en task-close y epic-plan; alarmas y anulación manual (DEVKIT-50)
 
 - `task-close` y `epic-plan` lanzan la siguiente/primera hija con

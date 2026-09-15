@@ -111,6 +111,22 @@ check_docker() {  # check_docker <nombre> <si|no> <patrón>
 }
 marca() { cat "$TMP/root/p/template/marca/archivo.txt" 2>/dev/null; }
 
+# open_doble <rc|ausente>: pone (o quita) un doble de `open` en el PATH de la
+# prueba, para ejercitar la rama de `devkit code` que usa `open` de verdad en
+# vez de caer al respaldo por no encontrarlo (DEVKIT-51).
+open_doble() {
+  if [ "$1" = "ausente" ]; then
+    rm -f "$TMP/bin/open"
+  else
+    cat >"$TMP/bin/open" <<FIN
+#!/bin/sh
+echo "open \$*" >> "$DEVKIT_TEST_LOG"
+exit $1
+FIN
+    chmod +x "$TMP/bin/open"
+  fi
+}
+
 # --- Modo dev, contenedor arriba --------------------------------------------
 escenario dev; corre recreate
 check        "recreate en dev trae el contexto del workspace" MARCA-NUEVA "$(marca)"
@@ -175,5 +191,19 @@ check_salida "code con token imprime la URL" "http://127\.0\.0\.1:3000/\?tkn=sec
 escenario dev; corre code
 check        "code sin token falla" 1 "$ESTADO"
 check_salida "code sin token lo explica" "sin token de VS Code"
+
+# `open` presente: no se imprime la URL cuando `open` la abre bien.
+open_doble 0
+escenario dev; corre code 0 secreto123
+check        "code con open que abre bien termina en 0" 0 "$ESTADO"
+check        "code con open que abre bien no imprime la URL" no \
+             "$(grep -q 'tkn=secreto123' "$OUT" && echo si || echo no)"
+
+open_doble 1
+escenario dev; corre code 0 secreto123
+check        "code con open que falla termina en 0" 0 "$ESTADO"
+check_salida "code con open que falla igual imprime la URL" "http://127\.0\.0\.1:3000/\?tkn=secreto123"
+
+open_doble ausente
 
 exit $fail

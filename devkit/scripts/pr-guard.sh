@@ -59,6 +59,43 @@ has_flag() {
   return 1
 }
 
+# True si el segmento solo comprueba que /run/devkit/vscode-token existe
+# (test/[/[[ con -e/-f/-r/-s), no si lee su contenido. Lista blanca, no
+# negra: cualquier otra forma de tocar la ruta cae al bloqueo por defecto
+# del llamador. El comando de la comprobación debe ser el primer token del
+# segmento (o el primero tras "docker exec <contenedor>", el único
+# envoltorio que se usa hoy): así "grep ls ..." o "xargs ls < ..." no cuelan
+# solo por traer "ls" en cualquier posición, que era el hueco de DEVKIT-51
+# (H8). $(...) y las comillas invertidas bloquean siempre, porque pueden
+# inyectar el contenido del archivo como argumento de un comando que sí
+# pasaría la lista blanca (ej. "ls $(cat vscode-token)"). "ls" y "stat" no
+# están en la lista: su salida (listado, "%n") puede reinyectar la ruta o
+# el nombre del archivo a un lector posterior en el mismo pipe (ej. "ls
+# /run/devkit/vscode-token | xargs cat"), y ese segundo segmento no
+# menciona la ruta, así que este chequeo nunca lo ve. Es el límite
+# documentado de una inspección de texto por segmento (DEVKIT-51, cuarto
+# ciclo): formas alternativas de la ruta no se persiguen aquí.
+is_token_existence_check() {
+  local hay="$1"
+  case "$hay" in
+    *'$('*|*'`'*) return 1 ;;
+  esac
+  local -a toks
+  read -ra toks <<< "$hay"
+  local i=0
+  if [ "${toks[0]:-}" = docker ] && [ "${toks[1]:-}" = exec ]; then
+    i=3
+  fi
+  case "${toks[$i]:-}" in
+    test|'['|'[[')
+      has_flag "$hay" -e -f -r -s
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
   local raw="$1"
@@ -185,6 +222,11 @@ reason_for_segment() {
     done
   fi
 
+  if [[ "$nseg" =~ /run/devkit/vscode-token ]] && ! is_token_existence_check "$nseg"; then
+    printf 'leer /run/devkit/vscode-token expone el token; no se pega en un chat ni en una card (ver runbook "El editor no abre")'
+    return 0
+  fi
+
   return 1
 }
 
@@ -268,6 +310,43 @@ run_tests() {
   check 'gh pr review 42 -a=true' block
   check 'gh pr merge 42 --auto --admin=true' block
 
+  # DEVKIT-51: leer el token del editor en crudo no se pega en un chat.
+  check 'cat /run/devkit/vscode-token' block
+  check 'docker exec devkit-x cat /run/devkit/vscode-token' block
+  check 'tail /run/devkit/vscode-token' block
+  check 'grep tkn /run/devkit/vscode-token' block
+  check 'head /run/devkit/vscode-token' block
+  check 'less /run/devkit/vscode-token' block
+  check 'more /run/devkit/vscode-token' block
+  check 'od -c /run/devkit/vscode-token' block
+  check 'xxd /run/devkit/vscode-token' block
+  check 'strings /run/devkit/vscode-token' block
+  check 'base64 /run/devkit/vscode-token' block
+  check 'cp /run/devkit/vscode-token /tmp/t' block
+  check 'mv /run/devkit/vscode-token /tmp/t' block
+  check 'docker cp devkit-x:/run/devkit/vscode-token .' block
+
+  # DEVKIT-51, segundo ciclo: lista blanca en vez de negra. Cualquier forma
+  # de tocar la ruta que no sea una comprobación de existencia bloquea,
+  # incluida la redirección y el intérprete, que la lista negra no cubría.
+  check 'read t < /run/devkit/vscode-token' block
+  check 'echo $(</run/devkit/vscode-token)' block
+  check 'python3 -c "print(open(\"/run/devkit/vscode-token\").read())"' block
+  check 'sed -n 1p /run/devkit/vscode-token' block
+
+  # DEVKIT-51, tercer ciclo: la lista blanca aceptaba "ls" o "test -f" en
+  # cualquier posición del segmento, no solo como comando real.
+  check 'grep ls /run/devkit/vscode-token' block
+  check 'xargs ls < /run/devkit/vscode-token' block
+  check 'ls $(cat /run/devkit/vscode-token)' block
+
+  # DEVKIT-51, cuarto ciclo: "ls" y "stat" ya no están en la lista blanca.
+  # Su salida reinyecta la ruta o el nombre del archivo a un segundo
+  # segmento del pipe que no menciona la ruta, y ese segundo segmento es el
+  # que termina imprimiendo el token.
+  check 'ls /run/devkit/vscode-token | xargs cat' block
+  check 'stat -c %n /run/devkit/vscode-token | xargs cat' block
+
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
   check 'gh pr merge 42 --auto=false' block
@@ -285,6 +364,15 @@ run_tests() {
   check 'git push origin fix/DEVKIT-9-algo' allow
   check 'git push origin chore/main-cleanup' allow
   check 'git status' allow
+  check 'docker exec devkit-x test -f /run/devkit/vscode-token && echo ok' allow
+  check 'docker exec devkit-x cat /run/devkit/vscode.log' allow
+
+  # DEVKIT-51, tercer ciclo: comprobaciones de existencia igual de inocuas
+  # que la lista blanca original bloqueaba por no reconocer la forma.
+  check '[[ -f /run/devkit/vscode-token ]]' allow
+  check 'test -e /run/devkit/vscode-token' allow
+  check 'test -r /run/devkit/vscode-token' allow
+  check '[ -s /run/devkit/vscode-token ]' allow
 
   # El hook completo (stdin -> denials.log), no solo reason_to_block: el
   # registro de denegaciones de DEVKIT-45 vive en el bloque de más abajo, que
