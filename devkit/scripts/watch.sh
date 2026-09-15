@@ -445,13 +445,29 @@ orphan_branch_alarm() {  # orphan_branch_alarm <edad en segundos> <tiene PR: si|
 # medias y nadie la está retomando. "Skill viva" se lee del candado de
 # run_skill, no de la lista de procesos: si nadie tiene `skill.lock`, no hay
 # un `claude -p` en curso sobre este workspace.
+#
+# La edad se mide desde la última señal de actividad, no solo desde el
+# último commit: una rama recién creada por task-start hereda el timestamp
+# del último commit de main (que puede ser viejo) y `exec >"$LOCK"` en
+# run_skill actualiza el mtime del candado cada vez que una skill lo toma o
+# lo suelta, así que sirve de proxy de "hace cuánto corrió algo aquí". Si la
+# rama todavía no tiene commits propios sobre main, es demasiado pronto para
+# medir: se sale sin evaluar la alarma (DEVKIT-46, H3 de la revisión).
 check_orphan_branch() {
-  local branch key committed now age has_pr skill_alive prs
+  local branch key committed lock_mtime last_activity now age has_pr skill_alive prs head_commit merge_base
   branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null) || return
   case "$branch" in HEAD|main|"") return ;; esac
+  head_commit=$(git -C "$WS" rev-parse HEAD 2>/dev/null) || return
+  merge_base=$(git -C "$WS" merge-base HEAD main 2>/dev/null) || merge_base=""
+  [ "$head_commit" != "$merge_base" ] || return
   committed=$(git -C "$WS" log -1 --format=%ct 2>/dev/null) || return
+  last_activity=$committed
+  if [ -f "$LOCK" ]; then
+    lock_mtime=$(stat -c %Y "$LOCK" 2>/dev/null || stat -f %m "$LOCK" 2>/dev/null) || lock_mtime=0
+    [ "$lock_mtime" -le "$last_activity" ] || last_activity=$lock_mtime
+  fi
   now=$(date +%s)
-  age=$((now - committed))
+  age=$((now - last_activity))
   exec 8>"$LOCK"
   if flock -n 8; then skill_alive=no; flock -u 8; else skill_alive=si; fi
   exec 8>&-
