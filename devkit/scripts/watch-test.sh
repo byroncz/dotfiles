@@ -188,7 +188,8 @@ if [ "$n" -le "${DEVKIT_TEST_FAILS:-1}" ]; then
     | sed "s/@RESET@/$(( $(date +%s) + 2 ))/"
   exit 1
 fi
-printf '{"result":"listo","total_cost_usd":0.01,"num_turns":3}\n'
+[ "${DEVKIT_TEST_SLEEP:-0}" = "0" ] || sleep "$DEVKIT_TEST_SLEEP"
+printf '{"result":"%s","total_cost_usd":0.01,"num_turns":3}\n' "${DEVKIT_TEST_RESULT:-listo}"
 FIN
 chmod +x "$DOBLE"
 
@@ -204,9 +205,12 @@ corre_doble() {
   # PRESEED simula lo que ya hay en `launched` cuando arranca la ejecución.
   if [ -n "${PRESEED:-}" ]; then mkdir -p "$dir/run"; echo "$PRESEED" > "$dir/run/launched"; fi
   DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS="$1" DEVKIT_TEST_MSG="${2:-}" \
+  DEVKIT_TEST_SLEEP="${DEVKIT_TEST_SLEEP:-0}" DEVKIT_TEST_RESULT="${DEVKIT_TEST_RESULT:-listo}" \
   DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
   DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 \
   DEVKIT_WATCH_QUOTA_RETRIES="${RETRIES:-3}" \
+  DEVKIT_WATCH_SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}" \
+  DEVKIT_WATCH_SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}" \
     bash "$WATCH" --run-skill "pr-review-9-abc1234" "/pr-review 9" "revisar:9:abc1234" \
     >"$OUT" 2>&1
   LLAMADAS=$(cat "$dir/llamadas" 2>/dev/null || echo 0)
@@ -286,5 +290,69 @@ check_igual "costo total del ciclo suma todas las rondas del PR" "0.5100" "$CYCL
 
 CYCLE_EMPTY=$(bash "$WATCH" --cycle-cost 999 "$CYCLE_LOG")
 check_igual "costo del ciclo de un PR sin líneas es 0" "0.0000" "$CYCLE_EMPTY"
+
+# --- Monitoreo mínimo sin modelo: las cuatro alarmas (DEVKIT-46) ------------
+# Un caso por alarma, sin gastar cuota ni tocar GitHub: las tres primeras
+# contra el doble de `claude` de más arriba; la cuarta, contra la decisión
+# pura `orphan_branch_alarm` vía el hook `--orphan-branch`.
+
+# 1. Skill que termina con error, sin relación con la cuota: no dispara el
+# relanzamiento (queda para ver en el log), solo la alarma.
+corre_doble 1 "Error: algo se rompió, sin relación con la cuota"
+check_log "alarma por skill con error" 'ALARMA: pr-review-9-abc1234 terminó con error \(rc=1\)'
+check_igual "un error que no es de cuota no reintenta" 1 "$LLAMADAS"
+
+# 2. Skill que supera el límite de tiempo mientras sigue corriendo: el doble
+# duerme más que DEVKIT_WATCH_SKILL_TIMEOUT, sondeado cada DEVKIT_WATCH_SKILL_POLL.
+DEVKIT_TEST_SLEEP=2 DEVKIT_WATCH_SKILL_TIMEOUT=1 DEVKIT_WATCH_SKILL_POLL=1 corre_doble 0
+check_log "alarma por skill que excede el tiempo límite" \
+  'ALARMA: pr-review-9-abc1234 lleva [0-9]+ min corriendo \(límite 1s\)'
+
+# 3. `result` que termina en pregunta en vez de resolver en un estado
+# observable (el defecto de DEVKIT-17/26/40 que AGENTS.md prohíbe).
+DEVKIT_TEST_RESULT='¿Sigo con esto?' corre_doble 0
+check_log "alarma por result que termina en pregunta" \
+  'ALARMA: pr-review-9-abc1234 terminó con una pregunta abierta'
+
+# 4. Rama de una card sin PR y sin skill viva hace más de
+# DEVKIT_WATCH_ORPHAN_AGE segundos (1800 por defecto, sin sobreescribir aquí).
+# check_orphan <nombre> <esperado si|no> <edad> <tiene PR> <skill viva>
+check_orphan() {
+  local name=$1 want=$2 got
+  got=$(bash "$WATCH" --orphan-branch "$3" "$4" "$5")
+  if [ "$got" = "$want" ]; then
+    printf 'ok   %-58s %s\n' "$name" "$got"
+  else
+    printf 'FAIL %-58s esperado %s, obtenido %s\n' "$name" "$want" "${got:-<vacío>}"
+    fail=1
+  fi
+}
+check_orphan "rama vieja, sin PR, sin skill viva: huérfana" si 1900 no no
+check_orphan "rama vieja, sin PR, pero con skill viva: no es huérfana" no 1900 no si
+check_orphan "rama vieja, ya con PR: no es huérfana" no 1900 si no
+check_orphan "rama reciente, sin PR, sin skill viva: todavía no" no 1000 no no
+
+# 5. Comando que lista los agentes vivos, con PID, Clave y paso (contenido de
+# DEVKIT-19). El doble no es `claude`: es el mismo patrón de línea de proceso
+# que arma `devkit-run.sh --worker` ("--worker /<skill> <Clave> ..."), así que
+# no hace falta lanzar un `claude -p` de verdad para probar el comando.
+FAKE_WORKER="$TMP/fake-worker.sh"
+cat >"$FAKE_WORKER" <<'FIN'
+#!/usr/bin/env bash
+sleep 5
+FIN
+chmod +x "$FAKE_WORKER"
+"$FAKE_WORKER" --worker /task-fix DEVKIT-46 extra "$TMP/fake.log" modelo-x esfuerzo-x 10 &
+FAKE_PID=$!
+sleep 0.3
+AGENTES=$(bash "$WATCH" --agentes-vivos)
+kill "$FAKE_PID" 2>/dev/null
+wait "$FAKE_PID" 2>/dev/null
+if printf '%s\n' "$AGENTES" | grep -qE "^${FAKE_PID}[[:space:]]+DEVKIT-46[[:space:]]+task-fix$"; then
+  printf 'ok   %-58s %s\n' "agentes-vivos lista PID, Clave y paso" "$FAKE_PID DEVKIT-46 task-fix"
+else
+  printf 'FAIL %-58s no encontró la línea esperada en: %s\n' "agentes-vivos lista PID, Clave y paso" "$AGENTES"
+  fail=1
+fi
 
 exit $fail

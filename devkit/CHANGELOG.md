@@ -10,6 +10,20 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Monitoreo mínimo sin modelo en watch.sh (DEVKIT-46)
+
+- Cuatro alarmas en bash dentro de `watch.sh`, sin gastar tokens, como líneas
+  `ALARMA: ...` en `watch.log`: una skill que termina con error; una skill
+  que lleva más de `DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo (1200 por
+  defecto); un `result` que termina en pregunta en vez de resolver en un
+  estado observable; y la rama en la que quedó el workspace, sin PR y sin
+  ningún `claude -p` vivo hace más de `DEVKIT_WATCH_ORPHAN_AGE` segundos
+  (1800 por defecto).
+- `watch.sh --agentes-vivos` lista los `devkit-run.sh --worker` en curso con
+  su PID, Clave y paso (skill).
+- Variables nuevas: `DEVKIT_WATCH_SKILL_TIMEOUT`, `DEVKIT_WATCH_SKILL_POLL` y
+  `DEVKIT_WATCH_ORPHAN_AGE`.
+
 ### Lanzador `devkit-run` con modelo, esfuerzo y costo por rol (DEVKIT-45)
 
 - `devkit/scripts/devkit-run.sh`, único punto de lanzamiento de una skill:

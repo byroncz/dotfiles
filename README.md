@@ -114,7 +114,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
 | `g`, `gs`, `gl`, `ll` | Alias: `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
-| `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
+| `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos, el relanzamiento por cuota agotada con logs falsos y las cuatro alarmas del monitoreo mínimo; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
@@ -226,11 +226,31 @@ puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el mismo
 workspace se pisarían la rama; el que llega segundo escribe `espera: otra skill
 ocupa el workspace` y arranca al quedar libre.
 
+**Monitoreo mínimo sin modelo.** Cuatro alarmas en bash dentro de `watch.sh`,
+sin gastar tokens, todas como líneas `ALARMA: ...` en `watch.log` (la petición
+formal de review en GitHub ya cubre el aviso externo, así que no hay canal
+aparte): una skill que termina con error; una skill que lleva más de
+`DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo (1200 por defecto, sondeada
+cada `DEVKIT_WATCH_SKILL_POLL` segundos); un `result` que termina en pregunta
+en vez de resolver en un estado observable (el defecto de headless que
+`AGENTS.md` prohíbe: no se comprueba el Estado de la card en Notion, porque el
+bucle no la consulta desde bash, así que alarma cualquier pregunta final,
+esté o no la card `En progreso`); y la rama en la que quedó el workspace, sin
+PR y sin ningún `claude -p` vivo (sin `skill.lock` tomado) hace más de
+`DEVKIT_WATCH_ORPHAN_AGE` segundos (1800 por defecto). Para ver quién sigue
+vivo ahora mismo, con su Clave y el paso (skill) en el que está:
+
+```sh
+bash /opt/devkit/scripts/watch.sh --agentes-vivos
+# <PID>  DEVKIT-46  task-fix
+```
+
 Variables: `DEVKIT_WATCH_INTERVAL` (segundos, 300), `DEVKIT_WATCH_MAX_CYCLES`
 (3), `DEVKIT_WATCH_QUOTA_RETRIES` (3), `DEVKIT_WATCH_QUOTA_WAIT` (1800, la
-espera fija), `DEVKIT_WATCH_QUOTA_MIN_WAIT` (60) y `DEVKIT_WATCH_QUOTA_MAX_WAIT`
-(86400, tope por si el aviso trae una hora absurda). Para ver qué decidiría
-sobre un PR sin esperar al bucle:
+espera fija), `DEVKIT_WATCH_QUOTA_MIN_WAIT` (60), `DEVKIT_WATCH_QUOTA_MAX_WAIT`
+(86400, tope por si el aviso trae una hora absurda), `DEVKIT_WATCH_SKILL_TIMEOUT`
+(1200), `DEVKIT_WATCH_SKILL_POLL` (5) y `DEVKIT_WATCH_ORPHAN_AGE` (1800). Para
+ver qué decidiría sobre un PR sin esperar al bucle:
 
 ```sh
 gh pr view <N> --json headRefOid,reviews,comments | bash /opt/devkit/scripts/watch.sh --decide
@@ -257,6 +277,16 @@ resumen trae el modelo del rol resuelto por `devkit-run.sh` y que
 dado. `devkit-run.sh --test` prueba aparte la resolución de rol y Tipo, el
 lanzamiento en segundo plano (numeración del log, candado con `watch.sh`) y
 el aviso de presupuesto de turnos excedido.
+
+Las cuatro alarmas del monitoreo mínimo tienen un caso cada una: el doble de
+`claude` de `--run-skill` cubre el error genérico (sin relación con la
+cuota, para no confundirla con el relanzamiento), la skill lenta (con
+`DEVKIT_WATCH_SKILL_TIMEOUT`/`DEVKIT_WATCH_SKILL_POLL` acortados para la
+prueba) y el `result` que termina en pregunta; la alarma de rama huérfana se
+prueba aparte con el hook `--orphan-branch <edad> <tiene PR: si|no> <skill
+viva: si|no>`, que llama a la decisión pura sin tocar git ni `gh`. El comando
+`--agentes-vivos` se prueba contra un doble con la misma forma de línea de
+proceso que arma `devkit-run.sh --worker`, sin lanzar un `claude -p` real.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
