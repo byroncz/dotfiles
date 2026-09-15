@@ -1,0 +1,39 @@
+# Tabla rol -> modelo, esfuerzo y presupuesto de turnos, en un solo archivo
+# del template (DEVKIT-45). La lee `devkit/scripts/devkit-run.sh`, el único
+# punto de lanzamiento de una skill en segundo plano; ver ese script para
+# cómo se resuelve el rol de cada skill.
+#
+# Modelos: alias válidos para `claude --model` en esta versión de la CLI
+# (`claude --help`). `max_turns` es un presupuesto, no un límite: la CLI
+# instalada (2.1.270) no expone `--max-turns`, así que devkit-run compara
+# `num_turns` del resultado contra este número y solo avisa en el log si se
+# excede. Ver la entrada de Documentación de DEVKIT-45 para la evidencia.
+#
+# contabilidad: skills que solo comentan o cierran una card ya resuelta
+# (task-close, task-block), sin escribir código. El modelo más barato y
+# esfuerzo bajo alcanzan.
+contabilidad.model = "claude-haiku-4-5-20251001"
+contabilidad.effort = "low"
+contabilidad.max_turns = 15
+
+# implementación: el resto de las skills (task-start, task-fix, task-submit,
+# epic-plan, etc.), una tabla por `Tipo` de card. `chore` suele ser
+# mecánico (renombrar, mover, documentar) y tolera el modelo barato;
+# `feature` y `bug` tocan lógica y se quedan con el modelo fuerte.
+implementacion.feature.model = "claude-sonnet-5"
+implementacion.feature.effort = "medium"
+implementacion.feature.max_turns = 40
+
+implementacion.bug.model = "claude-sonnet-5"
+implementacion.bug.effort = "medium"
+implementacion.bug.max_turns = 30
+
+implementacion.chore.model = "claude-haiku-4-5-20251001"
+implementacion.chore.effort = "medium"
+implementacion.chore.max_turns = 25
+
+# revisión: pr-review, siempre el modelo más fuerte y esfuerzo alto, sin
+# importar el Tipo de la card que revisa (DEVKIT-45, criterio de aceptación).
+revision.model = "claude-opus-5"
+revision.effort = "high"
+revision.max_turns = 50

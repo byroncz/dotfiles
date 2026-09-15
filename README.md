@@ -118,7 +118,8 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/devkit-run.sh` | Único punto de lanzamiento de una skill: `devkit-run <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (`devkit/agents/roles.toml`) y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -155,6 +156,51 @@ PR` si no lo hay, `PR desconocido` si `gh` no respondió). Es una observación d
 git y GitHub, no del Estado de la card: una rama de card sin PR es la señal de
 que la ejecución pudo cortarse a medias, y solo Notion dice qué le pasó a la
 card.
+
+**Modelo, esfuerzo y costo por rol.** `watch.sh` lanza cada skill a través de
+`devkit-run.sh`, que resuelve modelo y esfuerzo según el rol de la skill, leído
+de `devkit/agents/roles.toml`: `contabilidad` (`task-close`, `task-block`, que
+solo comentan o cierran) usa el modelo más barato con esfuerzo bajo;
+`implementación` (el resto: `task-start`, `task-fix`, etc.) usa el modelo y
+esfuerzo de la fila que corresponde al `Tipo` de la card (`feature`, `bug` o
+`chore`), tomado del prefijo de la rama porque el bucle no consulta Notion
+desde bash; `revisión` (`pr-review`) siempre usa el modelo más fuerte con
+esfuerzo alto, sin importar el `Tipo`. La tabla también lleva un
+`max_turns` por rol, pero es un presupuesto, no un límite: la CLI instalada no
+tiene una opción `--max-turns` (`claude --help`, versión 2.1.270), así que
+`devkit-run` solo compara `num_turns` del resultado contra ese número y avisa
+en el log si se excede. La línea de resumen queda así:
+
+```
+pr-review-31-a1b2c3d terminado: modelo=claude-opus-5 esfuerzo=high costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
+```
+
+Al terminar `task-close` de un PR mergeado, el bucle suma el `costo=` de todas
+las líneas de ese número de PR en `watch.log` (todas sus rondas de revisión y
+corrección, no solo la del cierre) y deja una línea con el total del ciclo:
+
+```
+PR #31 (DEVKIT-45) costo total del ciclo: $0.6700 USD
+```
+
+Un humano lanza la misma tabla a mano con `devkit-run <skill> <Clave>` (por
+ejemplo `devkit-run task-start DEVKIT-45`), sin escribir el `nohup claude -p
+... &` completo: ver la fila de `devkit-run.sh` en la tabla de comandos, más
+arriba.
+
+**Permisos en modo headless.** `devkit-run` corre cada `claude -p` con
+`--permission-mode acceptEdits`, igual que antes; no cambia a
+`--permission-mode dontAsk`. Se probó con `claude -p` real: un comando que no
+está en la lista `allow` de `settings.json` corre igual en modo headless, con
+`acceptEdits` o con `dontAsk` (el campo `permission_denials` del JSON de
+salida queda vacío en ambos casos). La lista `allow` no es una lista blanca
+que restrinja nada en `-p`: solo evita el diálogo de confirmación en una
+sesión interactiva. La compuerta real en headless es la lista `deny` de
+`settings.json` más el hook `pr-guard.sh`, como ya documenta
+`docs/ARCHITECTURE.md` (sección 8.2); por eso el registro de denegaciones que
+pedía DEVKIT-45 vive en `pr-guard.sh` (cada bloqueo suyo, en
+`/run/devkit/denials.log`) y no en un intento de hacer cumplir la lista
+`allow`, que no bloquea nada que hacer cumplir.
 
 **Cuota agotada.** Si un `claude -p` muere porque se acabó la cuota de la
 suscripción, el agente no puede reaccionar: sin cuota no habla con el modelo y
@@ -205,7 +251,12 @@ prueba la cuota agotada sin gastar cuota: `--quota-hit` y `--quota-reset`
 reciben avisos de límite de mentira y comprueban la detección y la hora
 extraída, y `--run-skill` corre `run_skill` contra un doble de `claude` que
 muere por cuota la primera vez, para ver las dos líneas del log, el
-relanzamiento y el tope de intentos.
+relanzamiento y el tope de intentos. También comprueba que la línea de
+resumen trae el modelo del rol resuelto por `devkit-run.sh` y que
+`--cycle-cost <N>` suma el costo de todas las líneas de ese PR en un log
+dado. `devkit-run.sh --test` prueba aparte la resolución de rol y Tipo, el
+lanzamiento en segundo plano (numeración del log, candado con `watch.sh`) y
+el aviso de presupuesto de turnos excedido.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee

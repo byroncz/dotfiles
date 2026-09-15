@@ -37,11 +37,15 @@ RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 LAUNCHED="$RUN_DIR/launched"
 POKE="$RUN_DIR/poke"
 LOCK="$RUN_DIR/skill.lock"
+WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
-# El binario del agente sale a una variable para que watch-test.sh pueda
-# sustituirlo por un doble y probar el relanzamiento sin gastar cuota.
-CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
+# `devkit-run.sh` es el único punto de lanzamiento (DEVKIT-45): resuelve
+# modelo y esfuerzo por rol desde `devkit/agents/roles.toml` y corre
+# `claude -p`; `run_skill` sigue dueño del candado, la cuota agotada y el
+# registro en watch.log.
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEVKIT_RUN="${DEVKIT_RUN_BIN:-$SCRIPTS_DIR/devkit-run.sh}"
 QUOTA_RETRIES="${DEVKIT_WATCH_QUOTA_RETRIES:-3}"
 QUOTA_WAIT="${DEVKIT_WATCH_QUOTA_WAIT:-1800}"
 QUOTA_MIN_WAIT="${DEVKIT_WATCH_QUOTA_MIN_WAIT:-60}"
@@ -322,12 +326,14 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
   ) &
 }
 
-# run_skill <nombre del log> <prompt> [clave de launched] [intento]. Salida JSON
-# de claude -p: la última línea trae costo, tokens y turnos, que es la medida de
-# cada ciclo. Al terminar se registra el estado del trabajo, para que un corte
-# sea visible, y si el corte fue por cuota se programa el relanzamiento.
+# run_skill <nombre del log> <prompt> [clave de launched] [intento]. Lanza el
+# prompt con `devkit-run.sh --sync`, que resuelve modelo y esfuerzo por rol y
+# corre `claude -p`; la última línea de su JSON trae costo, tokens y turnos,
+# que es la medida de cada ciclo. Al terminar se registra el estado del
+# trabajo, para que un corte sea visible, y si el corte fue por cuota se
+# programa el relanzamiento.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary modelo esfuerzo presupuesto
   logf="$RUN_DIR/$name.log"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
@@ -337,16 +343,12 @@ run_skill() {
     log "$name espera: otra skill ocupa el workspace"
     flock 9
   fi
-  "$CLAUDE_BIN" -p "$prompt" --output-format json \
-    --permission-mode acceptEdits \
-    --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" "mcp__plugin_Notion_notion" \
-    >"$logf" 2>&1
+  read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --modelo "$prompt")
+  "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1
   rc=$?
   flock -u 9
   exec 9>&-
-  summary=$(tail -1 "$logf" | jq -r '
-    "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
-  [ -n "$summary" ] || summary="$(tail -1 "$logf" | cut -c1-160)"
+  summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")
   if [ $rc -eq 0 ]; then
     log "$name terminado: $summary"
   else
@@ -359,6 +361,19 @@ run_skill() {
   return $rc
 }
 
+# Costo total del ciclo de un PR: suma "costo=" de todas sus líneas en
+# watch.log (pr-review-<n>-*, task-fix-<n>-*, task-block-<n>,
+# task-close-<n>), no solo el último task-close, porque el mismo PR pudo
+# pasar por varias rondas de revisión y corrección. Se imprime al cerrar.
+cycle_cost() {  # cycle_cost <num> [archivo de log, para la prueba]
+  local num=$1 file=${2:-$WATCH_LOG_FILE}
+  # `(-[0-9A-Za-z]+)*` en vez de `?`: task-fix-<n>-humano-<fecha> tiene dos
+  # segmentos de sufijo, no uno.
+  grep -E " (pr-review|task-fix|task-block|task-close)-$num(-[0-9A-Za-z]+)* (terminado|falló)" "$file" 2>/dev/null \
+    | grep -oE 'costo=[0-9.]+' | cut -d= -f2 \
+    | awk '{s+=$1} END{printf "%.4f", s+0}'
+}
+
 # Clave del título del PR, solo si es de este proyecto y no es la -0.
 key_of() {  # key_of <título> <código>
   local key
@@ -369,11 +384,12 @@ key_of() {  # key_of <título> <código>
   printf '%s' "$key"
 }
 
-# Hooks de prueba del relanzamiento por cuota, sin GitHub y sin gastar cuota:
+# Hooks de prueba, sin GitHub y sin gastar cuota:
 #   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
 #   --quota-reset           imprime el epoch de reinicio que lee de ese texto
 #   --run-skill <n> <p>     una ejecución de run_skill, esperando su relanzamiento
-# Los tres se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR. Ver watch-test.sh.
+#   --cycle-cost <n> <log>  el costo total del ciclo de un PR, desde un log dado
+# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR. Ver watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -388,6 +404,10 @@ case "${1:-}" in
   --run-skill)
     run_skill "${2:-prueba}" "${3:-/noop}" "${4:--}"
     wait
+    exit 0
+    ;;
+  --cycle-cost)
+    cycle_cost "${2:-}" "${3:-}"
     exit 0
     ;;
 esac
@@ -488,6 +508,7 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
         mark "cerrar:$num"
         log "PR #$num mergeado ($key): lanzando task-close"
         run_skill "task-close-$num" "/task-close $key $url" "cerrar:$num"
+        log "PR #$num ($key) costo total del ciclo: \$$(cycle_cost "$num") USD"
       done
   fi
   sleep_or_poke "$INTERVAL"

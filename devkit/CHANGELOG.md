@@ -10,6 +10,37 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Lanzador `devkit-run` con modelo, esfuerzo y costo por rol (DEVKIT-45)
+
+- `devkit/scripts/devkit-run.sh`, único punto de lanzamiento de una skill:
+  `devkit-run <skill> <Clave> [texto extra...]` la corre en segundo plano con
+  `nohup` desde `/workspace`, sin el `nohup claude -p ... &` a mano que exigía
+  hasta ahora (absorbe DEVKIT-18). Log en `/run/devkit/<skill>-<n>.log`, con
+  el mismo candado que `run_skill` para no pisarle la rama al bucle
+  (DEVKIT-27).
+- `devkit/agents/roles.toml`, la tabla rol -> modelo/esfuerzo/presupuesto de
+  turnos: `contabilidad` (`task-close`, `task-block`) con el modelo más
+  barato; `implementación`, por `Tipo` de card (derivado del prefijo de la
+  rama, porque el bucle no consulta Notion desde bash); `revisión`
+  (`pr-review`), siempre el modelo fuerte. `max_turns` es un presupuesto, no
+  un límite: la CLI instalada (2.1.270) no tiene `--max-turns`.
+- `watch.sh` usa `devkit-run.sh` en `run_skill`, y agrega una línea con el
+  costo total del ciclo (todas las rondas de revisión y corrección de un PR,
+  no solo el cierre) al terminar `task-close`.
+- **Corrección de rumbo sobre el criterio original:** el criterio de
+  aceptación pedía "permisos `dontAsk` con la lista blanca completa de
+  `settings.json`... y un registro de denegaciones para ampliar la lista
+  cuando algo legítimo falle". Se probó con `claude -p` real (modos
+  `acceptEdits` y `dontAsk`, con y sin `--permission-prompts none`): un
+  comando fuera de la lista `allow` corre igual en modo headless; esa lista
+  no restringe nada ahí, solo evita el diálogo de confirmación en una sesión
+  interactiva. `docs/ARCHITECTURE.md` (8.2) ya documentaba esto: la compuerta
+  real es la lista `deny` más el hook `pr-guard.sh`. Por eso `devkit-run`
+  sigue en `--permission-mode acceptEdits` (no cambia a `dontAsk`, que no
+  aporta nada distinto) y el registro de denegaciones se implementó donde sí
+  hay denegaciones reales: `pr-guard.sh` ahora anota cada comando que bloquea
+  en `/run/devkit/denials.log`.
+
 ### Skills headless corregidas: comentarios, cierre sin preguntas, fuente citada y clase agotada (DEVKIT-44)
 
 - `task-start` lee los comentarios de la card antes de publicar el plan y
