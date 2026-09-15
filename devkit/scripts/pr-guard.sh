@@ -11,6 +11,7 @@
 # de Claude Code (sale 2 y el motivo por stderr si bloquea).
 #      pr-guard.sh --test   corre la tabla de autoprueba y sale 1 si falla.
 set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Corta el comando en sub-comandos por operadores de shell, para no mezclar
 # uno con otro al buscar un patrón (ej. "ls; git push origin main").
@@ -284,6 +285,26 @@ run_tests() {
   check 'git push origin fix/DEVKIT-9-algo' allow
   check 'git push origin chore/main-cleanup' allow
   check 'git status' allow
+
+  # El hook completo (stdin -> denials.log), no solo reason_to_block: el
+  # registro de denegaciones de DEVKIT-45 vive en el bloque de más abajo, que
+  # ninguno de los checks de arriba ejercita.
+  local tmp
+  tmp=$(mktemp -d)
+  printf '{"tool_input":{"command":"gh pr review 42 --approve"}}' \
+    | DEVKIT_RUN_DIR="$tmp" bash "$HERE/pr-guard.sh" >/dev/null 2>&1
+  check_denial() {
+    local name="$1" want="$2" got="$3"
+    if [ "$want" = "$got" ]; then
+      printf 'ok   %-72s -> %s\n' "$name" "$got"
+    else
+      printf 'FAIL %-72s esperado %s, obtenido %s\n' "$name" "$want" "${got:-<vacío>}"
+      fail=1
+    fi
+  }
+  check_denial 'hook completo anota el bloqueo en denials.log' 1 \
+    "$(grep -c 'gh pr review 42 --approve' "$tmp/denials.log" 2>/dev/null || echo 0)"
+  rm -rf "$tmp"
 
   return $fail
 }
