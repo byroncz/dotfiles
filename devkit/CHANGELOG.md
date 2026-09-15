@@ -10,6 +10,25 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Retirar `.devcontainer/`, el enfoque anterior basado en la CLI de devcontainers (DEVKIT-29)
+
+- `.devcontainer/` quedaba como "referencia histórica hasta que exista la
+  0.1.0"; la 0.1.0 existe desde 2026-09-06 y ningún script del repo
+  (`new-project.sh`, `devkit/`, `README.md`) lo nombraba. El enfoque vivo es
+  Docker Compose puro, documentado en `docs/ARCHITECTURE.md`.
+- La cabecera de `docs/ARCHITECTURE.md` decía "diseño aprobado, pendiente de
+  construcción"; pasa a "en producción desde la versión `0.1.0`".
+- No había nada que rescatar de `.devcontainer/README.md` o
+  `.devcontainer/AGENTS.md`: los volúmenes, `CLAUDE_CONFIG_DIR` y el
+  pre-creado de puntos de montaje ya estaban en `docs/ARCHITECTURE.md`
+  (sección 4.3).
+- El PR lista, para que las borre el humano, las ramas remotas del enfoque
+  anterior: `claude/devcontainer-ecosystem-setup-7q3sod`,
+  `claude/devcontainer-persistencia-volumenes`, `claude/devcontainer-template`
+  y la huérfana `chore/DEVKIT-16-prueba-punta-a-punta`.
+  `claude/devcontainer-notion-docker-0tmny4` es la sesión web activa del
+  humano: no se toca.
+
 ### `template-update` pone al día `AGENTS.md` con cada bump de versión (DEVKIT-28)
 
 - Hasta ahora `entrypoint.sh` solo escribía `AGENTS.md` la primera vez
