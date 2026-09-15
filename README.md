@@ -111,7 +111,7 @@ workspace, `recreate` avisa y se reinstalan con
 | Comando | Qué hace |
 |---|---|
 | `claude` | Abre Claude Code en el workspace. |
-| `devkit-net-denied` | Lista los dominios que el proxy bloqueó en esta sesión. |
+| `devkit-net-denied` | Lista los dominios que el proxy rechazó en los últimos 15 min (`DEVKIT_NET_DENIED_WINDOW`) y confirma con `curl` cuál sigue bloqueado ahora mismo; sin la ventana ni la confirmación, un rechazo de hace días parecía de ahora y producía un bloqueo falso (DEVKIT-38). |
 | `g`, `gs`, `gl`, `ll` | Alias: `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos, el relanzamiento por cuota agotada con logs falsos y las cuatro alarmas del monitoreo mínimo; sale con 1 si un caso falla. |
@@ -147,8 +147,12 @@ reloj: no lanza nada, la decisión sigue saliendo de los marcadores del PR, y si
 el `touch` falla el bucle llega igual en el siguiente intervalo.
 
 Cada vuelta del bucle abre con una línea `consultando GitHub`, que es lo que se
-mira para comprobar que el aviso funcionó: su hora debe caer a menos de 5 s del
-`touch`. Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última
+mira para comprobar que el aviso funcionó. La cota de 5 s solo vale si el
+bucle estaba durmiendo cuando llegó el `touch`, que es el caso de un humano
+ejecutando `/pr-review` a mano; si el aviso llega mientras el bucle ya está
+despierto atendiendo otro PR (el caso normal del ciclo automático), la línea
+`consultando GitHub` sale recién cuando termina esa vuelta, no a los 5 s.
+Cada ejecución deja su log en `/run/devkit/<skill>-<N>.log`; la última
 línea trae el costo y los tokens, que es la medida de cada ciclo. Al terminar
 cada `claude -p`, el bucle registra además una línea `estado:` con la rama en
 la que quedó el workspace, sus commits sobre `main` y su PR (`rama de card sin
@@ -295,7 +299,10 @@ hallazgo que tenga variantes (por ejemplo, una sintaxis con varios flags):
 busca y reporta cada variante, no una por ciclo. Publica el informe en el PR
 con el marcador
 `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Con `OK` mueve la
-card a `Lista para merge` y te pide el review; con `CAMBIOS` deja los
+card a `Lista para merge` y te pide el review con `gh pr edit --add-reviewer`,
+que exige que el token de la cuenta máquina tenga el alcance `read:org` además
+de `repo` (sección 8.1 de `docs/ARCHITECTURE.md`); sin él, el comando falla
+con 403 aunque el repo no tenga organización. Con `CAMBIOS` deja los
 hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
 `id | severidad | archivo:línea | qué falla | qué hacer`) para que `task-fix`
 los atienda. El revisor nunca corrige ni aprueba: el hook `pr-guard.sh`

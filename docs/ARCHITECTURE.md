@@ -444,7 +444,7 @@ por estado y tiempo con una vista filtrada y con `project-status`.
 |---|---|---|---|
 | Token de Bitwarden, secreto cero | `~/.devkit/bws-token` en el Mac, 600 | Lectura del proyecto `devcontainers` | Archivo con `secrets:` de Compose |
 | Token de Claude | Bitwarden | Suscripción Max. `claude setup-token`, doce meses | `CLAUDE_CODE_OAUTH_TOKEN` al arrancar |
-| Token de GitHub de la cuenta máquina | Bitwarden | Permisos finos: solo los repos listados; contenido y PRs en escritura; caduca en un año | `GH_TOKEN` y `gh auth setup-git` |
+| Token de GitHub de la cuenta máquina | Bitwarden | Alcances `repo` (contenido y PRs en escritura) y `read:org` (`gh pr edit --add-reviewer`, que usa `pr-review` para pedir el review al humano, lo exige incluso fuera de una organización); caduca en un año | `GH_TOKEN` y `gh auth setup-git` |
 | Token de Dropbox | Bitwarden | App propia con acceso "App folder": solo `/Apps/devkit` | `rclone.conf` generado al arrancar |
 | Notion | Volumen `claude-<proyecto>` | Páginas autorizadas en OAuth: el árbol "Ingeniería" | Plugin oficial, puerto en `127.0.0.1` |
 | Token del editor VS Code, por proyecto | Bitwarden | Solo abre el editor; el panel hereda los mismos permisos del contenedor, no es un shell aparte | Archivo `/run/devkit/vscode-token`, `--connection-token-file` |
@@ -719,6 +719,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | Punto del diseño | Realidad | Decisión |
 |---|---|---|
 | Token de GitHub de permisos finos | GitHub no permite tokens finos a colaboradores de repos ajenos | Token clásico con alcance `repo` en la cuenta máquina; el alcance real lo limita la lista de colaboraciones. Mejora futura: organización de GitHub |
+| Token de GitHub con solo `repo` | `gh pr edit --add-reviewer` (lo usa `pr-review` para pedir el review al humano al veredicto `OK`) falló en el PR 30 con 403: GitHub exige `read:org` para resolver revisores por nombre de usuario, incluso sobre un repo personal sin organización | Se sumó el alcance `read:org` al token de la cuenta máquina en Bitwarden (humano, 2026-09-15). Documentado en 8.1 para que `new-project.sh` o el arranque puedan comprobarlo con `gh auth status` a futuro |
 | Repo `dotfiles` privado | El bootstrap y el clon inicial necesitan acceso anónimo | Repo público. Es un template sin secretos |
 | `rclone` autorizado con navegador | El retorno a localhost no llega al contenedor | `scripts/dropbox-setup.sh`: flujo de código manual de Dropbox y `rclone.conf` en base64 en Bitwarden (`rclone_conf_b64`) |
 | Retorno OAuth de MCP por puerto publicado en `dev` | Claude Code escucha solo en 127.0.0.1, y Docker no publica puertos de un contenedor que solo está en una red interna | El puerto lo publica el proxy, que sí toca la red de salida: Mac 127.0.0.1:54545 → proxy:54546 → dev:54546 → 127.0.0.1:54545. Un `socat` en cada contenedor |
