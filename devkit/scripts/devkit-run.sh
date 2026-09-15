@@ -40,7 +40,20 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
-ROLES_FILE="${DEVKIT_ROLES_FILE:-$HERE/../agents/roles.toml}"
+ROLES_FILE="${DEVKIT_ROLES_FILE:-}"
+if [ -z "$ROLES_FILE" ]; then
+  if [ -f "$HERE/../agents/roles.toml" ]; then
+    ROLES_FILE="$HERE/../agents/roles.toml"
+  else
+    # $HERE es /opt/devkit/scripts cuando corre desde el alias de la imagen
+    # (o SCRIPTS_DIR fuera de dev): el Dockerfile solo copia scripts/, así
+    # que ../agents no existe ahí. TEMPLATE_DIR sí tiene agents/roles.toml
+    # siempre: en dev es el symlink a $WS/devkit, y en un proyecto
+    # instanciado es el clon del template que hace entrypoint.sh (DEVKIT-50,
+    # hallazgo H1 de pr-review).
+    ROLES_FILE="${DEVKIT_ROLES_FILE_FALLBACK:-/opt/devkit/template/agents/roles.toml}"
+  fi
+fi
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 # Mismo candado que `run_skill` en watch.sh: un solo `claude -p` a la vez
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
@@ -201,6 +214,14 @@ FIN
   check "campo de contabilidad" "modelo-barato" \
     "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model)"
   check "campo de revisión" "modelo-revision" "$(ROLES_FILE="$tmp/roles.toml" role_field revision model)"
+
+  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
+  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
+  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
+  mkdir -p "$tmp/nested/scripts"
+  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
+  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-revision high 50" \
+    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
 
   git -C "$tmp" init -q
   git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
