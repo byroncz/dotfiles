@@ -1,9 +1,9 @@
 # Arquitectura del entorno de desarrollo `devkit`
 
 Estado: diseño aprobado, pendiente de construcción. Fecha: 2026-09-06.
-Este documento reemplaza al enfoque descrito en `.devcontainer/README.md` y
-`.devcontainer/AGENTS.md`, que quedan como referencia histórica hasta que
-exista la versión `0.1.0` del template.
+Este documento reemplaza al enfoque anterior, basado en un devcontainer con
+`devcontainer.json` y CLI de devcontainers, retirado del repo en la versión
+`1.0.0` del template.
 
 Está escrito para alguien que llega hoy al proyecto. Cada sección explica qué
 se decidió, por qué, y qué consecuencia tiene. Las alternativas descartadas se
