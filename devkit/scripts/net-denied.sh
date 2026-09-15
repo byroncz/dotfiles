@@ -22,7 +22,7 @@ domains=$(grep -h "Rejected\|Denied\|refused" "$LOG" 2>/dev/null | while IFS= re
   epoch=$(date -d "$ts" +%s 2>/dev/null) || continue
   [ "$epoch" -ge "$cutoff" ] || continue
   printf '%s\n' "$line" | grep -oE '"[^"]+"' | tr -d '"'
-done | sort -u)
+done | sort -u) || true
 
 if [ -z "$domains" ]; then
   echo "sin rechazos en los últimos ${WINDOW_MIN} min"
