@@ -4,6 +4,7 @@
 #
 #   PR abierto, head sin marcador devkit-review            -> pr-review
 #   último marcador CAMBIOS para el head, sin respuesta     -> task-fix
+#   último marcador CAMBIOS para el head, respuesta sin push -> pr-review de nuevo
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
 #   3 ciclos revisor -> corrector sin OK                    -> task-block
 #   PR mergeado, sin marcador devkit-closed                 -> task-close
@@ -49,7 +50,7 @@ QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cuatro campos separados por tabulador (acción, head, referencia,
 # extra), nunca vacíos ("-" si no aplica):
-#   revisar    <head> <sha del marcador anterior o -> -
+#   revisar    <head> <sha del marcador anterior o el propio head> -
 #   fix        <head> <sha del marcador CAMBIOS>      -
 #   fix-humano <head> <fecha del último comentario>   <texto en base64>
 #   bloquear   <head> <ciclos sin OK>                 -
@@ -62,6 +63,11 @@ QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
 # Un bloqueo manda hasta que aparece un devkit-fix posterior a él: esa
 # respuesta del corrector (al comentario humano) reanuda el ciclo y el head
 # nuevo vuelve a la rama normal (revisar). Los casos están en watch-test.sh.
+# `revisar` también sale cuando el último informe es CAMBIOS para el head
+# vigente y el corrector ya respondió sin empujar commits (descartó todo o
+# solo comentó, DEVKIT-22): la referencia es igual al head y le dice a
+# `pr-review` que ese sha ya tiene respuesta y debe juzgarla, no responder
+# "ya revisado" y salir. Sin esa respuesta, sigue siendo `fix` (pendiente).
 DECIDE='
 def markers($re; $ts):
   [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
@@ -87,8 +93,13 @@ def markers($re; $ts):
                 and ((.body // "") | gsub("\\s"; "") != "")
                 and .at > $bot_at))
    | sort_by(.at)) as $human
+| (if $last != null then
+     [$fixes[] | select(.review == $last.sha and .at > $last.at)] | length
+   else 0 end) as $fix_after
 | ($last != null and $last.verdict == "CAMBIOS" and $last.sha == $head
-   and ([$fixes[] | select(.review == $last.sha)] | length) == 0) as $pending_fix
+   and $fix_after == 0) as $pending_fix
+| ($last != null and $last.verdict == "CAMBIOS" and $last.sha == $head
+   and $fix_after > 0) as $fix_responded
 | ($human | map(.body) | join("\n\n") | @base64) as $human_text
 | (($human | last | .at) // "-") as $human_at
 | if $blocked then
@@ -102,6 +113,8 @@ def markers($re; $ts):
     ["revisar", $head, ($last.sha // "-"), "-"]
   elif $pending_fix then
     ["fix", $head, $last.sha, "-"]
+  elif $fix_responded then
+    ["revisar", $head, $last.sha, "-"]
   else
     ["nada", $head, $last.verdict, "-"]
   end
@@ -404,10 +417,20 @@ while true; do
         short=${head:0:7}
         case "$action" in
           revisar)
-            launched "revisar:$num:$head" && continue
-            mark "revisar:$num:$head"
-            log "PR #$num ($key) head $short sin informe: lanzando pr-review"
-            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head"
+            # La clave incluye $ref: cuando el head no cambia pero el
+            # corrector ya respondió sin empujar commits (DEVKIT-22), $ref
+            # es igual al head y $head:$ref difiere de la marca que dejó el
+            # primer "revisar" de ese mismo head (donde $ref era el sha
+            # anterior o "-"). Sin $ref, `launched` daría por hecho que ese
+            # head ya se lanzó y el segundo aviso se perdería.
+            launched "revisar:$num:$head:$ref" && continue
+            mark "revisar:$num:$head:$ref"
+            if [ "$ref" = "$head" ]; then
+              log "PR #$num ($key) head $short con respuesta sin push: lanzando pr-review otra vez"
+            else
+              log "PR #$num ($key) head $short sin informe: lanzando pr-review"
+            fi
+            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head:$ref"
             ;;
           fix)
             launched "fix:$num:$ref" && continue

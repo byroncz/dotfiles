@@ -129,6 +129,7 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 |---|---|
 | Abierto y el head sin marcador `devkit-review` | `/pr-review <N>` |
 | Último marcador `verdict=CAMBIOS` para el head, sin respuesta `devkit-fix` | `/task-fix <Clave>` |
+| Último marcador `verdict=CAMBIOS` para el head, con respuesta `devkit-fix` sin push nuevo (descartó todo o solo comentó) | `/pr-review <N>` otra vez, con la respuesta a la vista |
 | Último marcador `OK` y un comentario o review tuyo posterior (un approve no cuenta) | `/task-fix <Clave> "<tu comentario>"`; la card vuelve a `Revisión automática` |
 | Tres informes `CAMBIOS` desde el último `OK` o el último bloqueo, ya atendidos | Marcador `<!-- devkit-block sha=<head> -->` en el PR y `/task-block <Clave>`. No lo toca más hasta que muevas la card a `Revisión automática` y comentes en el PR qué hacer |
 | Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `/task-close <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
@@ -195,8 +196,9 @@ si `task-close` ya pasó.
 
 La tabla de decisión tiene una prueba reproducible sin GitHub:
 `bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
-con y sin respuesta, comentario humano, tres ciclos, bloqueo y reanudación, y
-la rama de cierre con y sin marcador) contra `watch.sh --decide` y
+sin respuesta, con respuesta y head nuevo, con respuesta sin cambiar el head,
+comentario humano, tres ciclos, bloqueo y reanudación, y la rama de cierre con
+y sin marcador) contra `watch.sh --decide` y
 `--decide-merged`, y falla si alguno no da la acción esperada. El mismo archivo
 prueba la cuota agotada sin gastar cuota: `--quota-hit` y `--quota-reset`
 reciben avisos de límite de mentira y comprueban la detección y la hora
@@ -221,6 +223,14 @@ de `gh` o una API que el hook no conozca. La compuerta real es GitHub: la
 cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige
 PR y aprobación humana. El detalle está en `docs/ARCHITECTURE.md`, secciones
 8.2 y 12b.
+
+Si el último informe fue `CAMBIOS` para el head vigente y `task-fix` ya
+respondió sin empujar commits (descartó todos los hallazgos, o solo
+comentó), `pr-review` no termina con "ya revisado": vuelve a juzgar ese mismo
+head con la respuesta a la vista, con un diff vacío entre el marcador
+anterior y el head (DEVKIT-22). Si acepta todos los descartes y no hay
+hallazgos nuevos, publica `OK`; si reabre alguno, publica `CAMBIOS` de nuevo,
+y ese informe cuenta para la guardia de tres ciclos.
 
 Corrección de PRs: `/task-fix <Clave> [texto]` es el corrector del ciclo.
 Sin texto, lee el bloque `devkit-findings` del último informe con veredicto
