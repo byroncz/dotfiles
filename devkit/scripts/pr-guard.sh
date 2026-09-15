@@ -59,6 +59,18 @@ has_flag() {
   return 1
 }
 
+# True si el segmento solo comprueba que /run/devkit/vscode-token existe
+# (test -f, [ -f ... ], ls), no si lee su contenido. Lista blanca, no
+# negra: cualquier otra forma de tocar la ruta (redirección, sustitución,
+# intérprete, comando no previsto) cae al bloqueo por defecto del llamador.
+is_token_existence_check() {
+  local hay="$1"
+  if has_token "$hay" test '[' && has_flag "$hay" -f; then
+    return 0
+  fi
+  has_token "$hay" ls
+}
+
 # Motivo de bloqueo de un solo sub-comando, o vacío si puede pasar.
 reason_for_segment() {
   local raw="$1"
@@ -185,8 +197,7 @@ reason_for_segment() {
     done
   fi
 
-  if [[ "$nseg" =~ /run/devkit/vscode-token ]] \
-    && has_token "$nseg" cat tail grep head less more od xxd strings base64 cp mv; then
+  if [[ "$nseg" =~ /run/devkit/vscode-token ]] && ! is_token_existence_check "$nseg"; then
     printf 'leer /run/devkit/vscode-token expone el token; no se pega en un chat ni en una card (ver runbook "El editor no abre")'
     return 0
   fi
@@ -289,6 +300,14 @@ run_tests() {
   check 'cp /run/devkit/vscode-token /tmp/t' block
   check 'mv /run/devkit/vscode-token /tmp/t' block
   check 'docker cp devkit-x:/run/devkit/vscode-token .' block
+
+  # DEVKIT-51, segundo ciclo: lista blanca en vez de negra. Cualquier forma
+  # de tocar la ruta que no sea una comprobación de existencia bloquea,
+  # incluida la redirección y el intérprete, que la lista negra no cubría.
+  check 'read t < /run/devkit/vscode-token' block
+  check 'echo $(</run/devkit/vscode-token)' block
+  check 'python3 -c "print(open(\"/run/devkit/vscode-token\").read())"' block
+  check 'sed -n 1p /run/devkit/vscode-token' block
 
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
