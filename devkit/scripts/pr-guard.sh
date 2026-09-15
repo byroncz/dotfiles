@@ -297,6 +297,13 @@ input="$(cat)"
 command="$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)"
 if [ -n "$command" ]; then
   if reason="$(reason_to_block "$command")"; then
+    # Registro de denegaciones (DEVKIT-45): esta es la compuerta real en
+    # modo headless, no la lista `allow` de settings.json (ver la nota al
+    # principio de este archivo y la entrada de Documentación de DEVKIT-45).
+    # Si bloquea algo legítimo, este log dice qué ampliar en
+    # `reason_for_segment`.
+    printf '%s pr-guard denegó: %s :: %s\n' "$(date -u +%FT%TZ)" "$reason" "$command" \
+      >> "${DEVKIT_RUN_DIR:-/run/devkit}/denials.log" 2>/dev/null
     printf 'pr-guard: %s\n' "$reason" >&2
     exit 2
   fi
