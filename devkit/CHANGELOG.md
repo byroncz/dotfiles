@@ -10,6 +10,36 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `template-update` pone al día `AGENTS.md` con cada bump de versión (DEVKIT-28)
+
+- Hasta ahora `entrypoint.sh` solo escribía `AGENTS.md` la primera vez
+  (`[ -f "$WS/AGENTS.md" ] || ...`) y `template-update` no lo tocaba: un
+  cambio en `AGENTS.template.md` nunca llegaba a un proyecto ya creado. El
+  caso de origen fue el renombre de skills de DEVKIT-10: un proyecto en
+  0.1.0 se queda con `session-start`/`task-review` en su `AGENTS.md` aunque
+  suba de versión.
+- `AGENTS.template.md` declara un marcador nuevo, `## Reglas del proyecto`,
+  con una línea que explica el reparto: todo lo de arriba es del template,
+  todo lo de abajo es del proyecto y se conserva.
+- `devkit/scripts/agents-sync.sh` (con autoprueba, `--test`) hace la fusión
+  mecánica: si el `AGENTS.md` del proyecto tiene el marcador, arma un
+  archivo nuevo con la plantilla destino arriba y la sección del proyecto
+  intacta abajo. Es texto plano, sin criterio de por medio: por eso puede
+  aplicarse solo, a diferencia de una fusión que tuviera que interpretar
+  contenido libre.
+- Si el `AGENTS.md` no tiene el marcador (proyectos de antes de esta
+  convención), el script no toca nada y avisa con el código de salida `2`;
+  `template-update` pega el diff en el cuerpo del PR y deja la fusión al
+  humano. Aplicar una plantilla nueva a un archivo sin ese límite claro
+  podría borrar contenido del proyecto sin que nadie lo note antes del
+  merge, así que ahí no hay automatismo.
+- `template-update`, paso nuevo entre cambiar `devkit.toml` y `task-submit`:
+  descarga `AGENTS.template.md` y `agents-sync.sh` de la versión destino
+  (no los del template local, que pueden ir atrás si la imagen no se ha
+  reconstruido), renderiza `{{PROJECT}}` y corre la fusión.
+- Cambios requeridos para quien venga de 0.1.0: ver la sección de la
+  versión 1.0.0.
+
 ### `pr-review` vuelve a juzgar el mismo head cuando `task-fix` responde sin push (DEVKIT-22)
 
 - Antes, si `task-fix` respondía a un informe `CAMBIOS` descartando todos los
@@ -460,6 +490,10 @@ actualizar:
   saltos que el retorno OAuth) y con el token de conexión ya en la URL: sin
   el secreto, el editor no arranca. Nadie pierde el editor si no lo adopta:
   Neovim ya no estaba documentado como camino recomendado desde DEVKIT-39.
+- `AGENTS.md` conserva los nombres viejos de skill del renombre de DEVKIT-10
+  (`session-start`, `task-review`) porque el arranque solo escribe ese
+  archivo la primera vez. Sin acción manual: `template-update` los corrige
+  solo desde esta versión, la primera que trae `agents-sync.sh` (DEVKIT-28).
 
 ## 0.1.0 - 2026-09-06
 

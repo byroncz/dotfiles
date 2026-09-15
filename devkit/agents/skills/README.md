@@ -19,7 +19,7 @@ con `claude -p "/nombre argumentos"`.
 | `task-close` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `task-block` | Cualquiera → Bloqueada | Agente |
 | `project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
-| `template-update` | Sube la versión del template | Agente |
+| `template-update` | Sube la versión del template y pone al día `AGENTS.md` | Agente |
 | `template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
 Convenciones comunes a todas:

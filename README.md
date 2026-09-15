@@ -117,6 +117,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos y el relanzamiento por cuota agotada con logs falsos; sale con 1 si un caso falla. |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
@@ -270,7 +271,7 @@ gh pr comment <N> --body "<!-- devkit-closed sha=$(gh pr view <N> --json mergeCo
 | `/task-close <Clave>` | Lista para merge → Hecha | `watch.sh` tras el merge |
 | `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
 | `/project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
-| `/template-update <X.Y.Z>` | Sube la versión del template del proyecto | Agente |
+| `/template-update <X.Y.Z>` | Sube la versión del template del proyecto y pone al día `AGENTS.md` | Agente |
 | `/template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
 Detalle y convenciones: [`devkit/agents/skills/README.md`](devkit/agents/skills/README.md).

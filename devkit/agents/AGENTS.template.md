@@ -75,3 +75,8 @@ PRs y entradas de Documentación. Sin excepción.
   - Entrada de Documentación: completa. Qué cambió, por qué, cómo probarlo,
     cambios requeridos, enlaces. El porqué de cada decisión se escribe aquí
     una sola vez; los demás textos enlazan.
+
+## Reglas del proyecto
+
+<!-- Todo lo de arriba es del template: `template-update` lo reemplaza en cada versión nueva. Esta sección y lo que sigue es del proyecto y se conserva tal cual. -->
+
