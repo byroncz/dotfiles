@@ -129,6 +129,7 @@ del Mac.
 | 8 | `RUN … --install-extension …vsix` | 236 MB | Extensión Claude Code para el editor |
 | 9 | `RUN uv python install … uv tool install …` | 710 MB | CPython, ruff, basedpyright |
 | 10 | 9 × `COPY` de config y scripts | 143 kB | zshrc, starship, settings, entrypoint, scripts |
+| 0 | `RUN mkdir -p ... && chown -R ... && chmod 700 ...` | 0 B | Puntos de montaje pre-creados (Dockerfile:98-101) |
 | — | `ARG`, `ENV`, `USER`, `WORKDIR`, `ENTRYPOINT`, `CMD` | 0 B | Metadatos, no ocupan capa |
 | | **Suma** | **1,90 GB** | |
 
