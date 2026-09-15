@@ -10,6 +10,20 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `pr-review` vuelve a juzgar el mismo head cuando `task-fix` responde sin push (DEVKIT-22)
+
+- Antes, si `task-fix` respondía a un informe `CAMBIOS` descartando todos los
+  hallazgos (o solo comentando) sin empujar commits, `watch.sh` decidía
+  `nada` y `pr-review` terminaba con "ya revisado en \<sha\>": nadie volvía a
+  mirar el PR y la card se quedaba en `Revisión automática` hasta que el
+  humano interviniera.
+- `watch.sh --decide` separa ahora "sin respuesta" (`fix`, sin cambios) de
+  "respuesta sin push" (`revisar` de nuevo), y la clave de deduplicación del
+  bucle incluye la referencia además del head para no perder el segundo
+  aviso. `pr-review` comprueba si hay un `devkit-fix` posterior a su
+  informe con el mismo `sha`; si lo hay, revisa igual con un diff vacío en
+  vez de terminar con "ya revisado".
+
 ### Hook que reduce evasiones al aprobar o mergear un PR desde la sesión (DEVKIT-20)
 
 - `devkit/scripts/pr-guard.sh`, declarado como hook `PreToolUse` de `Bash` en

@@ -51,7 +51,7 @@ check() {
 check "PR sin marcadores" revisar a1 --
 check "CAMBIOS para el head, sin respuesta" fix a1 "$(rev T01 a1 CAMBIOS)" --
 check "CAMBIOS respondido con head nuevo" revisar b2 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 b2 a1)"
-check "CAMBIOS respondido sin cambiar el head (DEVKIT-22)" nada a1 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 a1 a1)"
+check "CAMBIOS respondido sin cambiar el head (DEVKIT-22)" revisar a1 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 a1 a1)"
 check "OK para el head" nada a1 "$(rev T01 a1 OK)" --
 check "OK y comentario humano posterior" fix-humano a1 "$(rev T01 a1 OK)" -- "$(comment humano T02 'falta la prueba X')"
 check "OK y approve humano con texto" nada a1 "$(rev T01 a1 OK)" "$(review humano APPROVED T02 'bien')" --

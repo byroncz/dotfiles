@@ -31,9 +31,23 @@ es trabajo de `task-fix`.
      | grep -o '<!-- devkit-review [^>]*-->'
    ```
 
-   Si su `sha` es igual a `headRefOid`, responde "ya revisado en <sha>" y
-   termina: el bucle te llama varias veces y no debes publicar dos informes
-   para el mismo head.
+   Si su `sha` no es igual a `headRefOid`, sigue al paso 4: hay código nuevo
+   que revisar. Si es igual, antes de descartar el PR comprueba si el
+   corrector ya respondió a ese informe sin empujar commits (descartó todos
+   los hallazgos, o solo comentó): un comentario `devkit-fix` con `review=`
+   igual a ese `sha`, posterior a `submittedAt` del marcador:
+
+   ```sh
+   gh pr view <N> --json comments --jq \
+     '[.comments[] | select(.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=<sha> -->")) | select(.createdAt > "<submittedAt del marcador>")] | length'
+   ```
+
+   Sin ese comentario, el corrector no respondió todavía: responde "ya
+   revisado en <sha>" y termina, el bucle te llama varias veces y no debes
+   publicar dos informes para el mismo head sin nada nuevo que juzgar. Con
+   ese comentario (DEVKIT-22), sigue al paso 4: hay que volver a juzgar ese
+   mismo head con la respuesta del corrector a la vista, aunque no haya
+   código nuevo.
 4. Prepara una copia de trabajo aparte, para no tocar la rama del autor:
 
    ```sh
@@ -46,7 +60,8 @@ es trabajo de `task-fix`.
 5. Delimita qué leer:
    - **Primer ciclo** (sin marcador previo): el diff completo,
      `git diff origin/main...FETCH_HEAD`, y el cuerpo del PR.
-   - **Ciclos siguientes**: solo `git diff <sha del marcador> FETCH_HEAD`,
+   - **Ciclos siguientes**: solo `git diff <sha del marcador> FETCH_HEAD`
+     (vacío si el corrector respondió sin empujar commits, DEVKIT-22),
      el bloque `devkit-findings` de tu informe anterior y el bloque
      `devkit-fixes` con el que `task-fix` respondió. Esa respuesta es un
      comentario del PR, no una review: el último de la cuenta máquina
@@ -170,9 +185,11 @@ es trabajo de `task-fix`.
   permita.
 - No leas los comentarios de la card para saber qué hizo el autor: la card
   te da los criterios, el PR te da el código. Lo demás es contexto del autor.
-- Un informe por head. Si el head cambió mientras revisabas, publica igual
-  el informe con el `sha` que revisaste: el bucle detectará que el head es
-  otro y volverá a llamarte.
+- Un informe por head, salvo la respuesta sin push del paso 3 (DEVKIT-22):
+  ahí el head no cambia pero hay una respuesta nueva que juzgar, así que
+  publicas un segundo informe para el mismo `sha`. Si el head cambió
+  mientras revisabas, publica igual el informe con el `sha` que revisaste:
+  el bucle detectará que el head es otro y volverá a llamarte.
 - Modo headless (`claude -p "/pr-review <N>"`): sin preguntas. Si falta
   algo (card no encontrada, PR sin Clave), responde qué falta y termina sin
   publicar nada.

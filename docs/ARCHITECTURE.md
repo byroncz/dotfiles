@@ -301,6 +301,7 @@ revisión.
 | `task-submit` | Agente | PR a `main` con auto-merge armado; card en `Revisión automática` |
 | `watch.sh`: head sin informe | Máquina | Lanza `pr-review` headless. `OK`: card a `Lista para merge` y review pedido al humano. `CAMBIOS`: bloque `devkit-findings` en el PR |
 | `watch.sh`: `CAMBIOS` para el head, sin respuesta | Máquina | Lanza `task-fix` headless: un commit por hallazgo, push, bloque `devkit-fixes`. El head nuevo vuelve a la fila anterior |
+| `watch.sh`: `CAMBIOS` para el head, respuesta `devkit-fix` sin push (DEVKIT-22) | Máquina | Lanza `pr-review` de nuevo sobre el mismo head: juzga la respuesta con diff vacío. `OK` u otro `CAMBIOS`, igual que la fila anterior |
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
 | Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y lanza `task-block`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
 | `watch.sh`: una skill muere por cuota agotada | Máquina | Anota la pausa en `watch.log` y relanza la misma skill al reiniciarse la ventana. La card no cambia de Estado: solo falta tiempo |
@@ -323,6 +324,16 @@ reinicia el conteo con solo retomar. `/run/devkit/launched` (tmpfs) solo evita
 relanzar la misma skill para la misma entrada dentro de una vida del
 contenedor; como cada skill es idempotente, perderlo no daña la corrección de
 lo que hay en Notion.
+
+Un mismo head puede recibir más de un informe cuando `task-fix` responde a un
+`CAMBIOS` sin empujar commits, por ejemplo si descarta todos los hallazgos
+(DEVKIT-22). `pr-review` reconoce ese caso por un `devkit-fix` con `review=`
+igual al `sha` de su marcador anterior y posterior a él, y vuelve a juzgar el
+mismo head con esa respuesta a la vista en vez de terminar con "ya revisado".
+La clave que `watch.sh` usa para no relanzar dos veces el mismo aviso incluye
+la referencia (el `sha` del marcador o el propio head, según el caso), no
+solo el head: si usara solo el head, la segunda llamada a `pr-review` se
+perdería porque ya estaba marcada como lanzada desde la primera.
 
 Sí daña la factura, y por eso el cierre también dejó de depender de él
 (DEVKIT-24). `launched` nace vacío en cada `devkit recreate`, y la ventana de
