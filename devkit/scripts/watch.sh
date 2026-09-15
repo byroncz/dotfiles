@@ -440,11 +440,30 @@ orphan_branch_alarm() {  # orphan_branch_alarm <edad en segundos> <tiene PR: si|
   return 0
 }
 
+# Sesión interactiva viva sobre este workspace (DEVKIT-46, H4 de la revisión):
+# un humano trabajando a mano sobre una card `En progreso` (permitido por
+# AGENTS.md) no toca `skill.lock` -ese candado es solo de `run_skill`-, así
+# que sin esta señal la rama se ve huérfana aunque alguien la esté usando. Se
+# reconoce por un `claude` sin `-p` (la TUI, no un `claude -p` headless) cuyo
+# `cwd` es este mismo workspace: el host puede tener sesiones abiertas sobre
+# otros proyectos, que no cuentan.
+interactive_session_alive() {
+  local pid cwd
+  for pid in $(ps -eo pid=,comm= 2>/dev/null | awk '$2 == "claude" {print $1}'); do
+    ps -p "$pid" -o args= 2>/dev/null | grep -qE '(^| )-p( |$)' && continue
+    cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null) || continue
+    [ "$cwd" = "$WS" ] || continue
+    return 0
+  done
+  return 1
+}
+
 # Rama en la que quedó el workspace, sin PR y sin ningún `claude -p` vivo hace
 # más de ORPHAN_MAX_AGE segundos: la señal de que una ejecución se cortó a
 # medias y nadie la está retomando. "Skill viva" se lee del candado de
 # run_skill, no de la lista de procesos: si nadie tiene `skill.lock`, no hay
-# un `claude -p` en curso sobre este workspace.
+# un `claude -p` en curso sobre este workspace. Una sesión interactiva viva
+# (ver interactive_session_alive) cuenta igual, aunque no toque el candado.
 #
 # La edad se mide desde la última señal de actividad, no solo desde el
 # último commit: una rama recién creada por task-start hereda el timestamp
@@ -471,6 +490,7 @@ check_orphan_branch() {
   exec 8>"$LOCK"
   if flock -n 8; then skill_alive=no; flock -u 8; else skill_alive=si; fi
   exec 8>&-
+  if [ "$skill_alive" = no ] && interactive_session_alive; then skill_alive=si; fi
   if prs=$(gh pr list --head "$branch" --state all --limit 1 --json number --jq 'length' 2>/dev/null); then
     { [ "${prs:-0}" -gt 0 ] 2>/dev/null && has_pr=si; } || has_pr=no
   else
