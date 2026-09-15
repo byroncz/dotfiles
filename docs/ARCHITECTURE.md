@@ -102,6 +102,82 @@ Por qué: separa la evolución del template de la del lenguaje. `uv` usa
 `python-build-standalone`, mantenido por Astral; sus limitaciones documentadas
 no aplican a Debian con glibc.
 
+### 4.2b Peso de la imagen, por capa
+
+Inventario medido el 2026-09-15 sobre `devkit:dev` (`9884ae5f1355`, arm64),
+en el Mac con `docker history` (DEVKIT-48). Sirve para no discutir el peso
+de la imagen de memoria: cada retiro se decide con una cifra al lado.
+
+**Dos cifras que no son la misma.** `docker image ls` dice 2,54 GB; la suma
+de las capas de `docker history` da 1,90 GB. Los ~640 MB de diferencia no son
+capas perdidas: Docker Desktop usa el almacén de imágenes de containerd
+(`docker info --format '{{.Driver}} {{json .DriverStatus}}'` devuelve
+`overlayfs [["driver-type","io.containerd.snapshotter.v1"]]`), que contabiliza
+el blob comprimido *además* del contenido desempaquetado. El inventario real
+por capa es el de `docker history`; los 2,54 GB son lo que ocupa en el disco
+del Mac.
+
+| # | Capa (`CREATED BY`) | Tamaño | Origen en `devkit/Dockerfile` |
+|---|---|---|---|
+| 1 | `# debian.sh --arch 'arm64' … 'trixie'` | 108 MB | `FROM debian:trixie-slim` |
+| 2 | `RUN apt-get install …` | 194 MB | Paquetes de sistema |
+| 3 | `RUN set -eux; arch=…` | 381 MB | gh, rclone, bws, starship, openvscode-server |
+| 4 | `COPY /uv /uvx /usr/local/bin/` | 46,8 MB | `uv` y `uvx` desde la imagen de Astral |
+| 5 | `RUN git clone … /opt/zsh/…` | 2,43 MB | Plugins de zsh |
+| 6 | `RUN groupadd && useradd` | 53,2 kB | Usuario sin sudo |
+| 7 | `RUN curl claude.ai/install.sh \| bash` | 224 MB | Claude Code CLI |
+| 8 | `RUN … --install-extension …vsix` | 236 MB | Extensión Claude Code para el editor |
+| 9 | `RUN uv python install … uv tool install …` | 710 MB | CPython, ruff, basedpyright |
+| 10 | 9 × `COPY` de config y scripts | 143 kB | zshrc, starship, settings, entrypoint, scripts |
+| — | `ARG`, `ENV`, `USER`, `WORKDIR`, `ENTRYPOINT`, `CMD` | 0 B | Metadatos, no ocupan capa |
+| | **Suma** | **1,90 GB** | |
+
+**Desglose por herramienta.** `docker history` se detiene en la capa, y las
+capas 3 y 9 agrupan varias herramientas en un solo `RUN`. Para abrirlas se
+mide dentro de un contenedor de esa misma imagen con `du`. Cuidado con las
+unidades: `du -h` reporta MiB y `docker history --human`, MB decimales; abajo
+todo va convertido a MB para que cuadre con la tabla de arriba.
+
+| Herramienta | Tamaño | Capa |
+|---|---|---|
+| Caché de `uv` (`~/.cache/uv`) | 308 MB | 9 |
+| `basedpyright` | 284 MB | 9 |
+| `openvscode-server` | 243 MB | 3 |
+| Extensión Claude Code | 237 MB | 8 |
+| Claude Code CLI | 224 MB | 7 |
+| CPython 3.14 de herramientas | 96,5 MB | 9 |
+| `rclone` | 78,6 MB | 3 |
+| `git` (paquete apt más grande) | 50,8 MB | 2 |
+| `gh` | 39,8 MB | 3 |
+| `ruff` | 23 MB | 9 |
+| `bws` | 11,5 MB | 3 |
+| `starship` | 10,1 MB | 3 |
+
+**Lo que el desglose encontró y `docker history` escondía:**
+
+- **La caché de `uv` viaja en la imagen: 308 MB.** `uv` deja en
+  `~/.cache/uv/archive-v0` una copia desempaquetada de lo que instala, y esa
+  copia **no** está enlazada con hardlink a `~/.local/share/uv`: `find -printf
+  '%n'` da 1 enlace en ambos lados y un `du` conjunto de las dos rutas suma
+  677 MiB en vez de compartir bloques. Son dos copias completas y solo una se
+  usa en runtime. Se recupera con `uv cache clean` **dentro del mismo `RUN`**
+  que instala; en un `RUN` posterior la capa anterior ya fijó los bytes y no
+  se recupera nada.
+- **El binario de Claude Code va dos veces: 224 MB.** El mismo archivo de
+  223 862 184 bytes, SHA-256 `7bf9f33a…`, está en `~/.local/share/claude/`
+  (capa 7) y dentro de la extensión, en `…/resources/native-binary/claude`
+  (capa 8). Inodos distintos y un enlace cada uno: dos copias reales, no una
+  compartida.
+- **`basedpyright` trae su propio Node: 207 MB de sus 284 MB.** De ahí,
+  66 MB son cabeceras C para compilar addons nativos y 29 MB son sourcemaps
+  (`pyright.js.map`, `pyright-langserver.js.map`), inútiles en un
+  type-checker que solo se ejecuta.
+
+Decisiones tomadas con estas cifras, y por qué de cada una, en la entrada de
+DEVKIT-48 de `devkit/CHANGELOG.md`. Regla: solo sale lo que tenga cifra y
+justificación; el resto se queda documentado con su cifra, para que la
+siguiente discusión empiece donde terminó esta.
+
 ### 4.3 Volúmenes
 
 Solo dos, ambos por proyecto:

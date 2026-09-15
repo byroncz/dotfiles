@@ -10,6 +10,75 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Inventario por capa del peso de la imagen (DEVKIT-48)
+
+- Inventario completo en `docs/ARCHITECTURE.md`, sección 4.2b: tabla de
+  `docker history` capa por capa con su origen en el `Dockerfile`, desglose
+  por herramienta y las tres duplicaciones que la tabla de capas escondía.
+  Medido el 2026-09-15 sobre `devkit:dev` (`9884ae5f1355`, arm64).
+- **Esta card no toca el `Dockerfile`.** Mide y decide; no retira nada. El
+  criterio de aceptación exige `docker image ls` antes y después de cualquier
+  cambio, y el rebuild solo corre en el Mac, no en el workspace en modo dev.
+  Cifra registrada: 2,54 GB antes, sin cambio después. Cada retiro aprobado
+  queda como card propia, con su medición.
+- Las dos cifras del peso no son la misma y conviene no confundirlas otra
+  vez: `docker image ls` reporta 2,54 GB y la suma de capas de `docker
+  history`, 1,90 GB. Los ~640 MB de diferencia no son capas perdidas. Docker
+  Desktop usa el almacén de imágenes de containerd (`docker info` devuelve
+  `overlayfs [["driver-type","io.containerd.snapshotter.v1"]]`), que cuenta el
+  blob comprimido además del contenido desempaquetado. El inventario real por
+  capa es el de `docker history`.
+- `docker history` se detiene en la capa, y las dos capas más pesadas (710 MB
+  y 381 MB) agrupan varias herramientas en un solo `RUN`. El desglose se
+  obtuvo midiendo con `du` dentro de un contenedor de esa misma imagen. Las
+  unidades cuadran: `du -h` reporta MiB y `docker history --human`, MB
+  decimales; convertidas, cada capa coincide con la suma de sus herramientas
+  (capa 9: 711,5 MB medidos contra 710 MB; capa 3: 383 MB contra 381 MB).
+
+**Sale, con cifra y justificación:**
+
+- **Caché de `uv`, 308 MB (12,1 % de la imagen).** `~/.cache/uv/archive-v0`
+  guarda una copia desempaquetada de todo lo que `uv` instaló, y no está
+  enlazada con hardlink a `~/.local/share/uv`: `find -printf '%n'` da 1 enlace
+  en ambos lados y un `du` conjunto suma 677 MiB en vez de compartir bloques.
+  Son dos copias completas y solo una se usa en runtime. Se retira con `uv
+  cache clean` en el mismo `RUN` de `uv python install`; en un `RUN` posterior
+  la capa anterior ya fijó los bytes y no se recupera nada. Costo funcional:
+  ninguno, la caché solo acelera reinstalaciones, que en una imagen no
+  ocurren.
+- **Binario de Claude Code duplicado, 224 MB (8,8 %).** El mismo archivo de
+  223 862 184 bytes, SHA-256 `7bf9f33a…`, está en `~/.local/share/claude/`
+  y dentro de la extensión del editor, en `…/resources/native-binary/claude`.
+  Inodos distintos y un enlace cada uno: dos copias reales. Sale una, con
+  reserva: hay que probar que la extensión funciona con un symlink a la otra,
+  y que `CLAUDE_CODE_EXT_VERSION` y la versión que baja `claude.ai/install.sh`
+  no se separen, porque hoy nada las ata entre sí. Necesita rebuild y prueba,
+  por eso va en card propia y no aquí.
+
+Juntos, 532 MB: 20,9 % de los 2,54 GB, sin perder una sola herramienta.
+
+**Se queda, con cifra y justificación:**
+
+- `openvscode-server`, 243 MB. Único editor desde DEVKIT-40; sin él no hay
+  `devkit code`.
+- `basedpyright`, 284 MB, de los cuales 207 MB son un runtime de Node propio.
+  Es lo más pesado después del editor, pero está en la lista de permisos de
+  los agentes para type-checking y no hay alternativa que no traiga su propio
+  runtime. Dentro del paquete sí hay 95 MB de grasa real: 66 MB de cabeceras
+  C para compilar addons nativos y 29 MB de sourcemaps. No se tocan: borrar
+  por dentro un paquete que `uv tool install` puede rehacer en cualquier
+  reinstalación es frágil. Queda anotado con su cifra.
+- `rclone`, 78,6 MB. Respaldo de `sandbox.local/` en Dropbox.
+- `git`, 50,8 MB, el paquete apt más grande, y `gh`, 39,8 MB. Núcleo del
+  flujo de cards y PRs.
+- CPython 3.14 de herramientas, 96,5 MB, más `uv` y `uvx`, 46,8 MB. Decisión
+  de arquitectura 4.2.
+- `ruff` 23 MB, `bws` 11,5 MB, `starship` 10,1 MB, `ripgrep` 4,9 MB,
+  `fd-find` 3,1 MB y plugins de zsh 2,43 MB. Todos con función declarada en
+  DEVKIT-40 y ninguno pasa de 23 MB: la cifra no justifica el trabajo.
+- `perl`, 52,2 MB entre `libperl5.40` y `perl-modules-5.40`. No se instala a
+  propósito: entra como dependencia de `git`. No sale sin romper `git`.
+
 ### Documentación corregida: CHANGELOG, poke, permisos del token y devkit-net-denied (DEVKIT-47)
 
 - La entrada `1.0.0` de este CHANGELOG decía que el peso de la imagen antes
