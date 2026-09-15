@@ -40,9 +40,6 @@ LOCK="$RUN_DIR/skill.lock"
 WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
-# El binario del agente sale a una variable para que watch-test.sh pueda
-# sustituirlo por un doble y probar el relanzamiento sin gastar cuota.
-CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
 # `devkit-run.sh` es el único punto de lanzamiento (DEVKIT-45): resuelve
 # modelo y esfuerzo por rol desde `devkit/agents/roles.toml` y corre
 # `claude -p`; `run_skill` sigue dueño del candado, la cuota agotada y el
