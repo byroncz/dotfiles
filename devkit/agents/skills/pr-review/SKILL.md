@@ -185,9 +185,11 @@ es trabajo de `task-fix`.
   permita.
 - No leas los comentarios de la card para saber qué hizo el autor: la card
   te da los criterios, el PR te da el código. Lo demás es contexto del autor.
-- Un informe por head. Si el head cambió mientras revisabas, publica igual
-  el informe con el `sha` que revisaste: el bucle detectará que el head es
-  otro y volverá a llamarte.
+- Un informe por head, salvo la respuesta sin push del paso 3 (DEVKIT-22):
+  ahí el head no cambia pero hay una respuesta nueva que juzgar, así que
+  publicas un segundo informe para el mismo `sha`. Si el head cambió
+  mientras revisabas, publica igual el informe con el `sha` que revisaste:
+  el bucle detectará que el head es otro y volverá a llamarte.
 - Modo headless (`claude -p "/pr-review <N>"`): sin preguntas. Si falta
   algo (card no encontrada, PR sin Clave), responde qué falta y termina sin
   publicar nada.
