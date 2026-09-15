@@ -98,6 +98,12 @@ es trabajo de `task-fix`.
      en `README.md` y en la entrada "Stack y comandos del devkit"; un cambio
      que afecte a los proyectos instanciados sin entrada en
      `devkit/CHANGELOG.md`, sección "Sin publicar".
+   - **Agota la clase, no el caso.** Cuando un hallazgo es una instancia de
+     un patrón más amplio (una sintaxis con variantes, la misma validación
+     repetida en varios lugares), busca y reporta todas las variantes en
+     este mismo ciclo; no dejes que el corrector las encuentre una por una
+     en ciclos sucesivos. Una variante por ciclo costó 7 revisiones y 9
+     commits de corrección en el PR 27 (DEVKIT-20).
    - **Ciclos siguientes:** además, cada hallazgo anterior se marca
      `Corregido`, `Sin cambios` o `Reabierto`, con la comprobación.
 7. Clasifica los hallazgos. Severidad `alta` si rompe algo o viola un
