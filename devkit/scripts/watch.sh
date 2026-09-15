@@ -375,7 +375,7 @@ run_skill() {
     log "$name espera: otra skill ocupa el workspace"
     flock 9
   fi
-  read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --modelo "$prompt")
+  read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --rol "$prompt")
   "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
   watch_long_running "$name" "$skill_pid" &
@@ -508,7 +508,13 @@ check_orphan_branch() {
 # mismo prompt que arma `devkit-run` (skill.sh y devkit-run.sh comparten esa
 # forma). No depende de watch.sh: un `devkit-run` lanzado a mano también sale.
 agentes_vivos() {
-  ps -eo pid=,args= 2>/dev/null | grep -- '--worker' | grep -v grep | while IFS= read -r linea; do
+  local lineas
+  lineas=$(ps -eo pid=,args= 2>/dev/null | grep -- '--worker' | grep -v grep)
+  if [ -z "$lineas" ]; then
+    echo "sin agentes vivos"
+    return 0
+  fi
+  printf '%s\n' "$lineas" | while IFS= read -r linea; do
     local pid args paso clave
     pid=$(printf '%s' "$linea" | awk '{print $1}')
     args=$(printf '%s' "$linea" | cut -d' ' -f2-)
@@ -516,6 +522,7 @@ agentes_vivos() {
     clave=$(printf '%s' "$args" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
     printf '%s\t%s\t%s\n' "$pid" "${clave:-?}" "${paso:-?}"
   done
+  return 0
 }
 
 # Hooks de prueba, sin GitHub y sin gastar cuota:

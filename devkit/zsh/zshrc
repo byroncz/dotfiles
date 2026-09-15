@@ -28,6 +28,7 @@ alias gs='git status -sb'
 alias gl='git log --oneline --graph --decorate -20'
 alias ll='ls -lah --color=auto'
 alias devkit-net-denied='/opt/devkit/scripts/net-denied.sh'
+alias devkit-run='/opt/devkit/scripts/devkit-run.sh'
 
 # --- Plugins -----------------------------------------------------------------
 [ -r /opt/zsh/zsh-autosuggestions/zsh-autosuggestions.zsh ] && . /opt/zsh/zsh-autosuggestions/zsh-autosuggestions.zsh

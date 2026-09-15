@@ -10,6 +10,29 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `devkit-run` en task-close y epic-plan; alarmas y anulación manual (DEVKIT-50)
+
+- `task-close` y `epic-plan` lanzan la siguiente/primera hija con
+  `devkit-run task-start <Clave>` como proceso aparte y terminan, en vez de
+  trabajarla en su propia ejecución: antes corría con el rol de contabilidad
+  de `task-close` (Haiku, esfuerzo bajo) en vez del que le toca por su propio
+  `Tipo` (DEVKIT-45 nunca se aplicaba a la hija siguiente).
+- Alias `devkit-run` en `zshrc`, hacia `/opt/devkit/scripts/devkit-run.sh`:
+  antes solo funcionaba con la ruta completa, pese a que el README lo
+  documentaba como comando.
+- `epic-plan` entra al rol `revision` (modelo fuerte, esfuerzo alto) en
+  `devkit-run.sh`: un mal desglose de Épica cuesta más que cualquier card.
+- `devkit-run` acepta `--modelo <alias>` y `--esfuerzo <low|medium|high>`
+  para anular el rol resuelto en un lanzamiento puntual, sin tocar
+  `roles.toml`; el modo interno homónimo que usaba `watch.sh` se renombró a
+  `--rol`.
+- Un lanzamiento por `devkit-run` pasa por las mismas alarmas de DEVKIT-46
+  que `run_skill` de `watch.sh` (error, skill lenta, pregunta abierta) y,
+  ante una pregunta abierta con la card en curso, relanza `task-block` una
+  vez con un motivo forzado, en vez de dejarla colgada (DEVKIT-44, DEVKIT-48).
+- `watch.sh --agentes-vivos` imprime "sin agentes vivos" y sale con código 0
+  cuando no hay ninguno, en vez de salir sin texto.
+
 ### Inventario por capa del peso de la imagen (DEVKIT-48)
 
 - Inventario completo en `docs/ARCHITECTURE.md`, sección 4.2b: tabla de

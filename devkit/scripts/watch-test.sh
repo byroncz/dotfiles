@@ -355,4 +355,24 @@ else
   fail=1
 fi
 
+# Sin agentes vivos: mensaje claro y código 0 (DEVKIT-50; antes salía sin
+# texto). Se fuerza con un `ps` de mentira, primero en PATH, porque el propio
+# proceso de esta prueba puede correr dentro de un `devkit-run --worker` de
+# verdad.
+FAKE_PS_DIR="$TMP/fake-ps"
+mkdir -p "$FAKE_PS_DIR"
+cat >"$FAKE_PS_DIR/ps" <<'FIN'
+#!/usr/bin/env bash
+echo "  PID COMMAND"
+FIN
+chmod +x "$FAKE_PS_DIR/ps"
+AGENTES_VACIO=$(PATH="$FAKE_PS_DIR:$PATH" bash "$WATCH" --agentes-vivos)
+RC_VACIO=$?
+if [ "$RC_VACIO" -eq 0 ] && [ "$AGENTES_VACIO" = "sin agentes vivos" ]; then
+  printf 'ok   %-58s %s\n' "agentes-vivos sin agentes: mensaje claro y rc 0" "$AGENTES_VACIO"
+else
+  printf 'FAIL %-58s rc=%s salida=%s\n' "agentes-vivos sin agentes: mensaje claro y rc 0" "$RC_VACIO" "$AGENTES_VACIO"
+  fail=1
+fi
+
 exit $fail
