@@ -30,7 +30,11 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
 6. Publica en la Épica un comentario con el desglose: una línea por hija con
    Clave, título y dependencias. Máximo diez líneas.
 7. Mueve la Épica a `En progreso`.
-8. Ejecuta `task-start` sin argumento: tomará la primera hija libre.
+8. Lanza la primera hija con `devkit-run task-start <Clave>` como proceso
+   aparte y termina aquí. No la trabajes en esta misma ejecución: correría
+   con el rol `revisión` de `epic-plan` (modelo fuerte, esfuerzo alto) en vez
+   del rol `implementación` que le toca por su `Tipo`, que es lo que resuelve
+   `devkit-run` (DEVKIT-50).
 
 ## Reglas
 

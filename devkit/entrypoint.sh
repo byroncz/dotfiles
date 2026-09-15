@@ -135,6 +135,11 @@ SCRIPTS_DIR=/opt/devkit/scripts
 if [ "${DEVKIT_VERSION:-dev}" = "dev" ] && [ -d "$WS/devkit/scripts" ]; then
   SCRIPTS_DIR="$WS/devkit/scripts"
 fi
+# El alias devkit-run de zshrc lee esto para apuntar al mismo SCRIPTS_DIR que
+# usa watch.sh: sin esto, en modo dev un cambio en devkit-run.sh corría en el
+# bucle pero no en el lanzamiento manual, hasta el próximo `devkit recreate`
+# (DEVKIT-50, hallazgo H2 de pr-review).
+printf 'export DEVKIT_SCRIPTS_DIR=%q\n' "$SCRIPTS_DIR" >> "$ENV_FILE"
 
 # /opt/devkit/image es la copia del template con la que se construyó la imagen.
 # Lo que está ahí (Dockerfile, zsh, proxy, vscode) no se refresca al

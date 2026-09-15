@@ -13,8 +13,13 @@
 #     agrega el resumen de costo a watch.log, igual que una skill lanzada por
 #     el bucle.
 #
+# Uso con anulación manual, para subir o bajar el rol de un lanzamiento
+# concreto sin tocar roles.toml:
+#   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]
+#     La línea de resumen en watch.log marca "(anulación manual)".
+#
 # Modos que usa `watch.sh` (no para uso manual):
-#   devkit-run --modelo "<prompt>"                 imprime "modelo esfuerzo presupuesto"
+#   devkit-run --rol "<prompt>"                     imprime "modelo esfuerzo presupuesto"
 #   devkit-run --sync "<prompt>"                    corre en primer plano, JSON por stdout
 #   devkit-run --resumen <log> <modelo> <esfuerzo> <presupuesto>
 #                                                    imprime la línea de costo/tokens/turnos
@@ -35,12 +40,30 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
-ROLES_FILE="${DEVKIT_ROLES_FILE:-$HERE/../agents/roles.toml}"
+ROLES_FILE="${DEVKIT_ROLES_FILE:-}"
+if [ -z "$ROLES_FILE" ]; then
+  if [ -f "$HERE/../agents/roles.toml" ]; then
+    ROLES_FILE="$HERE/../agents/roles.toml"
+  else
+    # $HERE es /opt/devkit/scripts cuando corre desde el alias de la imagen
+    # (o SCRIPTS_DIR fuera de dev): el Dockerfile solo copia scripts/, así
+    # que ../agents no existe ahí. TEMPLATE_DIR sí tiene agents/roles.toml
+    # siempre: en dev es el symlink a $WS/devkit, y en un proyecto
+    # instanciado es el clon del template que hace entrypoint.sh (DEVKIT-50,
+    # hallazgo H1 de pr-review).
+    ROLES_FILE="${DEVKIT_ROLES_FILE_FALLBACK:-/opt/devkit/template/agents/roles.toml}"
+  fi
+fi
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 # Mismo candado que `run_skill` en watch.sh: un solo `claude -p` a la vez
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
+# Mismas alarmas de DEVKIT-46 que `run_skill` en watch.sh, para que un
+# lanzamiento por `--worker` (manual o desde task-close/epic-plan) avise
+# igual que el bucle: skill lenta, con el mismo umbral y sondeo.
+SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
+SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 
 # Última coincidencia de "<rol>.<campo> = valor" en roles.toml, sin comillas.
 # roles.toml usa claves punteadas (TOML válido) a propósito: este grep no
@@ -54,12 +77,16 @@ role_field() {  # role_field <rol> <campo>
 # "pr-review"). Grupos del criterio de aceptación de DEVKIT-45: contabilidad
 # (task-close, task-block: solo comentan o cierran, no escriben código),
 # revision (pr-review, siempre el modelo fuerte) e implementacion (el resto).
+# epic-plan entra en revision desde DEVKIT-50: un mal desglose de Épica cuesta
+# más que cualquier card individual, así que se queda con el modelo fuerte y
+# esfuerzo alto en vez del que le tocaría por Tipo (que además no tiene,
+# porque una Épica no es feature/bug/chore).
 role_of() {  # role_of <prompt>
   local skill
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   case "$skill" in
     task-close|task-block) printf 'contabilidad' ;;
-    pr-review) printf 'revision' ;;
+    pr-review|epic-plan) printf 'revision' ;;
     *) printf 'implementacion' ;;
   esac
 }
@@ -114,6 +141,41 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto>
   printf 'modelo=%s esfuerzo=%s %s%s' "$modelo" "$esfuerzo" "$linea" "$excedido"
 }
 
+# Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
+# watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
+# proceso con el bucle, así que no puede reusar su función.
+watch_long_running() {  # watch_long_running <prompt> <pid>
+  local prompt=$1 pid=$2 waited=0 alarmed=0
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep "$SKILL_POLL"
+    waited=$((waited + SKILL_POLL))
+    if [ "$alarmed" -eq 0 ] && [ "$waited" -ge "$SKILL_TIMEOUT" ]; then
+      printf '%s devkit-run "%s" ALARMA: lleva %s min corriendo (límite %ss)\n' \
+        "$(date -u +%FT%TZ)" "$prompt" "$((waited / 60))" "$SKILL_TIMEOUT" >> "$WATCH_LOG"
+      alarmed=1
+    fi
+  done
+}
+
+# Barrera mecánica de DEVKIT-50 sobre la regla de cierre de DEVKIT-44: un
+# `result` que termina en pregunta es una card `En progreso` cortando en seco
+# en vez de resolver en un estado observable (AGENTS.md), y DEVKIT-48 mostró
+# que la regla escrita en las skills no basta. En vez de dejarla colgada, el
+# lanzador mismo relanza una vez `task-block` con un motivo forzado. No se
+# relanza si el propio `task-block` (o `task-close`, que no toma decisiones de
+# alcance) fue el que preguntó: relanzarlo entraría en bucle sin arreglar
+# nada, y ahí sí queda para el humano vía las alarmas de arriba.
+forzar_task_block() {  # forzar_task_block <prompt> <logf>
+  local prompt=$1 logf=$2 skill clave motivo
+  skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  case "$skill" in task-block|task-close) return 0 ;; esac
+  clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  [ -n "$clave" ] || return 0
+  motivo="devkit-run: $skill terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44); ver $logf"
+  printf '%s devkit-run "%s" relanza task-block forzado: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$clave" >> "$WATCH_LOG"
+  "$HERE/devkit-run.sh" task-block "$clave" "$motivo" >/dev/null 2>&1
+}
+
 run_tests() {
   local fail=0 tmp
   check() {
@@ -127,6 +189,7 @@ run_tests() {
   }
 
   check "rol de pr-review" revision "$(role_of '/pr-review 31')"
+  check "rol de epic-plan" revision "$(role_of '/epic-plan DEVKIT-1')"
   check "rol de task-close" contabilidad "$(role_of '/task-close DEVKIT-44 url')"
   check "rol de task-block" contabilidad "$(role_of '/task-block DEVKIT-44 razón')"
   check "rol de task-start" implementacion "$(role_of '/task-start')"
@@ -151,6 +214,14 @@ FIN
   check "campo de contabilidad" "modelo-barato" \
     "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model)"
   check "campo de revisión" "modelo-revision" "$(ROLES_FILE="$tmp/roles.toml" role_field revision model)"
+
+  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
+  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
+  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
+  mkdir -p "$tmp/nested/scripts"
+  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
+  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-revision high 50" \
+    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
 
   git -C "$tmp" init -q
   git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
@@ -234,11 +305,90 @@ FIN
   check "avisa cuando se excede el presupuesto de turnos" 'excede el presupuesto de 15 turnos' \
     "$(resumen "$tmp/exceso.log" modelo-x low 15 | grep -oE 'excede el presupuesto de 15 turnos')"
 
+  # Cadena task-close -> task-start (DEVKIT-50): el doble de claude, al ver
+  # un prompt de task-close, lanza a su vez devkit-run task-start con el
+  # mismo entorno de prueba, imitando lo que hace la skill al tomar la
+  # siguiente hija. Debe quedar en watch.log un resumen por cada rol
+  # (contabilidad para task-close, implementación para task-start).
+  git -C "$tmp" checkout -q -b feat/DEVKIT-3-algo
+  local cadena
+  cadena="$tmp/claude-cadena"
+  cat >"$cadena" <<FIN
+#!/usr/bin/env bash
+case "\$2" in
+  */task-close*)
+    DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \\
+      DEVKIT_ROLES_FILE="$tmp/roles.toml" \\
+      bash "$HERE/devkit-run.sh" task-start DEVKIT-3 >/dev/null 2>&1
+    ;;
+esac
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
+FIN
+  chmod +x "$cadena"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    bash "$HERE/devkit-run.sh" task-close DEVKIT-3 url >/dev/null 2>&1
+  espera=0
+  while [ "$(grep -cE 'devkit-run "/task-(close|start)' "$tmp/run/watch.log" 2>/dev/null)" -lt 2 ] \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "cadena task-close -> task-start: dos resúmenes con roles distintos" 2 \
+    "$(grep -oE 'modelo=(modelo-barato|modelo-fuerte)' "$tmp/run/watch.log" | sort -u | wc -l | tr -d ' ')"
+
+  # Anulación manual: --modelo/--esfuerzo pisan el rol resuelto y la línea de
+  # resumen lo marca, sin comparar contra el presupuesto de roles.toml.
+  DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    bash "$HERE/devkit-run.sh" --modelo modelo-a-mano --esfuerzo high task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/run/task-fix-1.log" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "anulación manual usa el modelo y esfuerzo pedidos" 'modelo=modelo-a-mano esfuerzo=high' \
+    "$(grep -oE 'modelo=modelo-a-mano esfuerzo=high' "$tmp/run/watch.log" | head -1)"
+  check "anulación manual queda marcada en el resumen" 'anulación manual' \
+    "$(grep -oE 'anulación manual' "$tmp/run/watch.log" | head -1)"
+
+  # Barrera mecánica DEVKIT-50/DEVKIT-44: un result que termina en pregunta
+  # relanza task-block una sola vez, salvo si quien preguntó ya era
+  # task-block o task-close (evita el bucle).
+  local pregunton
+  pregunton="$tmp/claude-pregunton"
+  cat >"$pregunton" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"¿qué credencial uso?","total_cost_usd":0.01,"num_turns":2}\n'
+FIN
+  chmod +x "$pregunton"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$pregunton" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ "$(grep -c 'relanza task-block forzado' "$tmp/run/watch.log" 2>/dev/null)" -lt 1 ] \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "pregunta abierta alarma y relanza task-block forzado" 'relanza task-block forzado: DEVKIT-3' \
+    "$(grep -oE 'relanza task-block forzado: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+
+  # --modelo/--esfuerzo sin valor deben salir con el mensaje de uso, no
+  # colgar el proceso (DEVKIT-50, H3).
+  local rc
+  timeout 5 bash "$HERE/devkit-run.sh" --modelo >/dev/null 2>&1; rc=$?
+  check "--modelo sin valor no cuelga" 64 "$rc"
+  timeout 5 bash "$HERE/devkit-run.sh" --esfuerzo >/dev/null 2>&1; rc=$?
+  check "--esfuerzo sin valor no cuelga" 64 "$rc"
+
   return $fail
 }
 
 case "${1:-}" in
-  --modelo)
+  --rol)
     model_effort_of "${2:-}"
     exit 0
     ;;
@@ -252,26 +402,48 @@ case "${1:-}" in
     exit 0
     ;;
   --worker)
-    # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto>: ya corre
-    # dentro de un proceso desacoplado (nohup); toma el mismo candado que
-    # `run_skill` antes de tocar /workspace, ejecuta en primer plano y al
-    # terminar deja el resumen en watch.log, igual que el bucle.
+    # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto> [manual]: ya
+    # corre dentro de un proceso desacoplado (nohup); toma el mismo candado
+    # que `run_skill` antes de tocar /workspace, ejecuta y al terminar deja
+    # el resumen en watch.log, igual que el bucle. `manual` (cualquier valor
+    # no vacío) marca que `--modelo`/`--esfuerzo` anularon el rol resuelto.
+    # Las alarmas de skill lenta, error y pregunta abierta son las mismas de
+    # `run_skill` en watch.sh (DEVKIT-46/DEVKIT-50): un lanzamiento manual o
+    # desde task-close/epic-plan no corre por el bucle, así que las repite
+    # aquí en vez de perderlas.
     cd "$WS" 2>/dev/null || exit 1
     mkdir -p "$RUN_DIR"
-    prompt=${2:-} logf=${3:-} modelo=${4:-} esfuerzo=${5:-} presupuesto=${6:-}
+    prompt=${2:-} logf=${3:-} modelo=${4:-} esfuerzo=${5:-} presupuesto=${6:-} manual=${7:-}
     exec 9>"$LOCK"
     if ! flock -n 9; then
       printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
       flock 9
     fi
-    run_claude "$prompt" "$modelo" "$esfuerzo" >"$logf" 2>&1
+    run_claude "$prompt" "$modelo" "$esfuerzo" >"$logf" 2>&1 &
+    skill_pid=$!
+    watch_long_running "$prompt" "$skill_pid" &
+    watcher_pid=$!
+    wait "$skill_pid"
     rc=$?
+    kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
     flock -u 9
     exec 9>&-
     estado=terminado
     [ $rc -eq 0 ] || estado="falló (rc=$rc)"
-    printf '%s devkit-run "%s" %s: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$estado" \
-      "$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")" >> "$WATCH_LOG"
+    resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")"
+    [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
+    printf '%s devkit-run "%s" %s: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$estado" "$resumen_txt" >> "$WATCH_LOG"
+    if [ $rc -eq 0 ]; then
+      resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
+      if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
+        printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
+          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+        forzar_task_block "$prompt" "$logf"
+      fi
+    else
+      printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
+        "$(date -u +%FT%TZ)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
+    fi
     exit $rc
     ;;
   --test)
@@ -280,10 +452,46 @@ case "${1:-}" in
     ;;
 esac
 
+# Anulación manual del rol para este lanzamiento (no toca roles.toml): un
+# humano sube o baja modelo/esfuerzo puntualmente, por ejemplo para forzar el
+# modelo fuerte en una card que se ve difícil. Van antes de <skill> <Clave>
+# porque son opcionales y `shift 2` de más abajo asume esa posición fija.
+
+# Sin esto, --modelo o --esfuerzo como último argumento cuelgan el proceso:
+# `shift 2` falla por falta de argumentos, el error se traga y el bucle no
+# avanza (DEVKIT-50, hallazgo H3 de pr-review).
+falta_valor() {  # falta_valor <valor>
+  case "${1-}" in
+    ''|-*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+modelo_manual="" esfuerzo_manual=""
+while true; do
+  case "${1:-}" in
+    --modelo)
+      if falta_valor "${2:-}"; then
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "     devkit-run --test   corre la autoprueba" >&2
+        exit 64
+      fi
+      modelo_manual="$2"; shift 2 ;;
+    --esfuerzo)
+      if falta_valor "${2:-}"; then
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "     devkit-run --test   corre la autoprueba" >&2
+        exit 64
+      fi
+      esfuerzo_manual="$2"; shift 2 ;;
+    *) break ;;
+  esac
+done
+
 skill="${1:-}"
 clave="${2:-}"
 if [ -z "$skill" ] || [ -z "$clave" ]; then
-  echo "uso: devkit-run <skill> <Clave> [texto extra...]" >&2
+  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
   echo "     devkit-run --test   corre la autoprueba" >&2
   exit 64
 fi
@@ -296,8 +504,14 @@ n=1
 while [ -e "$RUN_DIR/$skill-$n.log" ]; do n=$((n + 1)); done
 logf="$RUN_DIR/$skill-$n.log"
 read -r modelo esfuerzo presupuesto < <(model_effort_of "$prompt")
+manual=""
+if [ -n "$modelo_manual" ]; then modelo="$modelo_manual"; manual=1; fi
+if [ -n "$esfuerzo_manual" ]; then esfuerzo="$esfuerzo_manual"; manual=1; fi
+# Con anulación manual no hay presupuesto de roles.toml que comparar con el
+# turno real: el rol resuelto ya no aplica.
+[ -z "$manual" ] || presupuesto="-"
 
-nohup "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" \
+nohup "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
   >/dev/null 2>&1 &
 disown
 echo "lanzado: $prompt"
