@@ -74,6 +74,11 @@ trabajo de `pr-review`.
    - Si un hallazgo es incorrecto, ambiguo o queda fuera del alcance de la
      card, no lo fuerces: se responde `descartado` con el motivo en una
      frase. El revisor decide en el siguiente ciclo.
+   - Si un hallazgo pide retirar un dato porque el revisor no pudo
+     verificarlo, y ese dato vive en un comentario de la card (el revisor
+     tiene prohibido leerlos), no lo retires: cita la fuente exacta en el
+     commit (URL o fecha del comentario) y responde `atendido` con esa cita.
+     Retirarlo sin más perdió información real en DEVKIT-41.
 6. Verificación local antes de subir, igual que en `task-submit`: `ruff
    check .` y `ruff format --check .` si hay Python, `uv run pytest` si hay
    pruebas, `bash -n` sobre cada script de shell tocado. Si algo falla,

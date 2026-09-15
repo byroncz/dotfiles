@@ -10,6 +10,21 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Skills headless corregidas: comentarios, cierre sin preguntas, fuente citada y clase agotada (DEVKIT-44)
+
+- `task-start` lee los comentarios de la card antes de publicar el plan y
+  cita cada ampliación encontrada; ignorar un comentario dejó el CHANGELOG
+  de `1.0.0` con un dato falso (DEVKIT-41).
+- `task-fix`, cuando un hallazgo pide retirar un dato que vive en un
+  comentario de la card (el revisor no puede leerlos), ya no lo retira: cita
+  la fuente en el commit.
+- `pr-review` agota en el mismo ciclo la clase de un hallazgo con variantes
+  (por ejemplo, una sintaxis con varios flags), en vez de encontrar una
+  variante por ciclo; esto costó 7 revisiones en el PR 27 (DEVKIT-20).
+- `task-close` no cierra una Épica a `Hecha` cuando terminan sus hijas salvo
+  que esté `En progreso` y tenga Criterios de aceptación; cerrar sin este
+  chequeo dejó DEVKIT-19 en `Hecha` sin ejecutar su contenido.
+
 ### Retirar `.devcontainer/`, el enfoque anterior basado en la CLI de devcontainers (DEVKIT-29)
 
 - `.devcontainer/` quedaba como "referencia histórica hasta que exista la
