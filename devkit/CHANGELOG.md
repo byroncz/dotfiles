@@ -17,10 +17,11 @@ versión que usa un proyecto y la destino.
   que trae el token, para que un `tail`/`cat` normal no lo muestre.
 - `devkit code` deja de imprimir la URL con el token cuando `open` la abre
   bien en el Mac; solo la imprime si `open` falla o no está.
-- `pr-guard.sh` bloquea más formas de leer `/run/devkit/vscode-token` en un
-  comando de agente: además de `cat`/`tail`/`grep`, ahora `head`, `less`,
-  `more`, `od`, `xxd`, `strings`, `base64`, `cp` y `mv` (esto último cubre
-  también `docker cp`).
+- `pr-guard.sh` pasa de lista negra a lista blanca para
+  `/run/devkit/vscode-token`: bloquea cualquier segmento que mencione la
+  ruta, incluidas la redirección (`< vscode-token`), la sustitución de
+  comando y los intérpretes, salvo que solo compruebe que el archivo existe
+  (`test -f`, `[ -f ... ]`, `ls`).
 - Runbook "El editor no abre" actualizado con el procedimiento de rotación
   del token y qué no pegar nunca en un chat ni en una card.
 - Cambios requeridos: quien tenga el comando `devkit code` instalado en el
