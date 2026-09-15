@@ -207,6 +207,7 @@ devkit/
     watch.sh              # revisión, corrección y cierre de PRs cada cinco minutos
     watch-test.sh         # casos de la tabla de decisión de watch.sh
     net-denied.sh         # destinos bloqueados por el proxy
+    agents-sync.sh        # funde AGENTS.md con la plantilla nueva; la usa template-update
   VERSION                 # la lee new-project.sh para elegir la etiqueta
   CHANGELOG.md            # una entrada por etiqueta; la lee template-update
 new-project.sh
@@ -273,7 +274,7 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, marcador `devkit-closed` en el PR, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `project-status` | En cualquier momento | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
-| `template-update` | Mantenimiento | Sube `template` en `devkit.toml` y actualiza Notion |
+| `template-update` | Mantenimiento | Sube `template` en `devkit.toml`, funde `AGENTS.md` con la plantilla destino y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
 ## 6. Flujo de trabajo
@@ -532,6 +533,18 @@ vencimiento en la nota de cada secreto.
 - Para `DEVKIT`, el clon de `dotfiles` es su workspace: ahí los cambios se
   prueban en vivo antes de etiquetar, con `template = "dev"` en su propio
   `devkit.toml`.
+- `template-update` y `template-propagate` también funden `AGENTS.md` con la
+  plantilla destino, con `devkit/scripts/agents-sync.sh` (DEVKIT-28).
+  `AGENTS.template.md` declara
+  el marcador `## Reglas del proyecto`: todo lo de arriba es del template,
+  todo lo de abajo es del proyecto. Con el marcador presente, la fusión es
+  mecánica (reemplazar texto por encima de una línea fija) y se aplica sola,
+  sin que ningún agente tenga que interpretar contenido libre para decidir
+  qué conservar. Sin el marcador —proyectos de antes de esta convención, o
+  que lo hayan borrado— no hay límite confiable entre lo que es del template
+  y lo que escribió el proyecto: aplicar la plantilla ahí podría borrar
+  contenido sin que nadie lo note antes del merge, así que el script no
+  toca el archivo y deja el diff en el PR para que lo funda un humano.
 
 Descartado: bind mount del clon local con enlaces simbólicos. Rompe el host
 mínimo, elimina las versiones y no tiene radio de impacto controlado.
