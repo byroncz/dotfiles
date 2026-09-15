@@ -60,15 +60,21 @@ has_flag() {
 }
 
 # True si el segmento solo comprueba que /run/devkit/vscode-token existe
-# (test/[/[[ con -e/-f/-r/-s, ls, stat), no si lee su contenido. Lista
-# blanca, no negra: cualquier otra forma de tocar la ruta cae al bloqueo por
-# defecto del llamador. El comando de la comprobación debe ser el primer
-# token del segmento (o el primero tras "docker exec <contenedor>", el
-# único envoltorio que se usa hoy): así "grep ls ..." o "xargs ls < ..." no
-# cuelan solo por traer "ls" en cualquier posición, que era el hueco de
-# DEVKIT-51 (H8). $(...) y las comillas invertidas bloquean siempre, porque
-# pueden inyectar el contenido del archivo como argumento de un comando que
-# sí pasaría la lista blanca (ej. "ls $(cat vscode-token)").
+# (test/[/[[ con -e/-f/-r/-s), no si lee su contenido. Lista blanca, no
+# negra: cualquier otra forma de tocar la ruta cae al bloqueo por defecto
+# del llamador. El comando de la comprobación debe ser el primer token del
+# segmento (o el primero tras "docker exec <contenedor>", el único
+# envoltorio que se usa hoy): así "grep ls ..." o "xargs ls < ..." no cuelan
+# solo por traer "ls" en cualquier posición, que era el hueco de DEVKIT-51
+# (H8). $(...) y las comillas invertidas bloquean siempre, porque pueden
+# inyectar el contenido del archivo como argumento de un comando que sí
+# pasaría la lista blanca (ej. "ls $(cat vscode-token)"). "ls" y "stat" no
+# están en la lista: su salida (listado, "%n") puede reinyectar la ruta o
+# el nombre del archivo a un lector posterior en el mismo pipe (ej. "ls
+# /run/devkit/vscode-token | xargs cat"), y ese segundo segmento no
+# menciona la ruta, así que este chequeo nunca lo ve. Es el límite
+# documentado de una inspección de texto por segmento (DEVKIT-51, cuarto
+# ciclo): formas alternativas de la ruta no se persiguen aquí.
 is_token_existence_check() {
   local hay="$1"
   case "$hay" in
@@ -83,9 +89,6 @@ is_token_existence_check() {
   case "${toks[$i]:-}" in
     test|'['|'[[')
       has_flag "$hay" -e -f -r -s
-      ;;
-    ls|stat)
-      return 0
       ;;
     *)
       return 1
@@ -337,6 +340,13 @@ run_tests() {
   check 'xargs ls < /run/devkit/vscode-token' block
   check 'ls $(cat /run/devkit/vscode-token)' block
 
+  # DEVKIT-51, cuarto ciclo: "ls" y "stat" ya no están en la lista blanca.
+  # Su salida reinyecta la ruta o el nombre del archivo a un segundo
+  # segmento del pipe que no menciona la ruta, y ese segundo segmento es el
+  # que termina imprimiendo el token.
+  check 'ls /run/devkit/vscode-token | xargs cat' block
+  check 'stat -c %n /run/devkit/vscode-token | xargs cat' block
+
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
   check 'gh pr merge 42 --auto=false' block
@@ -363,7 +373,6 @@ run_tests() {
   check 'test -e /run/devkit/vscode-token' allow
   check 'test -r /run/devkit/vscode-token' allow
   check '[ -s /run/devkit/vscode-token ]' allow
-  check 'stat -c %a /run/devkit/vscode-token' allow
 
   # El hook completo (stdin -> denials.log), no solo reason_to_block: el
   # registro de denegaciones de DEVKIT-45 vive en el bloque de más abajo, que

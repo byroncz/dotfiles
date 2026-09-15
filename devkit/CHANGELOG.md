@@ -21,7 +21,11 @@ versión que usa un proyecto y la destino.
   `/run/devkit/vscode-token`: bloquea cualquier segmento que mencione la
   ruta, incluidas la redirección (`< vscode-token`), la sustitución de
   comando y los intérpretes, salvo que solo compruebe que el archivo existe
-  (`test -f`, `[ -f ... ]`, `ls`).
+  (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`). `ls` y `stat` salieron
+  de la lista blanca: su salida (listado, `%n`) reinyecta la ruta o el
+  nombre del archivo a un segundo comando en el mismo pipe (ej. `ls
+  /run/devkit/vscode-token | xargs cat`), que esta inspección de texto por
+  segmento no veía.
 - Runbook "El editor no abre" actualizado con el procedimiento de rotación
   del token y qué no pegar nunca en un chat ni en una card.
 - Cambios requeridos: quien tenga el comando `devkit code` instalado en el
