@@ -104,7 +104,12 @@ api() {
         fi
         ;;
     esac
-    err "$method $path: HTTP ${code:-?}: $(printf '%s' "$out" | jq -r '.message // empty' 2>/dev/null | cut -c1-200)"
+    case "$code" in
+      # Sin respuesta del servidor (proxy, DNS, conexión rechazada): el
+      # único texto útil es el de curl, que no es JSON.
+      000|"") err "$method $path: HTTP ${code:-?}: $(printf '%s' "$out" | head -1 | cut -c1-200)" ;;
+      *) err "$method $path: HTTP ${code:-?}: $(printf '%s' "$out" | jq -r '.message // empty' 2>/dev/null | cut -c1-200)" ;;
+    esac
     return 1
   done
 }
@@ -420,6 +425,12 @@ dos" "$(jq -r "$CRITERIOS" <<<"$bloques")"
   resp GET__pages_roto '{"object":"error","message":"Could not find page"}' 404
   got=$(env "${entorno[@]}" bash "$HERE/notion.sh" pagina roto 2>&1 >/dev/null)
   check "error: código y mensaje de Notion" "notion.sh: GET /pages/roto: HTTP 404: Could not find page" "$got"
+  # Sin conexión curl no trae JSON y el código es 000: el error lleva el texto
+  # de curl, que es lo que permite reconocer un "connection refused" del proxy.
+  resp GET__pages_sin-red 'curl: (7) Failed to connect to api.notion.com port 443: Connection refused' 000
+  got=$(env "${entorno[@]}" bash "$HERE/notion.sh" pagina sin-red 2>&1 >/dev/null)
+  check "error: sin conexión muestra el texto de curl" \
+    "notion.sh: GET /pages/sin-red: HTTP 000: curl: (7) Failed to connect to api.notion.com port 443: Connection refused" "$got"
   resp GET__pages_lento '{"object":"error","message":"rate limited"}' 429
   : >"$tmp/llamadas"
   env "${entorno[@]}" bash "$HERE/notion.sh" pagina lento >/dev/null 2>&1
