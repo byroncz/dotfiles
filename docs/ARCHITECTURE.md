@@ -386,6 +386,29 @@ responde (DEVKIT-54). La sonda que decide si un modelo responde corre aislada
 como caído al modelo que sí estaba disponible. Detalle completo en el README,
 sección "Modelo, esfuerzo y costo por rol".
 
+Desde DEVKIT-61, el rol de implementación puede además escalar por ronda:
+`implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]` da
+modelo y esfuerzo por posición. La ronda es 1 para `task-start` y
+`task-submit`, y para `task-fix` y `task-document` es 1 más el número de
+comentarios `devkit-fix` del PR de la card; pasada la lista, repite el último
+elemento. `devkit-run` la lee del PR (URL en Notion o, si falta, `gh pr list
+--head <rama>`), usa la ronda 1 si no puede leerlo y lo escribe en
+`watch.log`, y anota `ronda=<n>` en la línea de resumen. El alias de la ronda
+pasa por la misma sonda; si no responde, manda `model_index`. `--modelo`,
+`--esfuerzo` y `DEVKIT_MODELO_FORZADO` siguen por encima.
+
+La decisión es asimétrica a propósito. La implementación escala porque su
+error es visible: un PR flojo vuelve con `CAMBIOS` y la ronda siguiente lo
+corrige con un modelo más fuerte, así que el costo de empezar barato es, como
+mucho, un ciclo más. La revisión no escala (`revision.rondas` se ignora con
+aviso) porque su error es invisible: un revisor débil da un OK falso y nada en
+el flujo lo detecta antes del humano. Es un experimento y no una regla:
+DEVKIT-51 en Sonnet necesitó tres ciclos (evidencia de DEVKIT-54), y la
+escalera se mide en las hijas de DEVKIT-43, pequeñas, comparando ciclos y
+costo por card con las marcas de DEVKIT-58 antes de fijar el valor por
+defecto. Se desactiva quitando `rondas`; detalle en el README, sección
+"Escalera de modelos por ronda".
+
 Una skill que necesite saber si otro agente ya ocupa el workspace pregunta con
 `devkit-run --otros-agentes`, nunca con un `pgrep` sobre la Clave: la Clave
 viaja en los argumentos del propio lanzador, así que un `pgrep` devuelve los

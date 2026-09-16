@@ -421,7 +421,7 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 # lo usa el relanzamiento de un task-fix vacío (DEVKIT-57). El modelo con el
 # que corrió queda en ULTIMO_MODELO para quien llama.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado en_linea
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea
   logf="$RUN_DIR/$name.log"
   # Antes del candado: `devkit-run --estado` cuenta el lanzamiento desde aquí,
   # aunque espere a otra skill o a la sonda de modelos (DEVKIT-57). Se corta
@@ -438,14 +438,16 @@ run_skill() {
     log "$name espera: otra skill ocupa el workspace"
     flock 9
   fi
-  read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --rol "$prompt")
+  read -r modelo esfuerzo presupuesto ronda < <("$DEVKIT_RUN" --rol "$prompt")
   [ -z "$forzado" ] || modelo=$forzado
   ULTIMO_MODELO=$modelo
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
   # DEVKIT_LANZADOR=watch le dice a task-fix que lo lanzó el bucle: sin ella,
   # su `devkit-fix` lleva `manual=1` y reinicia la guarda (DEVKIT-56).
-  DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch DEVKIT_MODELO_FORZADO="$forzado" \
+  # DEVKIT_RONDA pasa la ronda que ya leyó `--rol`: `--sync` no vuelve a
+  # consultar el PR ni repite sus avisos (DEVKIT-61).
+  DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch DEVKIT_MODELO_FORZADO="$forzado" DEVKIT_RONDA="${ronda:-}" \
     "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
   watch_long_running "$name" "$skill_pid" &
@@ -455,7 +457,7 @@ run_skill() {
   kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
   flock -u 9
   exec 9>&-
-  summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")
+  summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "${ronda:--}")
   if [ $rc -eq 0 ]; then
     log "$name terminado: $summary"
     # Alarma 2 de 4: un `result` que termina en pregunta es la card en curso

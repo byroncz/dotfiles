@@ -133,7 +133,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token` o `/run/devkit/notion_token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): esos archivos son el token del editor y el de Notion en crudo, y no se pegan en un chat ni en una card (DEVKIT-51, DEVKIT-55). Para hablar con Notion desde bash está `notion.sh`, que lee el token sin imprimirlo. Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`, solo en la shell interactiva) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high\|xhigh\|max>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, y vuelve en cuanto confirma que arrancó. Antes de lanzar espera el marcador `/run/devkit/ready` que escribe el arranque del contenedor (hasta `DEVKIT_READY_TIMEOUT`, 120 s); si no aparece, no lanza, lo explica y sale con 69. Tras lanzar mira al worker hasta `DEVKIT_ARRANQUE_ESPERA` segundos (5): vivo, dice si su `claude -p` corre o espera el candado; muerto sin resumen `terminado`, imprime las últimas líneas del log y las alarmas, deja `ALARMA: no arrancó` en `watch.log` y sale con 70 (DEVKIT-57: un `task-start` lanzado con el editor recién abierto imprimió su PID y nunca corrió). Cada lanzamiento deja antes en `watch.log` la línea `<id> lanzando (origen=<quién>): "<prompt>" log=<log>`, donde `<id>` es el nombre del log y el origen sale de `DEVKIT_ORIGEN` (`task-close.sh` pone `task-close`, `watch.sh` pone `bucle`) o, si no viene, del primer `claude -p /<skill>` entre los procesos padre (`epic-plan`), y si no hay ninguno, `humano`. `devkit-run --estado` lee esas líneas y muestra una tabla de los últimos 20 lanzamientos (`DEVKIT_ESTADO_FILAS`): skill, card, quién lanzó, hace cuánto, estado y detalle, sin lanzar ningún agente. El estado es `en curso` (su proceso vive, se lanzó hace menos de `DEVKIT_ESTADO_GRACIA` segundos —120— aunque su `claude -p` aún no exista, o espera el candado), `terminó`, `error` (rc distinto de cero, o log escrito sin resumen ni proceso), `bloqueada` (`task-block.sh` bloqueó su card después de lanzarlo; el detalle es el motivo) o `no arrancó` (sin proceso, log ni resumen pasado el margen). `devkit-run --estado --seguir` la refresca cada 3 s (`DEVKIT_ESTADO_INTERVALO`) hasta Ctrl-C. Lo lanza con el modelo y el esfuerzo que le tocan por su papel en el flujo (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, bloquea la card con `task-block.sh` y un motivo forzado. `devkit-run task-close ...` y `devkit-run task-block ...` no lanzan modelo: corren en primer plano `task-close.sh` y `task-block.sh` (DEVKIT-55); `--sync` hace lo mismo con los prompts `/task-close` y `/task-block`, que todavía pide un `watch.sh` anterior hasta el próximo `devkit recreate`. Exporta `DEVKIT_MODEL` y `DEVKIT_EFFORT` al `claude -p` que lanza, con el modelo y el esfuerzo que recibió de verdad (rol, caída en `frontera`, `--modelo`/`--esfuerzo` o `DEVKIT_MODELO_FORZADO`), no los que traiga el entorno: de ahí sacan las skills las marcas "Implementado/Revisado/Documentado con <modelo>, esfuerzo <x>" (DEVKIT-58, ver "Modelo y esfuerzo visibles"). Exporta también `DEVKIT_SCRIPTS_DIR` (su propio directorio) y `DEVKIT_RUN_DIR` al `claude -p` que lanza (y `DEVKIT_LOCK_HELD=1` en `--worker`, que corre con el candado tomado; `watch.sh` la pasa a `--sync` por lo mismo: así `task-block.sh` guarda el `wip` sin pedir otra vez el candado; `watch.sh` pasa además `DEVKIT_LANZADOR=watch`, que un lanzamiento en segundo plano borra, para que `task-fix` sepa si lo lanzó el bucle), para que una skill que invoca otro script por ruta llegue a la misma copia y no a la de la imagen, vieja en modo dev; si el modelo resuelto sale vacío, no lanza: sale con 65 y deja `ALARMA: modelo vacío` en `watch.log` (antes la CLI moría con un 400 en el primer turno, DEVKIT-55). `task-next.sh` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte, así corre con el rol que le toca; `epic-plan` lo llama por ruta explícita (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el alias `devkit-run`, porque su `SKILL.md` corre en el Bash no interactivo de `claude -p`, que no carga `zshrc` (DEVKIT-54). `watch.sh` lo usa también (ver más abajo). `devkit-run --otros-agentes` responde si otro agente ya ocupa el workspace: imprime los procesos `claude -p` ajenos y sale 0 si está libre, 1 si no. Es lo que debe usar una skill en vez de un `pgrep -f <Clave>`, que devuelve como ajenos los cuatro procesos propios del lanzamiento (el `--worker`, su subshell, su vigilante y el `claude -p` de uno mismo) porque la Clave viaja en sus argumentos; ese falso positivo bloqueó una card sin motivo en DEVKIT-54. `devkit-run --siguiente-modelo <alias>` imprime el modelo disponible que sigue a `<alias>` en `frontera` (tras el último, el primero); lo usa `watch.sh` para relanzar un `task-fix` vacío, y `--sync` toma ese modelo de `DEVKIT_MODELO_FORZADO`. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`, solo en la shell interactiva) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high\|xhigh\|max>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, y vuelve en cuanto confirma que arrancó. Antes de lanzar espera el marcador `/run/devkit/ready` que escribe el arranque del contenedor (hasta `DEVKIT_READY_TIMEOUT`, 120 s); si no aparece, no lanza, lo explica y sale con 69. Tras lanzar mira al worker hasta `DEVKIT_ARRANQUE_ESPERA` segundos (5): vivo, dice si su `claude -p` corre o espera el candado; muerto sin resumen `terminado`, imprime las últimas líneas del log y las alarmas, deja `ALARMA: no arrancó` en `watch.log` y sale con 70 (DEVKIT-57: un `task-start` lanzado con el editor recién abierto imprimió su PID y nunca corrió). Cada lanzamiento deja antes en `watch.log` la línea `<id> lanzando (origen=<quién>): "<prompt>" log=<log>`, donde `<id>` es el nombre del log y el origen sale de `DEVKIT_ORIGEN` (`task-close.sh` pone `task-close`, `watch.sh` pone `bucle`) o, si no viene, del primer `claude -p /<skill>` entre los procesos padre (`epic-plan`), y si no hay ninguno, `humano`. `devkit-run --estado` lee esas líneas y muestra una tabla de los últimos 20 lanzamientos (`DEVKIT_ESTADO_FILAS`): skill, card, quién lanzó, hace cuánto, estado y detalle, sin lanzar ningún agente. El estado es `en curso` (su proceso vive, se lanzó hace menos de `DEVKIT_ESTADO_GRACIA` segundos —120— aunque su `claude -p` aún no exista, o espera el candado), `terminó`, `error` (rc distinto de cero, o log escrito sin resumen ni proceso), `bloqueada` (`task-block.sh` bloqueó su card después de lanzarlo; el detalle es el motivo) o `no arrancó` (sin proceso, log ni resumen pasado el margen). `devkit-run --estado --seguir` la refresca cada 3 s (`DEVKIT_ESTADO_INTERVALO`) hasta Ctrl-C. Lo lanza con el modelo y el esfuerzo que le tocan por su papel en el flujo (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. En `task-fix` y `task-document`, el modelo y el esfuerzo dependen además de la ronda del PR si el rol declara `rondas` (DEVKIT-61, ver "Escalera de modelos por ronda"); la ronda sale también en la línea `lanzado` y en el resumen como `ronda=<n>`. `--modelo`/`--esfuerzo` anulan el rol resuelto (y la ronda) para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, bloquea la card con `task-block.sh` y un motivo forzado. `devkit-run task-close ...` y `devkit-run task-block ...` no lanzan modelo: corren en primer plano `task-close.sh` y `task-block.sh` (DEVKIT-55); `--sync` hace lo mismo con los prompts `/task-close` y `/task-block`, que todavía pide un `watch.sh` anterior hasta el próximo `devkit recreate`. Exporta `DEVKIT_MODEL` y `DEVKIT_EFFORT` al `claude -p` que lanza, con el modelo y el esfuerzo que recibió de verdad (rol, caída en `frontera`, `--modelo`/`--esfuerzo` o `DEVKIT_MODELO_FORZADO`), no los que traiga el entorno: de ahí sacan las skills las marcas "Implementado/Revisado/Documentado con <modelo>, esfuerzo <x>" (DEVKIT-58, ver "Modelo y esfuerzo visibles"). Exporta también `DEVKIT_SCRIPTS_DIR` (su propio directorio) y `DEVKIT_RUN_DIR` al `claude -p` que lanza (y `DEVKIT_LOCK_HELD=1` en `--worker`, que corre con el candado tomado; `watch.sh` la pasa a `--sync` por lo mismo: así `task-block.sh` guarda el `wip` sin pedir otra vez el candado; `watch.sh` pasa además `DEVKIT_LANZADOR=watch`, que un lanzamiento en segundo plano borra, para que `task-fix` sepa si lo lanzó el bucle), para que una skill que invoca otro script por ruta llegue a la misma copia y no a la de la imagen, vieja en modo dev; si el modelo resuelto sale vacío, no lanza: sale con 65 y deja `ALARMA: modelo vacío` en `watch.log` (antes la CLI moría con un 400 en el primer turno, DEVKIT-55). `task-next.sh` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte, así corre con el rol que le toca; `epic-plan` lo llama por ruta explícita (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el alias `devkit-run`, porque su `SKILL.md` corre en el Bash no interactivo de `claude -p`, que no carga `zshrc` (DEVKIT-54). `watch.sh` lo usa también (ver más abajo). `devkit-run --otros-agentes` responde si otro agente ya ocupa el workspace: imprime los procesos `claude -p` ajenos y sale 0 si está libre, 1 si no. Es lo que debe usar una skill en vez de un `pgrep -f <Clave>`, que devuelve como ajenos los cuatro procesos propios del lanzamiento (el `--worker`, su subshell, su vigilante y el `claude -p` de uno mismo) porque la Clave viaja en sus argumentos; ese falso positivo bloqueó una card sin motivo en DEVKIT-54. `devkit-run --siguiente-modelo <alias>` imprime el modelo disponible que sigue a `<alias>` en `frontera` (tras el último, el primero); lo usa `watch.sh` para relanzar un `task-fix` vacío, y `--sync` toma ese modelo de `DEVKIT_MODELO_FORZADO`. `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -198,13 +198,15 @@ la posición desde la que empieza a buscar el primero disponible.
 `revisión` (`pr-review` y `epic-plan`, desde DEVKIT-50: un mal desglose de
 Épica cuesta más que cualquier card) usa el primer modelo de la lista;
 `implementación` (`task-start`, `task-fix`, `task-submit`, `task-document`)
-el segundo. Cerrar y bloquear no tienen rol: desde DEVKIT-55 son bash
-(`task-close.sh`, `task-block.sh`) y no lanzan modelo, así que el rol
-`contabilidad` que los agrupaba se retiró. El esfuerzo es `high` en todos los
-roles salvo `epic-plan`, que sube a `max`: un mal desglose se paga en todas
-sus hijas. El `Tipo` de la card (`feature`, `bug`, `chore`) ya no elige
-modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
-CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
+el segundo, salvo que el rol declare `rondas` (ver "Escalera de modelos por
+ronda" más abajo), que manda sobre `model_index` mientras esté activa. Cerrar
+y bloquear no tienen rol: desde DEVKIT-55 son bash (`task-close.sh`,
+`task-block.sh`) y no lanzan modelo, así que el rol `contabilidad` que los
+agrupaba se retiró. El esfuerzo es `high` en todos los roles salvo
+`epic-plan`, que sube a `max`, y salvo que `rondas` fije uno distinto por
+ronda: un mal desglose se paga en todas sus hijas. El `Tipo` de la card
+(`feature`, `bug`, `chore`) ya no elige modelo ni esfuerzo; sigue eligiendo el
+prefijo de rama y la sección del CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
 arranque del contenedor y el resultado queda cacheado en
 `/run/devkit/frontera/<alias>` (tmpfs: se vuelve a comprobar en cada `devkit
 recreate`). Un `si` vale todo el arranque; un `no` caduca a los 600 s
@@ -237,8 +239,56 @@ contra ese número y avisa en el log si se excede. La línea de resumen queda
 así:
 
 ```
-pr-review-31-a1b2c3d terminado: modelo=fable esfuerzo=high costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
+pr-review-31-a1b2c3d terminado: modelo=fable esfuerzo=high ronda=- costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
+task-fix-31-e4f5g6h terminado: modelo=opus esfuerzo=high ronda=3 costo=0.61 turnos=18 tokens: ... :: H1 | atendido | 1234abc
 ```
+
+**Escalera de modelos por ronda (DEVKIT-61).** Un experimento para gastar
+menos: la implementación empieza con un modelo barato y solo sube si el PR no
+pasa la revisión. `roles.toml` lo declara así:
+
+```toml
+implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
+```
+
+Cada elemento es `<alias de claude --model>:<esfuerzo>` y su posición es la
+ronda. La regla:
+
+| Skill | Ronda |
+|---|---|
+| `task-start`, `task-submit` | 1: todavía no hay PR |
+| `task-fix`, `task-document` | 1 más el número de comentarios `<!-- devkit-fix` del PR de la card |
+| `pr-review`, `epic-plan` | No tienen ronda (`ronda=-`): el revisor no escala |
+
+Una ronda mayor que la lista usa el último elemento. Con la lista del
+template, el primer `task-fix` (sin `devkit-fix` previos) va en `sonnet`, el
+segundo también y del tercero en adelante en `opus`.
+
+Cómo se lee la ronda: `devkit-run` busca la card en Notion con `notion.sh
+card <Clave>` y toma la URL de `PR`; si falta, busca el PR por la rama de la
+card (o, sin Notion, por la rama local o remota que lleva la Clave) con `gh
+pr list --head <rama>`. Luego cuenta los comentarios `devkit-fix` con `gh pr
+view`. Si no puede leer el PR, usa la ronda 1 y lo escribe en `watch.log`
+(`devkit-run ronda de "<prompt>": ... uso la ronda 1`). `watch.sh` lee la
+ronda una sola vez con `--rol` y se la pasa a `--sync` en `DEVKIT_RONDA`,
+para no consultar dos veces.
+
+El alias de la ronda pasa por la misma sonda que `frontera` (caché en
+`/run/devkit/frontera`). Si no responde, se usa el modelo que resuelve
+`model_index` del rol, con el esfuerzo de la ronda, y `watch.log` lo dice
+(`ronda 3 pide opus, que no responde; uso sonnet (model_index del rol)`).
+`--modelo`, `--esfuerzo` y `DEVKIT_MODELO_FORZADO` (el relanzamiento de un
+`task-fix` vacío) siguen mandando por encima de la ronda.
+
+`revision.rondas` se ignora a propósito, con una línea en `watch.log`:
+`pr-review` y `epic-plan` siguen con el primer modelo disponible de
+`frontera` en esfuerzo `high` (`max` para `epic-plan`). El revisor es la
+compuerta de calidad, y uno más débil da OK falsos que nadie detecta.
+
+Para desactivar la escalera, quita la línea `implementacion.rondas` (del
+template o de `.devkit/roles.toml`): `model_index` y `effort` vuelven a
+mandar. La línea de resumen sigue anotando `ronda=<n>`, así que el dato para
+comparar ciclos y costo por card no se pierde.
 
 Al terminar `task-close.sh` de un PR mergeado, el bucle suma el `costo=` de todas
 las líneas de ese número de PR en `watch.log` (todas sus rondas de revisión y
@@ -392,7 +442,12 @@ aviso de presupuesto de turnos excedido, la cadena `epic-plan` → `task-start`
 (dos resúmenes con roles distintos), la anulación manual por
 `--modelo`/`--esfuerzo`, el bloqueo con `task-block.sh` ante una pregunta
 abierta, la delegación de `devkit-run task-block` al script, que un modelo
-vacío no se lanza y que el `claude -p` recibe `DEVKIT_SCRIPTS_DIR` y
+vacío no se lanza, la escalera de DEVKIT-61 con un doble de `gh` y de
+`notion.sh` (un caso por ronda: 1, 2, 3 y una cuarta que repite el último
+elemento; `task-start` sin consultar el PR; el PR buscado por la rama; el PR
+ilegible y el alias caído, con su línea en `watch.log`; `revision.rondas`
+ignorada; `--modelo` y `DEVKIT_MODELO_FORZADO` por encima de la ronda; y
+`ronda=` en la línea de resumen), y que el `claude -p` recibe `DEVKIT_SCRIPTS_DIR` y
 `DEVKIT_RUN_DIR` del lanzador aunque el entorno no los traiga o traiga la
 copia de la imagen. De la lista `frontera` prueba la resolución normal, la caída
 al siguiente modelo cuando el primero no responde, que la caída queda en
@@ -412,9 +467,12 @@ estados, incluido `en curso` dos segundos después de "lanzando" sin proceso.
 
 `watch-test.sh` cubre la quinta alarma con el hook `--fix <num> <Clave>
 <url> <head> <ref>`, que corre el caso `fix` completo contra un `gh` y un
-`claude` de mentira: dos respuestas vacías relanzan con `sonnet` tras `opus`
-y bloquean; una segunda respuesta que corrige no bloquea; y un "informe
-desactualizado" con el head ya cambiado no alarma.
+`claude` de mentira: dos respuestas vacías relanzan con `fable` tras `sonnet`
+(la ronda 1 de la escalera) y bloquean; una segunda respuesta que corrige no
+bloquea; y un "informe desactualizado" con el head ya cambiado no alarma. Con
+el mismo hook, un PR con dos `devkit-fix` escala a la tercera ronda: el
+`task-fix` corre con `opus` y esfuerzo `high`, y `watch.log` dice `ronda=3`
+(DEVKIT-61).
 
 Las cuatro primeras alarmas del monitoreo mínimo tienen un caso cada una: el doble de
 `claude` de `--run-skill` cubre el error genérico (sin relación con la
@@ -428,8 +486,8 @@ proceso que arma `devkit-run.sh --worker`, sin lanzar un `claude -p` real.
 
 El ciclo OK → documentar → merge → cerrar (DEVKIT-55) se prueba de punta a
 punta: `--decide` pasa de `documentar` a `nada` cuando aparece el marcador
-`devkit-doc` del head; `--run-skill` corre `task-document` con el segundo
-modelo de la frontera; y el hook `--merged-once` corre una pasada del bucle
+`devkit-doc` del head; `--run-skill` corre `task-document` con la ronda 1 de
+la escalera (`sonnet`, esfuerzo `high`); y el hook `--merged-once` corre una pasada del bucle
 de mergeados contra un `gh` de mentira, con `task-close.sh` real y un doble
 de `notion.sh`. Comprueba la card en `Hecha` con `Cierre` y `PR`, el
 comentario con el enlace, el marcador `devkit-closed`, la siguiente hija
