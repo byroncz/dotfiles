@@ -195,6 +195,11 @@ devkit-run sonda de modelo: fable no responde en 30s; cae al siguiente de la lis
 devkit-run sonda de modelo: opus responde
 ```
 
+"No responde en Ns" es solo el timeout. Si la CLI falla por otra causa
+(alias desconocido, cuota, red), la línea dice `falló (rc=N): <primera línea
+de stderr>`, y el stderr completo queda en `/run/devkit/frontera/<alias>.err`
+para diagnosticar sin repetir la sonda.
+
 Esa sonda corre aislada a propósito: desde un directorio vacío, con
 `--strict-mcp-config --mcp-config '{"mcpServers":{}}'` y sin herramientas. Sin
 ese aislamiento no es una sonda, porque hereda todo el contexto de

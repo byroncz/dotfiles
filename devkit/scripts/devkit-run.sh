@@ -149,19 +149,24 @@ modelo_disponible() {  # modelo_disponible <alias>
     edad=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
     [ "$edad" -ge "$MODEL_RETRY" ] || return 1
   fi
-  local resultado=no vacio
+  local resultado=no vacio rc err
   vacio=$(mktemp -d)
+  # El stderr de la sonda queda junto a la caché para diagnosticar un fallo
+  # sin repetir la llamada. Si el directorio no se puede escribir, se descarta:
+  # la sonda no debe fallar por no poder guardar su diagnóstico.
+  err="$FRONTERA_CACHE_DIR/$modelo_id.err"
+  [ -w "$FRONTERA_CACHE_DIR" ] || err=/dev/null
   # `</dev/null` no es decorativo: `claude -p` lee stdin, y esta función se
   # llama desde el bucle de `resolver_modelo`. Sin esto, la primera sonda se
   # comía el resto de la lista de modelos y la resolución terminaba en el
   # último recurso en vez de en el siguiente modelo (DEVKIT-54).
-  if (cd "$vacio" && timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" \
-        --model "$modelo_id" --output-format json \
-        --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
-        --disallowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
-        </dev/null >/dev/null 2>&1); then
-    resultado=si
-  fi
+  (cd "$vacio" && timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" \
+      --model "$modelo_id" --output-format json \
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+      --disallowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
+      </dev/null >/dev/null 2>"$err")
+  rc=$?
+  [ "$rc" -eq 0 ] && resultado=si
   rm -rf "$vacio"
   printf '%s' "$resultado" > "$cache" 2>/dev/null
   # Solo se registra la sonda que de verdad corrió, no las lecturas de caché:
@@ -170,9 +175,18 @@ modelo_disponible() {  # modelo_disponible <alias>
   if [ "$resultado" = "si" ]; then
     printf '%s devkit-run sonda de modelo: %s responde\n' \
       "$(date -u +%FT%TZ)" "$modelo_id" >> "$WATCH_LOG" 2>/dev/null
-  else
+  elif [ "$rc" -eq 124 ]; then
+    # 124 es el código de `timeout`: el modelo no contestó a tiempo.
     printf '%s devkit-run sonda de modelo: %s no responde en %ss; cae al siguiente de la lista\n' \
       "$(date -u +%FT%TZ)" "$modelo_id" "$MODEL_CHECK_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+  else
+    # Cualquier otro código es un error de la CLI (alias desconocido, cuota,
+    # red), casi siempre inmediato: decir "no responde en 30s" lo confundía
+    # con un timeout (DEVKIT-54, H2 de pr-review).
+    local detalle
+    detalle=$(grep -m1 -v '^[[:space:]]*$' "$err" 2>/dev/null | cut -c1-160)
+    printf '%s devkit-run sonda de modelo: %s falló (rc=%s): %s; cae al siguiente de la lista\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" "$rc" "${detalle:-sin detalle en stderr}" >> "$WATCH_LOG" 2>/dev/null
   fi
   [ "$resultado" = "si" ]
 }
@@ -491,9 +505,23 @@ FIN
   CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" \
     FRONTERA_CACHE_DIR="$tmp/frontera-log" WATCH_LOG="$tmp/sonda-watch.log" \
     resolver_modelo 1 >/dev/null
+  # Un error inmediato de la CLI se registra como fallo con su stderr, no como
+  # timeout, y el stderr queda junto a la caché.
   check "la caída al siguiente modelo queda registrada en watch.log" \
-    'sonda de modelo: modelo-inexistente no responde' \
-    "$(grep -oE 'sonda de modelo: modelo-inexistente no responde' "$tmp/sonda-watch.log" | head -1)"
+    'sonda de modelo: modelo-inexistente falló (rc=1): error: modelo desconocido' \
+    "$(grep -oE 'sonda de modelo: modelo-inexistente falló \(rc=1\): error: modelo desconocido' "$tmp/sonda-watch.log" | head -1)"
+  check "el stderr de la sonda queda en <alias>.err" "error: modelo desconocido" \
+    "$(cat "$tmp/frontera-log/modelo-inexistente.err" 2>/dev/null)"
+  # Solo el rc 124 de `timeout` se registra como "no responde en Ns".
+  local lento
+  lento="$tmp/claude-lento"
+  printf '#!/usr/bin/env bash\nsleep 5\n' >"$lento"
+  chmod +x "$lento"
+  CLAUDE_BIN="$lento" FRONTERA_CACHE_DIR="$tmp/frontera-lento" WATCH_LOG="$tmp/sonda-watch.log" \
+    MODEL_CHECK_TIMEOUT=1 modelo_disponible modelo-lento
+  check "un timeout de la sonda se registra como no responde" \
+    'sonda de modelo: modelo-lento no responde en 1s' \
+    "$(grep -oE 'sonda de modelo: modelo-lento no responde en 1s' "$tmp/sonda-watch.log" | head -1)"
   check "el modelo que sí responde también deja su línea" \
     'sonda de modelo: modelo-bueno responde' \
     "$(grep -oE 'sonda de modelo: modelo-bueno responde' "$tmp/sonda-watch.log" | head -1)"

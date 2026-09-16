@@ -28,7 +28,9 @@ versión que usa un proyecto y la destino.
   (`DEVKIT_MODEL_RETRY`): la sonda no distingue un modelo inexistente de una
   cuota agotada, y la cuota vuelve. Si el modelo que le toca a un rol no
   responde, `devkit-run` cae al siguiente de la lista y lo escribe en
-  `watch.log` (`sonda de modelo: <alias> no responde ...`).
+  `watch.log`: `sonda de modelo: <alias> no responde en Ns` si fue timeout,
+  `falló (rc=N): <stderr>` si la CLI dio error. El stderr queda en
+  `/run/devkit/frontera/<alias>.err`.
 - La sonda corre aislada: directorio vacío, `--strict-mcp-config` con una
   configuración MCP vacía y sin herramientas. Sin aislarla hereda el contexto
   de `/workspace` y deja de ser mínima: medido con `fable`, 41 s y USD 0.95
