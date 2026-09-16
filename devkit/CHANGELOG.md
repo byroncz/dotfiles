@@ -10,6 +10,35 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Escalera de modelos por ronda: la implementación escala y el revisor no (DEVKIT-61)
+
+- `roles.toml` admite `implementacion.rondas`, una lista de
+  `<alias>:<esfuerzo>` cuya posición es la ronda. El template trae
+  `["sonnet:high", "sonnet:high", "opus:high"]`.
+- Ronda: 1 para `task-start` y `task-submit`; para `task-fix` y
+  `task-document`, 1 más los comentarios `<!-- devkit-fix` del PR de la card.
+  Pasada la lista, repite el último. `devkit-run` la lee del PR (URL en
+  Notion o `gh pr list --head <rama>`) y, si no puede, usa la 1 y lo dice en
+  `watch.log`.
+- El alias de la ronda pasa por la sonda de `frontera`; si no responde,
+  manda `model_index`. `--modelo`, `--esfuerzo` y `DEVKIT_MODELO_FORZADO`
+  siguen por encima. `revision.rondas` se ignora con aviso: `pr-review` y
+  `epic-plan` no cambian.
+- La línea de resumen de `watch.log` lleva `ronda=<n>` después de
+  `esfuerzo=` (`ronda=-` en revisión). `devkit-run --rol` imprime un cuarto
+  campo, la ronda, y `--resumen` acepta un quinto argumento.
+- Por qué es un experimento: en la implementación, un error se ve (el PR
+  vuelve con `CAMBIOS`) y cuesta como mucho un ciclo más; en la revisión, un
+  OK falso no lo detecta nadie. La evidencia en contra de empezar barato
+  existe (DEVKIT-51 en Sonnet necesitó tres ciclos, entrada de DEVKIT-54), así
+  que la escalera se mide en las hijas de DEVKIT-43 con las marcas de
+  DEVKIT-58 antes de fijar el valor por defecto.
+- Cambios requeridos: ninguno. Para volver al modelo fijo por rol, quita
+  `implementacion.rondas` en `.devkit/roles.toml` o en el template. Un
+  `watch.sh` anterior, vivo hasta el próximo `devkit recreate`, sigue
+  lanzando, pero su resumen sale con `ronda=-` y sin el aviso de presupuesto
+  de turnos (lee `--rol` con tres campos). `devkit recreate` lo corrige.
+
 ### Modelo y esfuerzo visibles en el PR, la revisión, la Documentación y el cierre (DEVKIT-58)
 
 - `devkit-run` exporta `DEVKIT_MODEL` y `DEVKIT_EFFORT` al `claude -p` que
