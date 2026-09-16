@@ -10,6 +10,51 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Modelos por frontera: `roles.toml` declara una lista ordenada (DEVKIT-54)
+
+- `devkit/agents/roles.toml` cambia de fijar un modelo por nombre en cada rol
+  a declarar una lista `frontera` ordenada de alias (hoy `fable, opus,
+  sonnet`) y un `model_index` por rol: la posición desde la que
+  `devkit-run.sh` busca el primero disponible. El `Tipo` de la card ya no
+  elige modelo (sigue eligiendo prefijo de rama y sección del CHANGELOG).
+- Reparto por papel en el flujo: `epic-plan` y `pr-review` usan el primer
+  modelo de la lista; `task-start`, `task-fix`, `task-submit` y
+  `task-document` (nace en la hija siguiente de esta Épica), el segundo;
+  `task-close` y `task-block`, el tercero. Esfuerzo `high` en todos salvo
+  `epic-plan`, que sube a `max`.
+- La disponibilidad de cada modelo se comprueba una sola vez por arranque,
+  con el resultado cacheado en `/run/devkit/frontera/<alias>` (tmpfs: se
+  repite en cada `devkit recreate`). Un `no` caduca a los 600 s
+  (`DEVKIT_MODEL_RETRY`): la sonda no distingue un modelo inexistente de una
+  cuota agotada, y la cuota vuelve. Si el modelo que le toca a un rol no
+  responde, `devkit-run` cae al siguiente de la lista y lo escribe en
+  `watch.log`: `sonda de modelo: <alias> no responde en Ns` si fue timeout,
+  `falló (rc=N): <stderr>` si la CLI dio error. El stderr queda en
+  `/run/devkit/frontera/<alias>.err`.
+- La sonda corre aislada: directorio vacío, `--strict-mcp-config` con una
+  configuración MCP vacía y sin herramientas. Sin aislarla hereda el contexto
+  de `/workspace` y deja de ser mínima: medido con `fable`, 41 s y USD 0.95
+  para responder "ok", por encima del timeout de 30 s, de modo que el primer
+  modelo de la lista quedaba marcado como caído en cada arranque. Aislada
+  tarda 2 s.
+- `devkit-run --otros-agentes` lista los procesos `claude -p` ajenos al
+  lanzamiento en curso y sale 0 si el workspace está libre. Es lo que deben
+  usar las skills en vez de un `pgrep -f <Clave>`: la Clave viaja en los
+  argumentos del lanzador, así que un `pgrep` devuelve los cuatro procesos
+  propios (el `--worker`, su subshell, su vigilante y el `claude -p` propio)
+  como si fueran de otro agente. `task-start/SKILL.md` lo deja escrito.
+- `epic-plan/SKILL.md` y `task-close/SKILL.md` lanzan la siguiente/primera
+  hija por la ruta explícita del script
+  (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el
+  alias `devkit-run`: el alias solo existe en `zshrc` y el Bash no
+  interactivo de `claude -p` no lo carga, así que las dos skills se quedaban
+  sin arrancar la hija siguiente. `task-fix/SKILL.md` trae ahora el `jq`
+  explícito sobre `reviews` para hallar el marcador `devkit-review`, y aclara
+  que el ejemplo sobre `comments` sirve solo para el marcador `devkit-fix`.
+- Cambios requeridos: ninguno. `--modelo`/`--esfuerzo` de `devkit-run` siguen
+  anulando la resolución en un lanzamiento puntual, y `.devkit/roles.toml`
+  sigue anulando la tabla completa por proyecto con el mismo formato nuevo.
+
 ### Raíz limpia: `devkit.toml` se muda a `.devkit/` (DEVKIT-53)
 
 - `devkit.toml` deja la raíz del proyecto y pasa a `.devkit/devkit.toml`,

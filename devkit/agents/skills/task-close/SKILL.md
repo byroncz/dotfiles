@@ -100,15 +100,18 @@ Argumento: Clave. Opcional: URL del PR.
      sus hijas terminaron pero le falta `En progreso` o Criterios de
      aceptación para cerrarse, y termina. Cerrar sin este chequeo dejó
      DEVKIT-19 en `Hecha` con todo su contenido sin ejecutar.
-   - Si quedan hijas: lanza la siguiente con `devkit-run task-start <Clave>`
-     como proceso aparte y termina aquí. No la trabajes en esta misma
-     ejecución: correría con el rol de contabilidad de `task-close` (modelo
-     barato, esfuerzo bajo) en vez del rol `implementación` que le toca por
-     el `Tipo` de esa card, que es lo que resuelve `devkit-run` (DEVKIT-50).
-     `devkit-run` no es bloqueante: vuelve enseguida y el lanzamiento sigue
-     en segundo plano aunque esta ejecución termine y suelte `skill.lock`,
-     candado que el lanzamiento espera si todavía lo tienes tomado. Si no
-     hay libres por dependencias, comenta en la Épica qué falta.
+   - Si quedan hijas: lanza la siguiente como proceso aparte y termina aquí:
+     `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start
+     <Clave>`. Por ruta, no por el alias `devkit-run`: el alias solo existe
+     en `zshrc`, y esta skill corre en el Bash no interactivo de `claude -p`,
+     que no lo carga (DEVKIT-54). No la trabajes en esta misma ejecución:
+     correría con el rol de contabilidad de `task-close` (tercer modelo de la
+     lista, esfuerzo alto) en vez del rol `implementación` que le toca, que es lo
+     que resuelve `devkit-run` (DEVKIT-50). El script no es bloqueante:
+     vuelve enseguida y el lanzamiento sigue en segundo plano aunque esta
+     ejecución termine y suelte `skill.lock`, candado que el lanzamiento
+     espera si todavía lo tienes tomado. Si no hay libres por dependencias,
+     comenta en la Épica qué falta.
 
 ## Modo headless
 

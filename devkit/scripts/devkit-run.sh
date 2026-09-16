@@ -15,7 +15,7 @@
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
-#   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]
+#   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]
 #     La línea de resumen en watch.log marca "(anulación manual)".
 #
 # Modos que usa `watch.sh` (no para uso manual):
@@ -23,9 +23,17 @@
 #   devkit-run --sync "<prompt>"                    corre en primer plano, JSON por stdout
 #   devkit-run --resumen <log> <modelo> <esfuerzo> <presupuesto>
 #                                                    imprime la línea de costo/tokens/turnos
+#   devkit-run --otros-agentes                      lista los `claude -p` ajenos
+#                                                    sobre este workspace; sale 0
+#                                                    si está libre, 1 si no
 #   devkit-run --test                               autoprueba
 #
 # La tabla rol -> modelo/esfuerzo/turnos vive en devkit/agents/roles.toml.
+# Desde DEVKIT-54, el modelo no se elige por Tipo de la card sino por el papel
+# de la skill en el flujo: `roles.toml` declara una lista `frontera` ordenada
+# de alias de modelo y cada rol un `model_index` (posición 1-based desde la
+# que empieza a buscar). El Tipo sigue eligiendo prefijo de rama y sección
+# del CHANGELOG, pero ya no modelo.
 # Los permisos (qué puede correr una skill sin pedir permiso) siguen en
 # `devkit/agents/settings.json`: este script no los toca ni los reemplaza.
 # `docs/ARCHITECTURE.md` 8.2 documenta que la lista `allow` de ese archivo no
@@ -60,6 +68,18 @@ if [ -z "$ROLES_FILE" ]; then
   fi
 fi
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
+# Cache de disponibilidad de modelo, una vez por arranque: /run/devkit es
+# tmpfs y nace vacío en cada `devkit recreate`, igual que /run/devkit/launched
+# (DEVKIT-24), así que el resultado no sobrevive a un rebuild y se vuelve a
+# comprobar entonces.
+FRONTERA_CACHE_DIR="${DEVKIT_FRONTERA_CACHE_DIR:-$RUN_DIR/frontera}"
+MODEL_CHECK_TIMEOUT="${DEVKIT_MODEL_CHECK_TIMEOUT:-30}"
+# Segundos que vale un `no` en la caché antes de volver a sondear. Un `si` vale
+# todo el arranque; un `no` no, porque la sonda no distingue un modelo que no
+# existe de una cuota agotada o un corte de red, y la cuota vuelve (DEVKIT-27).
+# Cachear el `no` para siempre dejaba `fable` y `opus` fuera hasta el próximo
+# `devkit recreate` (DEVKIT-54, H1 de pr-review).
+MODEL_RETRY="${DEVKIT_MODEL_RETRY:-600}"
 # Mismo candado que `run_skill` en watch.sh: un solo `claude -p` a la vez
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
@@ -70,22 +90,34 @@ LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
 SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 
-# Última coincidencia de "<rol>.<campo> = valor" en roles.toml, sin comillas.
-# roles.toml usa claves punteadas (TOML válido) a propósito: este grep no
-# necesita entender tablas ni tipos, solo esa forma fija.
-role_field() {  # role_field <rol> <campo>
+# Última coincidencia de "<clave>.<campo> = valor" en roles.toml, sin
+# comillas. La clave puede ser un rol (`revision`, `implementacion`,
+# `contabilidad`) o el nombre de una skill puntual (`epic-plan`), para
+# anular un campo del rol sin crear un rol nuevo. roles.toml usa claves
+# punteadas (TOML válido) a propósito: este grep no necesita entender tablas
+# ni tipos, solo esa forma fija.
+role_field() {  # role_field <clave> <campo>
   grep -E "^${1}\.${2}[[:space:]]*=" "$ROLES_FILE" 2>/dev/null | tail -1 \
+    | sed -E 's/[[:space:]]*#.*$//' \
     | sed -E 's/^[^=]+=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/'
 }
 
+# Lista `frontera = ["a", "b", "c"]` de roles.toml, un alias de modelo por
+# línea de salida, en el orden declarado. Es un array, no un escalar, así que
+# no usa role_field.
+frontera_list() {
+  grep -E '^frontera[[:space:]]*=' "$ROLES_FILE" 2>/dev/null | tail -1 \
+    | sed -E 's/[[:space:]]*#.*$//' \
+    | sed -E 's/^frontera[[:space:]]*=[[:space:]]*\[(.*)\][[:space:]]*$/\1/' \
+    | tr ',' '\n' | sed -E 's/^[[:space:]"]+//; s/[[:space:]"]+$//'
+}
+
 # Rol de una skill a partir del primer token del prompt ("/pr-review 31" ->
-# "pr-review"). Grupos del criterio de aceptación de DEVKIT-45: contabilidad
-# (task-close, task-block: solo comentan o cierran, no escriben código),
-# revision (pr-review, siempre el modelo fuerte) e implementacion (el resto).
-# epic-plan entra en revision desde DEVKIT-50: un mal desglose de Épica cuesta
-# más que cualquier card individual, así que se queda con el modelo fuerte y
-# esfuerzo alto en vez del que le tocaría por Tipo (que además no tiene,
-# porque una Épica no es feature/bug/chore).
+# "pr-review"). Grupos del criterio de aceptación de DEVKIT-45/DEVKIT-54:
+# contabilidad (task-close, task-block: solo comentan o cierran, no escriben
+# código), revisión (pr-review, epic-plan: un mal desglose o una revisión
+# floja cuestan más que cualquier card) e implementación (el resto:
+# task-start, task-fix, task-submit, task-document).
 role_of() {  # role_of <prompt>
   local skill
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
@@ -96,31 +128,113 @@ role_of() {  # role_of <prompt>
   esac
 }
 
-# Tipo de la card (feature/bug/chore) para el rol implementación. watch.sh no
-# consulta Notion desde bash (ver la nota de `work_state` ahí), así que se
-# deriva del prefijo de la rama actual: feat/, fix/ o chore/, el mismo que
-# usa `task-start` para nombrarla (AGENTS.md). Sin rama de card todavía (por
-# ejemplo, `task-start` antes de crear la suya, que corre en `main`), no hay
-# forma de saberlo sin tocar Notion: usa "feature" como término medio
-# razonado, más caro que chore pero lejos del modelo de revisión, en vez de
-# bloquear el lanzamiento por un dato que no existe todavía.
-tipo_of() {
-  local branch
-  branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  case "$branch" in
-    feat/*) printf 'feature' ;;
-    fix/*) printf 'bug' ;;
-    chore/*) printf 'chore' ;;
-    *) printf 'feature' ;;
-  esac
+# Si el modelo <alias> responde, con el resultado cacheado en
+# FRONTERA_CACHE_DIR para no repetir la llamada en cada lanzamiento (DEVKIT-54:
+# "una llamada mínima por modelo", "una vez por arranque"). Devuelve
+# verdadero/falso por código de salida.
+#
+# "Mínima" hay que forzarlo: una sonda lanzada tal cual desde /workspace hereda
+# todo el contexto del proyecto (AGENTS.md, las skills, los servidores MCP) y
+# deja de ser una sonda. Medido en DEVKIT-54 con `fable`: 41 s y USD 0.95 para
+# responder "ok", con 243k tokens de caché leídos. Como el timeout por defecto
+# son 30 s, el primer modelo de la lista se marcaba caído en cada arranque y
+# todo el flujo caía al segundo sin que nada lo avisara. Aislada —desde un
+# directorio vacío, sin MCP y sin herramientas— la misma sonda tarda 2 s y
+# cuesta centavos, que es lo que se quería.
+modelo_disponible() {  # modelo_disponible <alias>
+  local modelo_id=$1 cache
+  cache="$FRONTERA_CACHE_DIR/$modelo_id"
+  mkdir -p "$FRONTERA_CACHE_DIR" 2>/dev/null
+  if [ -f "$cache" ]; then
+    [ "$(cat "$cache" 2>/dev/null)" = "si" ] && return 0
+    local edad
+    edad=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    [ "$edad" -ge "$MODEL_RETRY" ] || return 1
+  fi
+  local resultado=no vacio rc err
+  vacio=$(mktemp -d)
+  # El stderr de la sonda queda junto a la caché para diagnosticar un fallo
+  # sin repetir la llamada. Si el directorio no se puede escribir, se descarta:
+  # la sonda no debe fallar por no poder guardar su diagnóstico.
+  err="$FRONTERA_CACHE_DIR/$modelo_id.err"
+  [ -w "$FRONTERA_CACHE_DIR" ] || err=/dev/null
+  # `</dev/null` no es decorativo: `claude -p` lee stdin, y esta función se
+  # llama desde el bucle de `resolver_modelo`. Sin esto, la primera sonda se
+  # comía el resto de la lista de modelos y la resolución terminaba en el
+  # último recurso en vez de en el siguiente modelo (DEVKIT-54).
+  (cd "$vacio" && timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" \
+      --model "$modelo_id" --output-format json \
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+      --disallowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
+      </dev/null >/dev/null 2>"$err")
+  rc=$?
+  [ "$rc" -eq 0 ] && resultado=si
+  rm -rf "$vacio"
+  printf '%s' "$resultado" > "$cache" 2>/dev/null
+  # Solo se registra la sonda que de verdad corrió, no las lecturas de caché:
+  # así queda una línea por modelo y por arranque, y la caída al siguiente es
+  # visible en watch.log sin tener que reproducirla (DEVKIT-54).
+  if [ "$resultado" = "si" ]; then
+    printf '%s devkit-run sonda de modelo: %s responde\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" >> "$WATCH_LOG" 2>/dev/null
+  elif [ "$rc" -eq 124 ]; then
+    # 124 es el código de `timeout`: el modelo no contestó a tiempo.
+    printf '%s devkit-run sonda de modelo: %s no responde en %ss; cae al siguiente de la lista\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" "$MODEL_CHECK_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+  else
+    # Cualquier otro código es un error de la CLI (alias desconocido, cuota,
+    # red), casi siempre inmediato: decir "no responde en 30s" lo confundía
+    # con un timeout (DEVKIT-54, H2 de pr-review).
+    local detalle
+    detalle=$(grep -m1 -v '^[[:space:]]*$' "$err" 2>/dev/null | cut -c1-160)
+    printf '%s devkit-run sonda de modelo: %s falló (rc=%s): %s; cae al siguiente de la lista\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" "$rc" "${detalle:-sin detalle en stderr}" >> "$WATCH_LOG" 2>/dev/null
+  fi
+  [ "$resultado" = "si" ]
 }
 
-# "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt.
+# Primer modelo disponible de `frontera`, buscando desde la posición
+# <indice_inicial> (1-based) hacia el final de la lista. Si ninguno responde,
+# devuelve el último de la lista completa como último recurso: lanzar con el
+# modelo más débil vale más que no lanzar nada.
+#
+# La lista se carga entera en un array antes de sondear nada. Recorrerla con
+# `while read` desde un heredoc parecía equivalente y no lo es: la sonda es un
+# proceso que también lee stdin, así que se llevaba por delante los modelos que
+# faltaban por probar.
+resolver_modelo() {  # resolver_modelo <indice_inicial>
+  local idx=${1:-1} modelo i=0
+  local -a modelos=()
+  while IFS= read -r modelo; do
+    [ -n "$modelo" ] && modelos+=("$modelo")
+  done < <(frontera_list)
+  [ "${#modelos[@]}" -gt 0 ] || return 1
+  [ -n "$idx" ] || idx=1
+  for modelo in "${modelos[@]}"; do
+    i=$((i + 1))
+    [ "$i" -ge "$idx" ] || continue
+    if modelo_disponible "$modelo"; then
+      printf '%s' "$modelo"
+      return 0
+    fi
+  done
+  printf '%s' "${modelos[$(( ${#modelos[@]} - 1 ))]}"
+}
+
+# "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt. El esfuerzo
+# admite una anulación por skill (por ejemplo `epic-plan.effort`) por encima
+# del que trae su rol; el modelo sale siempre de `resolver_modelo` con el
+# `model_index` del rol.
 model_effort_of() {  # model_effort_of <prompt>
-  local role
+  local role skill idx modelo esfuerzo turnos
+  skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   role=$(role_of "$1")
-  [ "$role" = "implementacion" ] && role="implementacion.$(tipo_of)"
-  printf '%s %s %s' "$(role_field "$role" model)" "$(role_field "$role" effort)" "$(role_field "$role" max_turns)"
+  idx=$(role_field "$role" model_index)
+  modelo=$(resolver_modelo "$idx")
+  esfuerzo=$(role_field "$skill" effort)
+  [ -n "$esfuerzo" ] || esfuerzo=$(role_field "$role" effort)
+  turnos=$(role_field "$role" max_turns)
+  printf '%s %s %s' "$modelo" "$esfuerzo" "$turnos"
 }
 
 # Ejecuta la skill en primer plano; deja el JSON de `claude -p` en stdout.
@@ -181,6 +295,56 @@ forzar_task_block() {  # forzar_task_block <prompt> <logf>
   "$HERE/devkit-run.sh" task-block "$clave" "$motivo" >/dev/null 2>&1
 }
 
+# Procesos `claude -p` ajenos que ya están trabajando sobre este workspace.
+#
+# Existe por la Ampliación 2 de DEVKIT-54. Una skill que comprueba si hay otro
+# agente corriendo con un `pgrep -f "<Clave>"` a secas se encuentra a sí misma
+# cuatro veces: la Clave viaja en el argumento del lanzador, así que coinciden
+# el `devkit-run.sh --worker`, el subshell que corre la skill, su vigilante y
+# el propio `claude -p`. task-start leyó esos cuatro como "hay un segundo
+# proceso sobre /workspace" y bloqueó la card sin motivo.
+#
+# La regla: descartar la ascendencia propia (que cubre el `claude -p` de uno
+# mismo y su lanzador), descartar cualquier `devkit-run.sh` (lanzador y
+# vigilante, que no son agentes) y quedarse solo con procesos `claude -p`.
+
+# Cadena de PIDs desde el proceso actual hasta la raíz. La skill llama a este
+# script desde su herramienta Bash, así que su propio `claude -p` es un
+# ancestro, no el PID actual: filtrar solo por `$$` no alcanza.
+ancestros_propios() {
+  local pid=$$ padre
+  while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ]; do
+    printf '%s ' "$pid"
+    padre=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ "$padre" != "$pid" ] || break
+    pid=$padre
+  done
+}
+
+# Filtrado puro, separado de la consulta a `ps` para poder probarlo con una
+# tabla fija en la autoprueba. Lee "<pid> <args>" por línea en stdin.
+filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
+  local propios=" $1 " pid args
+  while read -r pid args; do
+    [ -n "$pid" ] || continue
+    case "$propios" in *" $pid "*) continue ;; esac
+    case "$args" in *devkit-run.sh*) continue ;; esac
+    case "$args" in
+      *claude*" -p "*|*claude*" -p") printf '%s %s\n' "$pid" "$args" ;;
+    esac
+  done
+}
+
+# Imprime un proceso ajeno por línea. Sale 0 si el workspace está libre y 1 si
+# lo ocupa otro agente, para usarlo directo en un `if`.
+otros_agentes() {
+  local encontrados
+  encontrados=$(ps -eo pid=,args= 2>/dev/null | filtrar_agentes "$(ancestros_propios)")
+  [ -z "$encontrados" ] && return 0
+  printf '%s\n' "$encontrados"
+  return 1
+}
+
 run_tests() {
   local fail=0 tmp
   check() {
@@ -199,50 +363,35 @@ run_tests() {
   check "rol de task-block" contabilidad "$(role_of '/task-block DEVKIT-44 razón')"
   check "rol de task-start" implementacion "$(role_of '/task-start')"
   check "rol de task-fix" implementacion "$(role_of '/task-fix DEVKIT-44')"
+  check "rol de task-submit" implementacion "$(role_of '/task-submit DEVKIT-44')"
+  check "rol de task-document" implementacion "$(role_of '/task-document DEVKIT-44')"
+
+  # Comprobación de concurrencia (DEVKIT-54, Ampliación 2). La tabla imita lo
+  # que devolvió `ps` el 2026-09-16: tres procesos propios del lanzador más el
+  # `claude -p` propio, que es de donde salió el falso positivo. Solo el
+  # `claude -p` ajeno debe aparecer.
+  local tabla propios
+  propios="37786 37792 37794"
+  tabla='37786 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37792 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37793 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37794 claude -p /task-start DEVKIT-54 --model opus --effort high --output-format json
+40001 claude -p /pr-review 38 --model fable --effort high --output-format json'
+  check "concurrencia: solo cuenta el claude -p ajeno" \
+    "40001 claude -p /pr-review 38 --model fable --effort high --output-format json" \
+    "$(printf '%s\n' "$tabla" | filtrar_agentes "$propios")"
+  # El vigilante (37793) no está en la lista de propios y aun así se descarta,
+  # porque sus argumentos son los de devkit-run.sh: sin esa regla, un
+  # lanzamiento se vería a sí mismo como agente ajeno.
+  check "concurrencia: sin ajenos, el workspace está libre" "" \
+    "$(printf '%s\n' "$tabla" | grep -v '^40001 ' | filtrar_agentes "$propios")"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
-  ROLES_FILE="$tmp/roles.toml" cat >"$tmp/roles.toml" <<'FIN'
-contabilidad.model = "modelo-barato"
-contabilidad.effort = "low"
-contabilidad.max_turns = 15
-implementacion.feature.model = "modelo-fuerte"
-implementacion.feature.effort = "medium"
-implementacion.feature.max_turns = 40
-implementacion.chore.model = "modelo-barato"
-implementacion.chore.effort = "medium"
-implementacion.chore.max_turns = 25
-revision.model = "modelo-revision"
-revision.effort = "high"
-revision.max_turns = 50
-FIN
-  check "campo de contabilidad" "modelo-barato" \
-    "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model)"
-  check "campo de revisión" "modelo-revision" "$(ROLES_FILE="$tmp/roles.toml" role_field revision model)"
 
-  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
-  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
-  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
-  mkdir -p "$tmp/nested/scripts"
-  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
-  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-revision high 50" \
-    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
-
-  git -C "$tmp" init -q
-  git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
-  git -C "$tmp" checkout -q -b feat/DEVKIT-1-algo
-  check "tipo desde rama feat/" feature "$(WS="$tmp" tipo_of)"
-  git -C "$tmp" checkout -q -b chore/DEVKIT-2-algo
-  check "tipo desde rama chore/" chore "$(WS="$tmp" tipo_of)"
-
-  check "modelo/esfuerzo de pr-review" "modelo-revision high 50" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/pr-review 9')"
-  check "modelo/esfuerzo de task-close" "modelo-barato low 15" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/task-close DEVKIT-2 url')"
-  check "modelo/esfuerzo de implementación en rama chore/" "modelo-barato medium 25" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/task-fix DEVKIT-2')"
-
-  # --worker de punta a punta, con un doble de `claude` que no gasta cuota.
+  # Un doble de `claude` que no gasta cuota: responde bien a cualquier
+  # `--model`, así sirve tanto para las comprobaciones de disponibilidad como
+  # para los lanzamientos de punta a punta de más abajo.
   local doble
   doble="$tmp/claude"
   cat >"$doble" <<'FIN'
@@ -250,9 +399,178 @@ FIN
 printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
 FIN
   chmod +x "$doble"
+
+  cat >"$tmp/roles.toml" <<'FIN'
+frontera = ["modelo-barato", "modelo-medio", "modelo-fuerte"]
+contabilidad.model_index = 1
+contabilidad.effort = "low"
+contabilidad.max_turns = 15
+implementacion.model_index = 3
+implementacion.effort = "medium"
+implementacion.max_turns = 40
+revision.model_index = 3
+revision.effort = "high"
+revision.max_turns = 50
+epic-plan.effort = "max"
+FIN
+
+  check "campo model_index de contabilidad" "1" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model_index)"
+  check "campo model_index de revisión" "3" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field revision model_index)"
+  check "anulación de esfuerzo por skill (epic-plan)" "max" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field epic-plan effort)"
+  check "lista de frontera, una por línea" "modelo-barato
+modelo-medio
+modelo-fuerte" "$(ROLES_FILE="$tmp/roles.toml" frontera_list)"
+  # Un comentario al final de la línea es TOML válido y `.devkit/roles.toml`
+  # se edita a mano: no puede colarse en el valor (DEVKIT-54, H3).
+  cat >"$tmp/roles-comentarios.toml" <<'FIN'
+frontera = ["a", "b"]  # del más fuerte al más barato
+revision.model_index = 1 # primero de la lista
+revision.effort = "high"  # "max" solo en epic-plan
+FIN
+  check "frontera_list ignora un comentario en línea" "a
+b" "$(ROLES_FILE="$tmp/roles-comentarios.toml" frontera_list)"
+  check "role_field ignora un comentario en línea (número)" "1" \
+    "$(ROLES_FILE="$tmp/roles-comentarios.toml" role_field revision model_index)"
+  check "role_field ignora un comentario en línea (cadena)" "high" \
+    "$(ROLES_FILE="$tmp/roles-comentarios.toml" role_field revision effort)"
+
+  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
+  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
+  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
+  mkdir -p "$tmp/nested/scripts"
+  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
+  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-fuerte high 50" \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" \
+       DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-fallback" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" \
+       bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
+
+  # Resolución normal de la lista (DEVKIT-54): con todos los modelos
+  # disponibles, resolver_modelo devuelve el que toca por model_index, sin
+  # caer al siguiente.
+  check "resolución normal: primer modelo de la lista" "modelo-barato" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-1" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
+  check "resolución normal: tercer modelo de la lista" "modelo-fuerte" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-3" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 3)"
+
+  # Caída al siguiente modelo (DEVKIT-54): un doble que rechaza un alias
+  # puntual simula un modelo que no existe o no responde; resolver_modelo
+  # debe caer al siguiente de la lista, y quedar cacheado que el primero no
+  # sirve.
+  local caido
+  caido="$tmp/claude-caido"
+  cat >"$caido" <<'FIN'
+#!/usr/bin/env bash
+modelo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) modelo=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$modelo" = "modelo-inexistente" ]; then
+  echo "error: modelo desconocido" >&2
+  exit 1
+fi
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$caido"
+  # Tres modelos a propósito, no dos: con dos, "el siguiente de la lista" y
+  # "el último recurso" son el mismo valor y la prueba pasa aunque la
+  # resolución esté rota. Así se escapó que la sonda se comía el stdin del
+  # bucle y cortaba la lista tras el primer modelo (DEVKIT-54).
+  cat >"$tmp/roles-caida.toml" <<'FIN'
+frontera = ["modelo-inexistente", "modelo-bueno", "modelo-ultimo"]
+implementacion.model_index = 1
+implementacion.effort = "high"
+implementacion.max_turns = 10
+FIN
+  check "caída al siguiente modelo cuando el primero no responde" "modelo-bueno" \
+    "$(CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-caida" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
+  check "el modelo caído queda cacheado como no disponible" "no" \
+    "$(cat "$tmp/frontera-caida/modelo-inexistente" 2>/dev/null)"
+  check "el modelo elegido tras la caída queda cacheado como disponible" "si" \
+    "$(cat "$tmp/frontera-caida/modelo-bueno" 2>/dev/null)"
+  # Una sonda que lee stdin no debe truncar la lista: con un doble que se
+  # come la entrada, la resolución tiene que seguir llegando al segundo
+  # modelo y no saltar al último.
+  local traga
+  traga="$tmp/claude-traga"
+  cat >"$traga" <<'FIN'
+#!/usr/bin/env bash
+modelo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) modelo=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat >/dev/null            # se come todo el stdin, como hace claude -p
+[ "$modelo" != "modelo-inexistente" ] || exit 1
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$traga"
+  check "una sonda que lee stdin no trunca la lista de frontera" "modelo-bueno" \
+    "$(CLAUDE_BIN="$traga" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-traga" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
+  # La caída tiene que quedar en watch.log: es la forma de verla sin
+  # reproducirla a mano (criterio de aceptación de DEVKIT-54).
+  : >"$tmp/sonda-watch.log"
+  CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" \
+    FRONTERA_CACHE_DIR="$tmp/frontera-log" WATCH_LOG="$tmp/sonda-watch.log" \
+    resolver_modelo 1 >/dev/null
+  # Un error inmediato de la CLI se registra como fallo con su stderr, no como
+  # timeout, y el stderr queda junto a la caché.
+  check "la caída al siguiente modelo queda registrada en watch.log" \
+    'sonda de modelo: modelo-inexistente falló (rc=1): error: modelo desconocido' \
+    "$(grep -oE 'sonda de modelo: modelo-inexistente falló \(rc=1\): error: modelo desconocido' "$tmp/sonda-watch.log" | head -1)"
+  check "el stderr de la sonda queda en <alias>.err" "error: modelo desconocido" \
+    "$(cat "$tmp/frontera-log/modelo-inexistente.err" 2>/dev/null)"
+  # Solo el rc 124 de `timeout` se registra como "no responde en Ns".
+  local lento
+  lento="$tmp/claude-lento"
+  printf '#!/usr/bin/env bash\nsleep 5\n' >"$lento"
+  chmod +x "$lento"
+  CLAUDE_BIN="$lento" FRONTERA_CACHE_DIR="$tmp/frontera-lento" WATCH_LOG="$tmp/sonda-watch.log" \
+    MODEL_CHECK_TIMEOUT=1 modelo_disponible modelo-lento
+  check "un timeout de la sonda se registra como no responde" \
+    'sonda de modelo: modelo-lento no responde en 1s' \
+    "$(grep -oE 'sonda de modelo: modelo-lento no responde en 1s' "$tmp/sonda-watch.log" | head -1)"
+  check "el modelo que sí responde también deja su línea" \
+    'sonda de modelo: modelo-bueno responde' \
+    "$(grep -oE 'sonda de modelo: modelo-bueno responde' "$tmp/sonda-watch.log" | head -1)"
+  # Una segunda resolución con la caché ya escrita no vuelve a sondear ni a
+  # registrar: "una vez por arranque".
+  : >"$tmp/sonda-watch.log"
+  CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" \
+    FRONTERA_CACHE_DIR="$tmp/frontera-log" WATCH_LOG="$tmp/sonda-watch.log" \
+    resolver_modelo 1 >/dev/null
+  check "con la caché escrita no vuelve a sondear" "0" \
+    "$(grep -c 'sonda de modelo' "$tmp/sonda-watch.log" | tr -d ' ')"
+  # Un `no` caduca: un fallo transitorio (cuota, red) no puede dejar el modelo
+  # fuera todo el arranque. Dentro del plazo se respeta sin sondear; con
+  # MODEL_RETRY=0 ya venció, la sonda vuelve a correr y el modelo queda en `si`.
+  mkdir -p "$tmp/frontera-transitorio"
+  printf 'no' >"$tmp/frontera-transitorio/modelo-bueno"
+  check "un no dentro del plazo no vuelve a sondear" "no" \
+    "$(CLAUDE_BIN="$doble" FRONTERA_CACHE_DIR="$tmp/frontera-transitorio" WATCH_LOG="$tmp/sonda-watch.log" MODEL_RETRY=600 modelo_disponible modelo-bueno; cat "$tmp/frontera-transitorio/modelo-bueno")"
+  check "un fallo transitorio no persiste tras el plazo" "si" \
+    "$(CLAUDE_BIN="$doble" FRONTERA_CACHE_DIR="$tmp/frontera-transitorio" WATCH_LOG="$tmp/sonda-watch.log" MODEL_RETRY=0 modelo_disponible modelo-bueno; cat "$tmp/frontera-transitorio/modelo-bueno")"
+
+  check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
+  check "modelo/esfuerzo de epic-plan (esfuerzo máximo por skill)" "modelo-fuerte max 50" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
+  check "modelo/esfuerzo de task-close" "modelo-barato low 15" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-close" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-close DEVKIT-2 url')"
+  check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-fuerte medium 40" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --worker de punta a punta, con el mismo doble de arriba.
   mkdir -p "$tmp/run"
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --worker '/task-close DEVKIT-2 url' "$tmp/run/task-close-1.log" \
       modelo-barato low 15 >/dev/null 2>&1
   check "worker deja el log de claude" 'listo' \
@@ -266,7 +584,7 @@ FIN
   local antes despues rc espera=0
   antes=$(date +%s%N)
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" pr-review DEVKIT-2 >/dev/null 2>&1
   rc=$?
   despues=$(date +%s%N)
@@ -297,7 +615,7 @@ FIN
   local tenedor=$!
   sleep 0.1  # deja que el subshell de arriba tome el candado primero
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --worker '/task-close DEVKIT-2 url' "$tmp/run/candado.log" \
       modelo-barato low 15 >/dev/null 2>&1
   wait "$tenedor" 2>/dev/null
@@ -315,6 +633,8 @@ FIN
   # mismo entorno de prueba, imitando lo que hace la skill al tomar la
   # siguiente hija. Debe quedar en watch.log un resumen por cada rol
   # (contabilidad para task-close, implementación para task-start).
+  git -C "$tmp" init -q
+  git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
   git -C "$tmp" checkout -q -b feat/DEVKIT-3-algo
   local cadena
   cadena="$tmp/claude-cadena"
@@ -323,7 +643,7 @@ FIN
 case "\$2" in
   */task-close*)
     DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \\
-      DEVKIT_ROLES_FILE="$tmp/roles.toml" \\
+      DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \\
       bash "$HERE/devkit-run.sh" task-start DEVKIT-3 >/dev/null 2>&1
     ;;
 esac
@@ -332,7 +652,7 @@ FIN
   chmod +x "$cadena"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-close DEVKIT-3 url >/dev/null 2>&1
   espera=0
   while [ "$(grep -cE 'devkit-run "/task-(close|start)' "$tmp/run/watch.log" 2>/dev/null)" -lt 2 ] \
@@ -346,7 +666,7 @@ FIN
   # Anulación manual: --modelo/--esfuerzo pisan el rol resuelto y la línea de
   # resumen lo marca, sin comparar contra el presupuesto de roles.toml.
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --modelo modelo-a-mano --esfuerzo high task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
   while [ ! -e "$tmp/run/task-fix-1.log" ] && [ "$espera" -lt 40 ]; do
@@ -370,7 +690,7 @@ FIN
   chmod +x "$pregunton"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$pregunton" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
   while [ "$(grep -c 'relanza task-block forzado' "$tmp/run/watch.log" 2>/dev/null)" -lt 1 ] \
@@ -380,6 +700,18 @@ FIN
   done
   check "pregunta abierta alarma y relanza task-block forzado" 'relanza task-block forzado: DEVKIT-3' \
     "$(grep -oE 'relanza task-block forzado: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+
+  # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
+  # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
+  # lanzar la siguiente hija porque sus SKILL.md invocaban el alias). La
+  # ruta explícita por `DEVKIT_SCRIPTS_DIR`, que es como las llaman ahora,
+  # debe resolver igual en ese Bash no interactivo y sin el alias cargado.
+  check "el alias devkit-run no existe en un bash -c no interactivo" '' \
+    "$(bash -c 'type devkit-run' 2>/dev/null)"
+  check "la ruta explícita por DEVKIT_SCRIPTS_DIR encuentra el script sin el alias" 'lanzado: /task-start DEVKIT-9' \
+    "$(DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+       bash -c '"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start DEVKIT-9' | head -1)"
 
   # --modelo/--esfuerzo sin valor deben salir con el mensaje de uso, no
   # colgar el proceso (DEVKIT-50, H3).
@@ -393,20 +725,21 @@ FIN
   # sobre la de ../agents y la del template fallback.
   mkdir -p "$tmp/.devkit"
   cat >"$tmp/.devkit/roles.toml" <<'FIN'
-contabilidad.model = "anulacion-proyecto"
+frontera = ["anulacion-proyecto"]
+contabilidad.model_index = 1
 contabilidad.effort = "high"
 contabilidad.max_turns = 99
-revision.model = "anulacion-proyecto"
+revision.model_index = 1
 revision.effort = "high"
 revision.max_turns = 99
-implementacion.chore.model = "anulacion-proyecto"
-implementacion.chore.effort = "high"
-implementacion.chore.max_turns = 99
+implementacion.model_index = 1
+implementacion.effort = "high"
+implementacion.max_turns = 99
 FIN
   check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
-  check "ROLES_FILE desde .devkit/roles.toml (task-close en chore)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-1" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
+  check "ROLES_FILE desde .devkit/roles.toml (task-close)" "anulacion-proyecto high 99" \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
 
   return $fail
 }
@@ -470,6 +803,10 @@ case "${1:-}" in
     fi
     exit $rc
     ;;
+  --otros-agentes)
+    otros_agentes
+    exit $?
+    ;;
   --test)
     run_tests
     exit $?
@@ -496,14 +833,14 @@ while true; do
   case "${1:-}" in
     --modelo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
       modelo_manual="$2"; shift 2 ;;
     --esfuerzo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
@@ -515,7 +852,7 @@ done
 skill="${1:-}"
 clave="${2:-}"
 if [ -z "$skill" ] || [ -z "$clave" ]; then
-  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
   echo "     devkit-run --test   corre la autoprueba" >&2
   exit 64
 fi

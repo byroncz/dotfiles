@@ -21,15 +21,24 @@ trabajo de `pr-review`.
    - **Texto recibido como argumento**: es un hallazgo único con id `C<n>`,
      donde `n` es uno más que el último `C` que hayas respondido en ese PR.
    - **Sin argumento y card en `Revisión automática`**: busca el último
-     marcador `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`
-     (el `jq` del paso 3 de `pr-review`). Si no hay marcador, o su `verdict`
-     es `OK`, responde "nada que corregir" y termina. Si su `sha` no es
-     `headRefOid`, el head ya cambió después del informe: responde
-     "informe desactualizado, esperando a pr-review" y termina. Si ya
-     existe un comentario de la cuenta máquina (`gh api user --jq .login`)
-     cuyo marcador `devkit-fix` tenga `review=` igual a ese `sha`, responde
-     "ya atendido" y termina. La búsqueda exacta, sobre `comments` del
-     paso 2:
+     marcador `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->` sobre
+     `reviews` del paso 2, el mismo `jq` del paso 3 de `pr-review`:
+
+     ```sh
+     gh pr view <N> --json reviews \
+       --jq '[.reviews[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body' \
+       | grep -o '<!-- devkit-review [^>]*-->'
+     ```
+
+     Si no hay marcador, o su `verdict` es `OK`, responde "nada que
+     corregir" y termina. Si su `sha` no es `headRefOid`, el head ya cambió
+     después del informe: responde "informe desactualizado, esperando a
+     pr-review" y termina. Si ya existe un comentario de la cuenta máquina
+     (`gh api user --jq .login`) cuyo marcador `devkit-fix` tenga `review=`
+     igual a ese `sha`, responde "ya atendido" y termina. Este otro
+     `jq`, distinto del de arriba, es solo para hallar ese marcador
+     `devkit-fix` sobre `comments` del paso 2; no sirve para el marcador
+     `devkit-review`, que vive en `reviews`:
 
      ```sh
      gh pr view <N> --json comments --jq '.comments[].body' \

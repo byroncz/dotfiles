@@ -30,11 +30,14 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
 6. Publica en la Épica un comentario con el desglose: una línea por hija con
    Clave, título y dependencias. Máximo diez líneas.
 7. Mueve la Épica a `En progreso`.
-8. Lanza la primera hija con `devkit-run task-start <Clave>` como proceso
-   aparte y termina aquí. No la trabajes en esta misma ejecución: correría
+8. Lanza la primera hija como proceso aparte y termina aquí:
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start
+   <Clave>`. Por ruta, no por el alias `devkit-run`: el alias solo existe en
+   `zshrc`, y esta skill corre en el Bash no interactivo de `claude -p`, que
+   no lo carga (DEVKIT-54). No la trabajes en esta misma ejecución: correría
    con el rol `revisión` de `epic-plan` (modelo fuerte, esfuerzo alto) en vez
-   del rol `implementación` que le toca por su `Tipo`, que es lo que resuelve
-   `devkit-run` (DEVKIT-50).
+   del rol `implementación` que le toca, que es lo que resuelve `devkit-run`
+   (DEVKIT-50).
 
 ## Reglas
 

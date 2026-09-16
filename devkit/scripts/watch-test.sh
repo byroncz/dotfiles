@@ -193,6 +193,15 @@ printf '{"result":"%s","total_cost_usd":0.01,"num_turns":3}\n' "${DEVKIT_TEST_RE
 FIN
 chmod +x "$DOBLE"
 
+# Cache de disponibilidad de frontera, precargada como "si" para los tres
+# modelos de `devkit/agents/roles.toml` (DEVKIT-54): sin esto,
+# `devkit-run.sh --rol` invocaría el doble una vez más solo para comprobar
+# disponibilidad, y esa llamada de más contaría como un lanzamiento real y se
+# llevaría el turno de "falla por cuota" que arman las pruebas de abajo.
+FRONTERA_CACHE="$TMP/frontera-cache"
+mkdir -p "$FRONTERA_CACHE"
+for m in fable opus sonnet; do printf 'si' > "$FRONTERA_CACHE/$m"; done
+
 OUT=""  # log de la última corrida del doble, que miran las comprobaciones
 LLAMADAS=0
 
@@ -207,6 +216,7 @@ corre_doble() {
   DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS="$1" DEVKIT_TEST_MSG="${2:-}" \
   DEVKIT_TEST_SLEEP="${DEVKIT_TEST_SLEEP:-0}" DEVKIT_TEST_RESULT="${DEVKIT_TEST_RESULT:-listo}" \
   DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
   DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 \
   DEVKIT_WATCH_QUOTA_RETRIES="${RETRIES:-3}" \
   DEVKIT_WATCH_SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}" \
@@ -265,13 +275,13 @@ RETRIES=2 corre_doble 9
 check_log "tope de intentos alcanzado" 'cuota agotada: pr-review-9-abc1234 sin más intentos \(tope de 2\)'
 check_igual "no pasa del tope" 2 "$LLAMADAS"
 
-# --- devkit-run como único punto de lanzamiento (DEVKIT-45) -----------------
+# --- devkit-run como único punto de lanzamiento (DEVKIT-45/DEVKIT-54) ------
 # run_skill delega en devkit-run.sh, que resuelve modelo y esfuerzo por rol
-# desde roles.toml; pr-review siempre cae en el rol "revision" (el modelo
-# fuerte), sin importar el Tipo de la card.
+# desde roles.toml; pr-review siempre cae en el rol "revision" (el primer
+# modelo de la lista `frontera`), sin importar el Tipo de la card.
 corre_doble 0
 check_log "la línea de resumen trae el modelo del rol de revisión" \
-  'modelo=claude-opus-5 esfuerzo=high'
+  'modelo=fable esfuerzo=high'
 
 # --- Costo total del ciclo de un PR (DEVKIT-45) ------------------------------
 # cycle_cost suma "costo=" de todas las líneas de un PR en watch.log, no solo

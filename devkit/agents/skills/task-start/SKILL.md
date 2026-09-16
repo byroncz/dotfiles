@@ -19,6 +19,13 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 
 1. Verifica que el workspace está limpio: `git status --porcelain` vacío. Si
    hay cambios sin commit, detente y explica; no mezcles trabajo de dos cards.
+   Si necesitas comprobar que no hay otro agente trabajando el mismo
+   workspace, usa `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
+   --otros-agentes`: sale 0 si está libre y 1 si lo ocupa otro, e imprime los
+   procesos ajenos. Nunca uses `pgrep -f <Clave>` a secas: la Clave viaja en
+   los argumentos de tu propio lanzador, así que te encuentras a ti mismo
+   cuatro veces (el `devkit-run.sh --worker`, su subshell, su vigilante y tu
+   `claude -p`). Eso bloqueó DEVKIT-54 sin motivo.
 2. Verifica que la card está en `Lista`. Si está en `En progreso` con `Rama`
    asignada, cámbiate a esa rama y continúa: es una reanudación.
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
