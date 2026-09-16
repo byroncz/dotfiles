@@ -12,15 +12,25 @@ con `claude -p "/nombre argumentos"`.
 | `project-init` | Alta de proyecto en Notion | Humano, una vez |
 | `epic-plan` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `task-create` | Nace en Backlog | Humano o agente |
-| `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
+| `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-close.sh` |
 | `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
-| `task-close` | Lista para merge → Hecha | `watch.sh` tras el merge |
-| `task-block` | Cualquiera → Bloqueada | Agente |
+| `task-document` | Entrada de Documentación de una card en Lista para merge (o de una Épica cerrada); no cambia el Estado | `watch.sh` tras el OK de `pr-review`; `task-close.sh` si falta |
 | `project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `template-update` | Sube la versión del template y pone al día `AGENTS.md` | Agente |
 | `template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
+
+Cerrar y bloquear no son skills desde DEVKIT-55: son scripts bash contra la
+API de Notion, con el token `notion_token`, que no gastan modelo.
+
+| Script | Transición | Quién lo lanza |
+|---|---|---|
+| `task-close.sh <Clave> [PR]` | Lista para merge → Hecha; cierra la Épica o lanza la siguiente hija | `watch.sh` tras el merge; humano con `devkit-run task-close` |
+| `task-block.sh <Clave> <motivo>` | Cualquiera → Bloqueada | Agente, `watch.sh` y `devkit-run`; humano con `devkit-run task-block` |
+
+Las skills los invocan por ruta, `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh"`:
+`devkit-run` exporta esa variable al `claude -p` que lanza.
 
 Convenciones comunes a todas:
 

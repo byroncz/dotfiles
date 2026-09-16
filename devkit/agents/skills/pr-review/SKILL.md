@@ -146,7 +146,9 @@ es trabajo de `task-fix`.
    `task-fix` lee: una línea por hallazgo, cinco campos separados por ` | `,
    sin saltos de línea dentro de un hallazgo.
 9. Según el veredicto:
-   - **`OK`**: `Estado` de la card = `Lista para merge`. Pide el review al
+   - **`OK`**: `Estado` de la card = `Lista para merge`. No escribas la
+     entrada de Documentación: con tu marcador OK, el bucle lanza
+     `task-document` sobre este head (DEVKIT-55). Pide el review al
      humano con `gh pr edit --add-reviewer <usuario> <N>`. El usuario sale de
      la clave `reviewer` de `.devkit/devkit.toml`:
 

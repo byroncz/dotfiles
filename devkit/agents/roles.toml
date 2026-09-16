@@ -32,16 +32,12 @@ revision.max_turns = 50
 # paga en todas sus hijas, así que sube a esfuerzo máximo.
 epic-plan.effort = "max"
 
-# implementación: task-start, task-fix, task-submit y task-document (nace en
-# la hija siguiente de la Épica de DEVKIT-54; declara su rol aquí para no
-# volver a tocar este archivo cuando se cree). Segundo modelo de la lista.
+# implementación: task-start, task-fix, task-submit y task-document.
+# Segundo modelo de la lista.
 implementacion.model_index = 2
 implementacion.effort = "high"
 implementacion.max_turns = 40
 
-# contabilidad: skills que solo comentan o cierran una card ya resuelta
-# (task-close, task-block), sin escribir código. Tercer modelo de la lista.
-# Se retira en la hija siguiente de esta Épica, no aquí.
-contabilidad.model_index = 3
-contabilidad.effort = "high"
-contabilidad.max_turns = 15
+# No hay rol para cerrar ni bloquear una card (DEVKIT-55): `task-close.sh` y
+# `task-block.sh` son bash contra la API de Notion y no lanzan modelo. El rol
+# `contabilidad` que los agrupaba se retiró con ellos.

@@ -222,6 +222,13 @@ shell suelta, sin esa persistencia.
 - Autenticación OAuth. El puerto de retorno `54545` se publica en
   `127.0.0.1` del Mac para que la redirección del navegador llegue al
   contenedor. Una vez por proyecto; el token queda en `claude-<proyecto>`.
+- Conexión interna de Notion para bash (DEVKIT-55): token tipo Access Token
+  con acceso a la página "Ingeniería", secreto `notion_token` en Bitwarden.
+  Lo usan `notion.sh`, `task-close.sh` y `task-block.sh`, para que cerrar o
+  bloquear una card no cueste un agente: el plugin solo vive dentro de Claude
+  Code. La API no cobra por llamada; su límite es de peticiones por minuto y
+  sobra para este uso. Las skills que escriben contenido largo
+  (`task-document`, `epic-plan`) siguen con el plugin.
 - Plan Notion Business en cuenta personal. Idioma: español latino neutro.
 
 Modelo de datos: tres bases de datos globales con relaciones, y vistas
@@ -353,15 +360,22 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `task-submit` | En progreso → Revisión automática | Push, PR enlazando la card, auto-merge armado, URL de PR, comentario |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | Revisor independiente del autor: comprueba cada criterio ejecutando, lee el diff de forma adversarial, publica el informe en el PR con el marcador `devkit-review` y el bloque `devkit-findings`; con `OK` pide review al humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | Corrector del ciclo: lee el bloque `devkit-findings` del último informe `CAMBIOS` (o el comentario del humano como hallazgo único), un commit por hallazgo en la rama de la card, push, respuesta en el PR con el bloque `devkit-fixes` (`id | atendido o descartado | commit o motivo`) |
-| `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, marcador `devkit-closed` en el PR, arranca la siguiente hija |
-| `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
+| `task-document` | Lista para merge, sin cambio de Estado | Escribe o actualiza la entrada de Documentación de la card (la encuentra por la relación `Tarea`) y deja el marcador `devkit-doc` del head en el PR; también la entrada consolidada de una Épica cerrada |
 | `project-status` | En cualquier momento | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
 | `template-update` | Mantenimiento | Sube `template` en `.devkit/devkit.toml`, funde `AGENTS.md` con la plantilla destino y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
+Cerrar y bloquear no son skills sino scripts bash (DEVKIT-55), porque no
+toman ninguna decisión que necesite un modelo:
+
+| Script | Transición | Qué hace |
+|---|---|---|
+| `task-close.sh` | Lista para merge → Hecha | Verifica merge, `Hecha` y `Cierre`, comentario con enlace a la entrada de Documentación (o lanza `task-document` si falta), marcador `devkit-closed` en el PR, cierra la Épica con la regla de DEVKIT-44 o lanza la siguiente hija con `devkit-run` |
+| `task-block.sh` | Cualquiera → Bloqueada | Comenta el estado anterior y qué necesita del humano; guarda `wip` si hay cambios sin commit |
+
 `watch.sh` lanza cada skill de la tabla a través de `devkit-run.sh`, que
-resuelve modelo y esfuerzo por el papel de la skill en el flujo (revisión,
-implementación o contabilidad), no por el `Tipo` de la card: `roles.toml`
+resuelve modelo y esfuerzo por el papel de la skill en el flujo (revisión o
+implementación), no por el `Tipo` de la card: `roles.toml`
 declara una lista `frontera` ordenada de modelos y cada rol el índice desde
 el que empieza a buscar el primero disponible, con caída al siguiente si no
 responde (DEVKIT-54). La sonda que decide si un modelo responde corre aislada
@@ -374,6 +388,18 @@ Una skill que necesite saber si otro agente ya ocupa el workspace pregunta con
 `devkit-run --otros-agentes`, nunca con un `pgrep` sobre la Clave: la Clave
 viaja en los argumentos del propio lanzador, así que un `pgrep` devuelve los
 cuatro procesos del lanzamiento en curso como si fueran ajenos (DEVKIT-54).
+
+Una skill invoca otro script por ruta,
+`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/<script>"`, y por eso
+`devkit-run` exporta `DEVKIT_SCRIPTS_DIR` (su propio directorio) y
+`DEVKIT_RUN_DIR` al `claude -p` que lanza, y `entrypoint.sh` exporta la
+variable antes de arrancar `watch.sh` (DEVKIT-55). Sin eso, la variable solo
+existía en `/run/devkit/env`, que carga la shell del humano; el respaldo
+`/opt/devkit/scripts` es la copia de la imagen, que en modo dev queda atrás
+del workspace, y el `task-start` que lanzó `task-close` el 2026-09-16 usó una
+copia sin `frontera`, resolvió un modelo vacío y murió en el primer turno.
+`devkit-run` tampoco lanza ya con un modelo vacío: sale con 65 y deja una
+`ALARMA` en `watch.log`.
 
 ## 6. Flujo de trabajo
 
@@ -402,15 +428,17 @@ revisión.
 | `watch.sh`: `CAMBIOS` para el head, sin respuesta | Máquina | Lanza `task-fix` headless: un commit por hallazgo, push, bloque `devkit-fixes`. El head nuevo vuelve a la fila anterior |
 | `watch.sh`: `CAMBIOS` para el head, respuesta `devkit-fix` sin push (DEVKIT-22) | Máquina | Lanza `pr-review` de nuevo sobre el mismo head: juzga la respuesta con diff vacío. `OK` u otro `CAMBIOS`, igual que la fila anterior |
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
-| Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y lanza `task-block`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
+| `watch.sh`: `OK` para el head, sin marcador `devkit-doc` de ese head | Máquina | Lanza `task-document` headless: escribe o actualiza la entrada de Documentación antes del approve. Si un head nuevo recibe otro `OK`, corre de nuevo sobre la misma entrada |
+| Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y corre `task-block.sh`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
 | `watch.sh`: una skill muere por cuota agotada | Máquina | Anota la pausa en `watch.log` y relanza la misma skill al reiniciarse la ventana. La card no cambia de Estado: solo falta tiempo |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
-| `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Lanza `task-close` headless; cierra la hija, documenta, deja el marcador `devkit-closed` en el PR y arranca la siguiente |
-| Todas las hijas en Hecha | Automático | La Épica pasa a Hecha con una entrada de Documentación consolidada |
+| `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Bucle aparte, cada 30 s: corre `task-close.sh`, que cierra la hija en bash, deja el marcador `devkit-closed` en el PR y arranca la siguiente. `watch.log` registra los segundos desde el merge |
+| Todas las hijas en Hecha | Automático | `task-close.sh` pasa la Épica a Hecha (regla de DEVKIT-44) y `task-document` escribe la entrada consolidada |
 
 El bucle no guarda estado propio: decide con lo que hay en el PR. Cada
 informe del revisor lleva `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`,
 cada respuesta del corrector `<!-- devkit-fix sha=<head nuevo> review=<sha> -->`,
+cada entrada de Documentación escrita `<!-- devkit-doc sha=<head> -->`,
 cada bloqueo `<!-- devkit-block sha=<head> -->` y cada cierre
 `<!-- devkit-closed sha=<merge commit> -->`. Los marcadores se reconocen
 por su texto, no por su autor, para que valgan aunque el informe lo haya
@@ -440,7 +468,7 @@ Sí daña la factura, y por eso el cierre también dejó de depender de él
 cerraron: el 2026-09-08, el primer arranque del bucle nuevo reprocesó siete
 PRs con card en `Hecha` antes de llegar al único pendiente, unos 3 USD y veinte
 minutos de espera. La corrección es la misma idea que el resto del ciclo:
-`task-close` publica `<!-- devkit-closed sha=<merge commit> -->` en el PR al
+`task-close.sh` publica `<!-- devkit-closed sha=<merge commit> -->` en el PR al
 terminar, y `watch.sh` omite los PRs mergeados que ya lo llevan. Se descartó
 persistir `launched` en disco: guardaría en el contenedor un estado que ya
 existe en GitHub, y no serviría en otra máquina ni tras un `devkit rebuild`.
@@ -449,7 +477,7 @@ La otra forma de perder trabajo no era una decisión equivocada sino una muerte
 súbita: un `claude -p` que agota la cuota de la suscripción termina con código
 distinto de cero y deja la card `En progreso` sin nadie trabajándola
 (DEVKIT-27). El agente no puede arreglarlo, porque sin cuota ya no habla con el
-modelo y ninguna skill corre, `task-block` incluida; y Claude Code no ofrece
+modelo y ninguna skill corre; y Claude Code no ofrece
 comando ni endpoint para consultar la cuota desde un script, ni hook para este
 fallo. Lo único legible es el aviso del límite en el log de la skill, así que
 quien reacciona es `watch.sh`, que es bash y sobrevive: `run_skill` reconoce el
@@ -469,8 +497,26 @@ Se dejó fuera a propósito todo aviso: no se mueve la card a `Bloqueada` ni se
 comenta en el PR. `Bloqueada` significa "necesita al humano", y aquí solo hace
 falta tiempo; usarla obligaría al humano a devolver la card a mano. Y el PR no
 sirve de canal porque una card puede morir antes de tener PR, y el mecanismo
-debe valer igual para todas. Avisar desde bash exigiría un segundo camino a
-Notion, con su propio token de integración: es una decisión de diseño aparte.
+debe valer igual para todas. Desde DEVKIT-55 ese segundo camino a Notion
+existe (`notion.sh`, con su propio token), pero la razón de fondo no cambió:
+una pausa por cuota no necesita al humano.
+
+**Documentar al aprobar y cerrar en bash (DEVKIT-55).** La entrada de
+Documentación se escribía al cerrar, cuando ya nadie la leía para revisar, y
+el cierre corría en un agente entero solo porque el contenedor no hablaba con
+Notion desde bash: entre el approve y la siguiente hija pasaban hasta cinco
+minutos de tick más los minutos de un `claude -p` de 10 a 15 turnos, más la
+espera del candado. Ahora `task-document` corre tras el `OK` del revisor
+(`watch.sh` decide `documentar` cuando el último informe `OK` del head no
+tiene su `devkit-doc`), así que la entrada existe antes del approve y se
+reescribe si la revisión vuelve a abrir la card. El cierre es `task-close.sh`,
+en un bucle propio de `watch.sh` cada 30 s: el bucle principal queda
+bloqueado mientras corre una skill, y un merge en ese rato esperaba a que
+terminara. `task-close.sh` no toma `skill.lock`, porque solo toca Notion y
+GitHub; su limpieza de git sí lo intenta sin esperar y, si el workspace está
+ocupado, la omite. Se descartó mantener el cierre en un agente con un modelo
+más barato: seguía pagando el arranque de Claude Code y el candado, y no hay
+ninguna decisión de alcance que tomar al cerrar.
 
 `/run/devkit/poke` es el otro archivo del bucle en tmpfs, y tampoco guarda
 estado (DEVKIT-26): `task-submit` y `task-fix` lo tocan al terminar, `watch.sh`
@@ -548,6 +594,7 @@ por estado y tiempo con una vista filtrada y con `project-status`.
 | Token de GitHub de la cuenta máquina | Bitwarden | Alcances `repo` (contenido y PRs en escritura) y `read:org` (`gh pr edit --add-reviewer`, que usa `pr-review` para pedir el review al humano, lo exige incluso fuera de una organización); caduca en un año | `GH_TOKEN` y `gh auth setup-git` |
 | Token de Dropbox | Bitwarden | App propia con acceso "App folder": solo `/Apps/devkit` | `rclone.conf` generado al arrancar |
 | Notion | Volumen `claude-<proyecto>` | Páginas autorizadas en OAuth: el árbol "Ingeniería" | Plugin oficial, puerto en `127.0.0.1` |
+| Token de Notion para bash (`notion_token`) | Bitwarden | Conexión interna, tipo Access Token, con acceso solo a la página "Ingeniería" | Archivo `/run/devkit/notion_token`; `notion.sh` lo pasa a `curl` por descriptor, nunca por argumento ni variable de entorno. `pr-guard.sh` bloquea leer la ruta |
 | Token del editor VS Code, por proyecto | Bitwarden | Solo abre el editor; el panel hereda los mismos permisos del contenedor, no es un shell aparte | Archivo `/run/devkit/vscode-token`, `--connection-token-file` |
 
 Los secretos obtenidos de Bitwarden se escriben en un directorio `tmpfs` con

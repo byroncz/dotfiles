@@ -43,9 +43,12 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
   la fórmula `Clave`: el MCP no la devuelve. Detalle en `.claude/skills/README.md`.
 - Cada skill en `.claude/skills/` es un paso del flujo. Las principales:
   `/project-status` dice en qué va el proyecto, `/task-start` toma una card
-  libre, `/task-submit` entrega el trabajo y abre el PR, `/task-close` cierra
-  la card tras el merge, `/task-block` cuando necesitas al humano. Lee
-  `.claude/skills/README.md` para el resto.
+  libre, `/task-submit` entrega el trabajo y abre el PR, `/task-document`
+  escribe la entrada de Documentación al aprobar. Cerrar y bloquear no son
+  skills sino scripts bash: `task-close.sh` tras el merge y `task-block.sh
+  <Clave> "<motivo>"` cuando necesitas al humano, ambos en
+  `${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}`. Lee `.claude/skills/README.md`
+  para el resto.
 - Una skill se edita en el repo del template (DEVKIT), por su ruta real
   `devkit/agents/skills/<skill>/SKILL.md`, nunca por `.claude/skills/`: ese
   directorio es un enlace al template y Claude Code no acepta escrituras bajo
@@ -53,8 +56,9 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 - El humano decide dos cosas: mover una Épica de Backlog a Lista y aprobar
   el PR. Todo lo demás lo haces tú, sin preguntar, siguiendo las skills.
 - En modo headless (`claude -p`) no hay quien responda: una pregunta al
-  humano equivale a `task-block`. Nunca termines con una pregunta abierta.
-  Si falta algo, ejecuta `task-block` con la petición concreta (o comenta en
+  humano equivale a bloquear la card. Nunca termines con una pregunta
+  abierta. Si falta algo, ejecuta `task-block.sh` con el motivo "Qué intenté:
+  ... Qué necesito: ..." y la petición concreta (o comenta en
   la card, si no hay card que bloquear) y termina. Toda ejecución headless
   cierra en un estado observable de la card, nunca a la espera.
 

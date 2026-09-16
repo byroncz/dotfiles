@@ -14,8 +14,10 @@ Sin argumentos.
    la primera línea del resumen.
 3. Cards en `Revisión automática` o `Lista para merge` del proyecto: para
    cada una con `PR`, consulta `gh pr view <PR> --json state`. Si está
-   `MERGED`, ejecuta `task-close` con su Clave. Si está `CLOSED` sin merge,
-   comenta en la card y ponla en `Bloqueada` pidiendo decisión.
+   `MERGED`, ciérrala con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-close.sh"
+   <Clave> <PR>` (bash, desde DEVKIT-55). Si está `CLOSED` sin merge,
+   bloquéala con `task-block.sh <Clave> "<motivo>"`, en el mismo directorio,
+   pidiendo decisión.
 4. Cards `En progreso` del proyecto: verifica que su rama existe en origin.
    Si no existe, coméntalo y ponla en `Lista`.
 5. Detecta anomalías y lístalas:
@@ -23,7 +25,7 @@ Sin argumentos.
    - Cards en `Lista`, `En progreso`, `Revisión automática` o `Lista para
      merge` sin actividad en catorce días: inactivas.
    - Épicas `En progreso` con todas las hijas `Hecha`: cerrar con
-     `task-close <Clave de la Épica>`.
+     `task-close.sh <Clave de la Épica>`.
 6. Determina la siguiente card libre con el mismo criterio de `task-start`.
 
 ## Salida

@@ -64,6 +64,17 @@ if [ -s /run/secrets/bws_token ]; then
       # Tokens de una línea: se eliminan espacios y saltos pegados por error.
       [ -r "$RUN_DIR/$key" ] && printf 'export %s=%q\n' "$var" "$(tr -d '[:space:]' < "$RUN_DIR/$key")" >> "$ENV_FILE"
     done
+    # notion_token (DEVKIT-55): conexión interna de Notion, tipo Access Token,
+    # con acceso a la página "Ingeniería". Lo usan task-close.sh, task-block.sh
+    # y notion.sh. Se queda como archivo 600 y no se exporta: una variable de
+    # entorno la heredan todos los procesos, incluidos los `claude -p`, y se
+    # lee en /proc/<pid>/environ (regla de DEVKIT-51). Solo se avisa si falta;
+    # su contenido nunca se imprime.
+    if [ -s "$RUN_DIR/notion_token" ]; then
+      log "token de Notion disponible para los scripts de cierre y bloqueo"
+    else
+      warn "falta el secreto notion_token en Bitwarden: task-close.sh y task-block.sh no podrán escribir en Notion"
+    fi
     # rclone.conf viaja en base64 en una sola línea (ver scripts/dropbox-setup.sh).
     if [ -r "$RUN_DIR/rclone_conf_b64" ]; then
       mkdir -p "$HOME/.config/rclone"
@@ -140,6 +151,12 @@ fi
 # bucle pero no en el lanzamiento manual, hasta el próximo `devkit recreate`
 # (DEVKIT-50, hallazgo H2 de pr-review).
 printf 'export DEVKIT_SCRIPTS_DIR=%q\n' "$SCRIPTS_DIR" >> "$ENV_FILE"
+# Y en el entorno de este mismo proceso, que es el que lanza watch.sh: el
+# archivo de arriba ya se cargó en la fase 1, así que sin este export ni el
+# bucle ni los `claude -p` que lanza tenían la variable, y una skill que
+# invocaba `${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh` caía a
+# la copia de la imagen, vieja en modo dev (DEVKIT-55).
+export DEVKIT_SCRIPTS_DIR="$SCRIPTS_DIR"
 
 # /opt/devkit/image es la copia del template con la que se construyó la imagen.
 # Lo que está ahí (Dockerfile, zsh, proxy, vscode) no se refresca al
@@ -275,7 +292,7 @@ fi
 
 # --- 8. Bucles -----------------------------------------------------------------
 if [ -n "${GH_TOKEN:-}" ] && [ -f "$SCRIPTS_DIR/watch.sh" ]; then
-  nohup bash "$SCRIPTS_DIR/watch.sh" >"$RUN_DIR/watch.log" 2>&1 &
+  nohup bash "$SCRIPTS_DIR/watch.sh" >>"$RUN_DIR/watch.log" 2>&1 &
   log "bucle de PRs activo (cada 5 min): revisión, corrección y cierre"
 fi
 

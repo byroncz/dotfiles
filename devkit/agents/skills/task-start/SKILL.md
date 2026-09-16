@@ -51,7 +51,8 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 
 ## Modo headless
 
-`task-close` o el humano te invocan como `claude -p "/task-start <Clave>"`.
+`task-close.sh` (vía `devkit-run`), `epic-plan` o el humano te invocan como
+`claude -p "/task-start <Clave>"`.
 No hay quien conteste: si terminas preguntando, el proceso muere con la card
 `En progreso` y nadie trabajándola.
 
@@ -61,11 +62,12 @@ No hay quien conteste: si terminas preguntando, el proceso muere con la card
 - Una ejecución que no deja la card en `Revisión automática` o `Bloqueada`
   es un corte, no un avance.
 - Si falta una decisión, un acceso o un criterio de aceptación, o te bloqueas
-  más de dos intentos en el mismo problema, ejecuta `task-block` con la
+  más de dos intentos en el mismo problema, bloquea la card con
+  `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "<motivo>"`, con la
   petición concreta al humano. Nunca termines con una pregunta abierta.
 
 ## Reglas
 
 - Una card activa por sesión.
 - Nunca `git push origin main`, nunca `--force`.
-- Si te bloqueas más de dos intentos en el mismo problema, usa `task-block`.
+- Si te bloqueas más de dos intentos en el mismo problema, usa `task-block.sh`.
