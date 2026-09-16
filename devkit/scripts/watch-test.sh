@@ -312,6 +312,10 @@ check_igual "no pasa del tope" 2 "$LLAMADAS"
 corre_doble 0
 check_log "la línea de resumen trae el modelo del rol de revisión" \
   'modelo=fable esfuerzo=high'
+# DEVKIT-57: la línea "lanzando" con origen, prompt y log, que lee
+# `devkit-run --estado`.
+check_log "run_skill deja la línea lanzando con origen bucle" \
+  'pr-review-9-abc1234 lanzando \(origen=bucle\): "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
 
 # --- Costo total del ciclo de un PR (DEVKIT-45) ------------------------------
 # cycle_cost suma "costo=" de todas las líneas de un PR en watch.log, no solo
@@ -392,6 +396,21 @@ if printf '%s\n' "$AGENTES" | grep -qE "^${FAKE_PID}[[:space:]]+DEVKIT-46[[:spac
   printf 'ok   %-58s %s\n' "agentes-vivos lista PID, Clave y paso" "$FAKE_PID DEVKIT-46 task-fix"
 else
   printf 'FAIL %-58s no encontró la línea esperada en: %s\n' "agentes-vivos lista PID, Clave y paso" "$AGENTES"
+  fail=1
+fi
+
+# Lo que lanza el bucle corre con `--sync`, no con `--worker`: antes de
+# DEVKIT-57, --agentes-vivos no lo veía.
+"$FAKE_WORKER" --sync /pr-review 41 &
+FAKE_PID=$!
+sleep 0.3
+AGENTES=$(bash "$WATCH" --agentes-vivos)
+kill "$FAKE_PID" 2>/dev/null
+wait "$FAKE_PID" 2>/dev/null
+if printf '%s\n' "$AGENTES" | grep -qE "^${FAKE_PID}[[:space:]]+\?[[:space:]]+pr-review$"; then
+  printf 'ok   %-58s %s\n' "agentes-vivos ve lo que lanza el bucle (--sync)" "$FAKE_PID pr-review"
+else
+  printf 'FAIL %-58s no encontró la línea esperada en: %s\n' "agentes-vivos ve lo que lanza el bucle (--sync)" "$AGENTES"
   fail=1
 fi
 
@@ -643,5 +662,78 @@ env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez >/dev/null 2>
 check_igual "task-block: card ya Bloqueada no se toca" 0 "$(grep -cE '^(set|comentar)' "$N/llamadas")"
 check_igual "task-block: sin motivo sale con 64" 64 \
   "$(env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 >/dev/null 2>&1; echo $?)"
+# DEVKIT-57: el bloqueo deja su motivo en watch.log para `devkit-run --estado`.
+check_igual "task-block: motivo en watch.log" \
+  "task-block.sh DEVKIT-3 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/41; el bucle no lo toca hasta que decidas." \
+  "$(grep -oE 'task-block.sh DEVKIT-3 Bloqueada desde .*' "$CICLO/run/watch.log" | head -1)"
+
+# --- task-fix vacío con CAMBIOS vigente (DEVKIT-57) --------------------------
+# El caso `fix` completo por el hook --fix: devkit-run.sh real, un doble de
+# `claude` que anota el modelo con que lo llaman y responde lo que diga cada
+# caso, un `gh` que devuelve el último informe CAMBIOS sobre FIX_HEAD y un
+# doble de task-block.sh. Con roles.toml del template, task-fix corre en
+# `opus` (implementación) y el siguiente de la frontera es `sonnet`.
+FIX="$TMP/fix"
+mkdir -p "$FIX/bin"
+cat >"$FIX/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view")
+    printf '{"headRefOid":"%s","reviews":[{"author":{"login":"otro"},"state":"COMMENTED","submittedAt":"T01","body":"<!-- devkit-review sha=a1b2c3d verdict=CAMBIOS -->"}],"comments":[]}' "$FIX_HEAD" ;;
+  "pr comment") printf '%s\n' "$*" >>"$FIX_DIR/comentarios" ;;
+  *) exit 1 ;;
+esac
+FIN
+cat >"$FIX/claude" <<'FIN'
+#!/usr/bin/env bash
+modelo=""
+while [ $# -gt 0 ]; do case "$1" in --model) modelo=$2; shift 2 ;; *) shift ;; esac; done
+n=$(( $(cat "$FIX_DIR/llamadas" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$FIX_DIR/llamadas"
+echo "$modelo" >>"$FIX_DIR/modelos"
+if [ "$n" -eq 1 ]; then r=$FIX_R1; else r=$FIX_R2; fi
+printf '{"result":"%s","total_cost_usd":0.01,"num_turns":2}\n' "$r"
+FIN
+cat >"$FIX/task-block" <<'FIN'
+#!/usr/bin/env bash
+printf '%s|' "$@" >"$FIX_DIR/bloqueo"
+FIN
+chmod +x "$FIX/bin/gh" "$FIX/claude" "$FIX/task-block"
+
+corre_fix() {  # corre_fix <resultado 1> <resultado 2> [head que ve gh]
+  local dir
+  dir=$(mktemp -d -p "$TMP")
+  FIX_DIR_ACTUAL=$dir
+  OUT="$dir/watch.log"
+  FIX_DIR="$dir" FIX_R1="$1" FIX_R2="$2" FIX_HEAD="${3:-a1b2c3d}" PATH="$FIX/bin:$PATH" \
+  DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+    bash "$WATCH" --fix 45 DEVKIT-9 https://github.com/o/r/pull/45 a1b2c3d a1b2c3d >"$OUT" 2>&1
+}
+
+# Dos veces "nada que corregir": alarma, relanzamiento con sonnet y bloqueo.
+corre_fix "nada que corregir" "nada que corregir"
+check_log "fix vacío: ALARMA con la frase y el modelo siguiente" \
+  'ALARMA: task-fix-45-a1b2c3d terminó con "nada que corregir" con CAMBIOS vigente sobre a1b2c3d; relanzo task-fix con sonnet \(antes opus\)'
+check_igual "fix vacío: relanza una vez, con el siguiente modelo" "opus sonnet" \
+  "$(tr '\n' ' ' <"$FIX_DIR_ACTUAL/modelos" | sed 's/ $//')"
+check_log "fix vacío: el reintento repite y se registra" 'ALARMA: task-fix-45-a1b2c3d-reintento también terminó con "nada que corregir"'
+check_igual "fix vacío: bloquea la card con task-block.sh" "DEVKIT-9" \
+  "$(cut -d'|' -f1 "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
+check_igual "fix vacío: marcador devkit-block en el PR" 1 \
+  "$(grep -c 'devkit-block sha=a1b2c3d' "$FIX_DIR_ACTUAL/comentarios" 2>/dev/null)"
+
+# El segundo modelo sí corrige: una alarma, sin bloqueo.
+corre_fix "informe desactualizado, esperando a pr-review" "H1 | atendido | 1234abc"
+check_log "fix vacío: informe desactualizado también dispara la alarma" \
+  'ALARMA: task-fix-45-a1b2c3d terminó con "informe desactualizado"'
+check_igual "fix vacío: si el reintento corrige, no bloquea" "2 no" \
+  "$(cat "$FIX_DIR_ACTUAL/llamadas") $([ -e "$FIX_DIR_ACTUAL/bloqueo" ] && echo si || echo no)"
+
+# "informe desactualizado" legítimo: el head ya cambió, no hay CAMBIOS vigente
+# sobre el head atendido. Ni alarma ni relanzamiento.
+corre_fix "informe desactualizado, esperando a pr-review" "no debe correr" b2c3d4e
+check_igual "fix vacío: con el head ya cambiado no hay alarma" "0 1" \
+  "$(grep -c 'ALARMA' "$OUT") $(cat "$FIX_DIR_ACTUAL/llamadas")"
 
 exit $fail

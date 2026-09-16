@@ -30,6 +30,9 @@ GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
+# Lo que este script lance (task-document, la siguiente hija vía task-next.sh)
+# aparece en `devkit-run --estado` con origen `task-close` (DEVKIT-57).
+export DEVKIT_ORIGEN=task-close
 
 say() { printf 'task-close: %s\n' "$*"; }
 

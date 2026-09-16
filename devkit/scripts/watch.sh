@@ -56,6 +56,13 @@
 # --agentes-vivos` lista PID, Clave y paso de cada skill en curso. El hook
 # `--orphan-branch <edad> <tiene PR: si|no> <skill viva: si|no>` prueba la
 # cuarta alarma sin git ni gh; ver watch-test.sh.
+#
+# Quinta alarma (DEVKIT-57): task-fix que responde "nada que corregir" o
+# "informe desactualizado" con el último informe CAMBIOS sobre el mismo head.
+# Se relanza una vez con el siguiente modelo de `frontera` y, si repite, se
+# bloquea la card. Cada lanzamiento deja antes una línea "<nombre> lanzando
+# (origen=bucle): ..." que `devkit-run --estado` usa para mostrarlo en curso
+# aunque su `claude -p` todavía no exista.
 set -u
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
@@ -355,8 +362,8 @@ quota_reset_epoch() {
 # Pausa por cuota agotada: anota hasta cuándo y relanza al reanudarse. La
 # espera corre en segundo plano para que el bucle siga atendiendo otros PRs; el
 # candado de run_skill impide que el relanzamiento coincida con otra skill.
-quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intento> <log>
-  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 epoch now wait until
+quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intento> <log> [modelo forzado]
+  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 forzado=${6:-} epoch now wait until
   if [ "$key" != "-" ] && paused "$key"; then
     log "cuota agotada: $name ya tiene un relanzamiento programado; no se duplica"
     return
@@ -382,7 +389,7 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
     sleep "$wait"
     if [ "$key" != "-" ]; then unmark "cuota:$key"; mark "$key"; fi
     log "cuota reanudada: relanzando $name"
-    run_skill "$name" "$prompt" "$key" "$((attempt + 1))"
+    run_skill "$name" "$prompt" "$key" "$((attempt + 1))" "$forzado"
   ) &
 }
 
@@ -408,9 +415,17 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 # que es la medida de cada ciclo. Al terminar se registra el estado del
 # trabajo, para que un corte sea visible, y si el corte fue por cuota se
 # programa el relanzamiento.
+#
+# <modelo forzado> (quinto argumento, opcional) reemplaza al modelo del rol:
+# lo usa el relanzamiento de un task-fix vacío (DEVKIT-57). El modelo con el
+# que corrió queda en ULTIMO_MODELO para quien llama.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado
   logf="$RUN_DIR/$name.log"
+  # Antes del candado: `devkit-run --estado` cuenta el lanzamiento desde aquí,
+  # aunque espere a otra skill o a la sonda de modelos (DEVKIT-57).
+  printf '%s %s lanzando (origen=bucle): "%s" log=%s\n' "$(date -u +%FT%TZ)" "$name" \
+    "$(printf '%s' "$prompt" | tr '\n"' '  ' | cut -c1-120)" "$logf"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
   # mismo workspace se pisarían la rama.
@@ -420,11 +435,14 @@ run_skill() {
     flock 9
   fi
   read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --rol "$prompt")
+  [ -z "$forzado" ] || modelo=$forzado
+  ULTIMO_MODELO=$modelo
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
   # DEVKIT_LANZADOR=watch le dice a task-fix que lo lanzó el bucle: sin ella,
   # su `devkit-fix` lleva `manual=1` y reinicia la guarda (DEVKIT-56).
-  DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
+  DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch DEVKIT_MODELO_FORZADO="$forzado" \
+    "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!
@@ -448,7 +466,7 @@ run_skill() {
   fi
   work_state
   if [ $rc -ne 0 ] && quota_hit "$logf"; then
-    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf"
+    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado"
   fi
   return $rc
 }
@@ -551,13 +569,14 @@ check_orphan_branch() {
 }
 
 # Comando que lista los agentes vivos con su Clave y su paso (DEVKIT-46,
-# contenido de DEVKIT-19). Un agente vivo es un `devkit-run.sh --worker` en
-# curso: su línea de proceso trae "--worker /<skill> <Clave> ...", que es el
-# mismo prompt que arma `devkit-run` (skill.sh y devkit-run.sh comparten esa
-# forma). No depende de watch.sh: un `devkit-run` lanzado a mano también sale.
+# contenido de DEVKIT-19). Un agente vivo es un `devkit-run.sh --worker` o
+# `--sync` en curso: su línea de proceso trae "--worker /<skill> <Clave> ..."
+# o "--sync /<skill> ...". Hasta DEVKIT-57 solo miraba `--worker`, y no veía
+# nada de lo que lanza el bucle. Solo ve procesos: un lanzamiento que todavía
+# no tiene proceso lo muestra `devkit-run --estado`.
 agentes_vivos() {
   local lineas
-  lineas=$(ps -eo pid=,args= 2>/dev/null | grep -- '--worker' | grep -v grep)
+  lineas=$(ps -eo pid=,args= 2>/dev/null | grep -E -- '--(worker|sync) /' | grep -v grep)
   if [ -z "$lineas" ]; then
     echo "sin agentes vivos"
     return 0
@@ -566,7 +585,7 @@ agentes_vivos() {
     local pid args paso clave
     pid=$(printf '%s' "$linea" | awk '{print $1}')
     args=$(printf '%s' "$linea" | cut -d' ' -f2-)
-    paso=$(printf '%s' "$args" | grep -oE -- '--worker[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
+    paso=$(printf '%s' "$args" | grep -oE -- '--(worker|sync)[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
     clave=$(printf '%s' "$args" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
     printf '%s\t%s\t%s\n' "$pid" "${clave:-?}" "${paso:-?}"
   done
@@ -583,14 +602,22 @@ project_code() {
 
 # Bloqueo por tres ciclos sin OK, en bash (DEVKIT-55). Primero el marcador en
 # el PR: es lo que detiene al bucle aunque falle Notion. Luego la card.
-block_pr() {  # block_pr <num> <Clave> <url> <head> <ciclos>
-  local num=$1 key=$2 url=$3 head=$4 ciclos=$5 out rc estado
-  log "PR #$num ($key) $ciclos ciclos sin OK: bloqueando con task-block.sh"
+#
+# [motivo] (sexto argumento, opcional) reemplaza la causa por defecto, "tres
+# ciclos sin OK": lo usa el bloqueo por task-fix vacío (DEVKIT-57).
+block_pr() {  # block_pr <num> <Clave> <url> <head> <ciclos> [motivo]
+  local num=$1 key=$2 url=$3 head=$4 ciclos=$5 motivo=${6:-} out rc estado
+  if [ -n "$motivo" ]; then
+    log "PR #$num ($key) $motivo: bloqueando con task-block.sh"
+  else
+    motivo="Tres ciclos de revisión y corrección sin veredicto OK"
+    log "PR #$num ($key) $ciclos ciclos sin OK: bloqueando con task-block.sh"
+  fi
   gh pr comment "$num" --body "<!-- devkit-block sha=$head -->
-Tres ciclos de revisión y corrección sin veredicto OK. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
+$motivo. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
 Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
     || log "PR #$num: no se pudo publicar el marcador devkit-block"
-  out=$("$TASK_BLOCK" "$key" "Tres ciclos de revisión y corrección sin veredicto OK en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
+  out=$("$TASK_BLOCK" "$key" "$motivo en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
   rc=$?
   printf '%s\n' "$out" >"$RUN_DIR/task-block-$num.log"
   estado=terminado
@@ -599,11 +626,57 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
   [ "$rc" -eq 0 ] || log "ALARMA: task-block-$num terminó con error (rc=$rc); ver $RUN_DIR/task-block-$num.log"
 }
 
+# --- task-fix vacío con CAMBIOS vigente (DEVKIT-57) --------------------------
+# Un task-fix que responde "nada que corregir" o "informe desactualizado"
+# mientras el último informe sobre ese mismo head sigue siendo CAMBIOS no
+# corrigió nada, y el ciclo queda quieto: no hay `devkit-fix` que dispare otra
+# revisión, y `launched` impide relanzar el mismo fix. Pasó con un task-fix en
+# Haiku (entrada de Documentación de DEVKIT-54). El bucle lo detecta, lo
+# registra como ALARMA y relanza una vez con el siguiente modelo de
+# `frontera`; si el segundo responde igual, bloquea la card.
+FIX_VACIO_RE='nada que corregir|informe desactualizado'
+
+# Decisión pura, para watch-test.sh: verdadero si <log> es un task-fix vacío
+# y la decisión fresca del PR sigue siendo `fix` sobre el mismo <head>.
+fix_vacio() {  # fix_vacio <log> <acción fresca> <head fresco> <head atendido>
+  local resultado
+  resultado=$(tail -1 "$1" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
+  printf '%s' "$resultado" | grep -qiE "$FIX_VACIO_RE" || return 1
+  [ "$2" = fix ] && [ "$3" = "$4" ]
+}
+
+frase_fix_vacio() {  # frase_fix_vacio <log>
+  tail -1 "$1" 2>/dev/null | jq -r '.result // ""' 2>/dev/null | grep -oiE "$FIX_VACIO_RE" | head -1
+}
+
+# Acción y head frescos del PR, tras la skill: el informe pudo cambiar mientras
+# corría.
+decision_fresca() {  # decision_fresca <num>
+  gh pr view "$1" --json headRefOid,reviews,comments 2>/dev/null | decide "$BOT" | cut -f1,2
+}
+
+# Caso `fix` del bucle: task-fix y, si respondió vacío, la alarma.
+atender_fix() {  # atender_fix <num> <Clave> <url> <head> <ref>
+  local num=$1 key=$2 url=$3 head=$4 ref=$5 name accion head_ahora siguiente
+  name="task-fix-$num-${head:0:7}"
+  run_skill "$name" "/task-fix $key" "fix:$num:$ref"
+  IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
+  fix_vacio "$RUN_DIR/$name.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
+  siguiente=$("$DEVKIT_RUN" --siguiente-modelo "$ULTIMO_MODELO")
+  log "ALARMA: $name terminó con \"$(frase_fix_vacio "$RUN_DIR/$name.log")\" con CAMBIOS vigente sobre ${head:0:7}; relanzo task-fix con ${siguiente:-el modelo del rol} (antes $ULTIMO_MODELO)"
+  run_skill "$name-reintento" "/task-fix $key" "fix:$num:$ref" 1 "$siguiente"
+  IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
+  fix_vacio "$RUN_DIR/$name-reintento.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
+  log "ALARMA: $name-reintento también terminó con \"$(frase_fix_vacio "$RUN_DIR/$name-reintento.log")\" con CAMBIOS vigente sobre ${head:0:7}"
+  block_pr "$num" "$key" "$url" "$head" "-" \
+    "task-fix respondió sin corregir con dos modelos ($ULTIMO_MODELO el último) mientras el informe CAMBIOS sobre ${head:0:7} sigue vigente"
+}
+
 # Siguiente hija al OK del revisor, en bash (DEVKIT-56). La línea de watch.log
 # es la evidencia de que la hija arrancó mientras el PR espera el approve.
 chain_next() {  # chain_next <num> <Clave>
   local num=$1 key=$2 out rc estado
-  out=$("$TASK_NEXT" "$key" 2>&1)
+  out=$(DEVKIT_ORIGEN=bucle "$TASK_NEXT" "$key" 2>&1)
   rc=$?
   printf '%s\n' "$out" >"$RUN_DIR/task-next-$num.log"
   estado=terminado
@@ -668,10 +741,13 @@ check_merged_prs() {
 #                           el bloqueo por tres ciclos sin OK
 #   --chain-next <num> <Clave>
 #                           la siguiente hija al OK del revisor
-# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los tres
-# últimos, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
-# DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh. Ver
-# watch-test.sh.
+#   --fix <num> <Clave> <url> <head> <ref>
+#                           el caso `fix` completo: task-fix, alarma de
+#                           task-fix vacío, relanzamiento y bloqueo
+# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los
+# siguientes, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
+# DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh; `--fix`, en
+# ambos. Ver watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -710,6 +786,11 @@ case "${1:-}" in
     ;;
   --chain-next)
     chain_next "${2:-}" "${3:-}"
+    exit 0
+    ;;
+  --fix)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    atender_fix "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
 esac
@@ -766,7 +847,7 @@ while true; do
             launched "fix:$num:$ref" && continue
             mark "fix:$num:$ref"
             log "PR #$num ($key) CAMBIOS en $short: lanzando task-fix"
-            run_skill "task-fix-$num-$short" "/task-fix $key" "fix:$num:$ref"
+            atender_fix "$num" "$key" "$url" "$head" "$ref"
             ;;
           fix-humano)
             launched "fix-humano:$num:$ref" && continue
