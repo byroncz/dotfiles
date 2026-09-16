@@ -440,7 +440,7 @@ case "${1:-}" in
   criterios) cmd_criterios "${2:?page_id}" ;;
   --test) run_tests ;;
   *)
-    sed -n '9,22p' "$0" >&2
+    sed -n '9,20p' "$0" >&2
     exit 64
     ;;
 esac
