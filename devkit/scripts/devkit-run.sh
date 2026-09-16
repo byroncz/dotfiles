@@ -23,6 +23,9 @@
 #   devkit-run --sync "<prompt>"                    corre en primer plano, JSON por stdout
 #   devkit-run --resumen <log> <modelo> <esfuerzo> <presupuesto>
 #                                                    imprime la línea de costo/tokens/turnos
+#   devkit-run --otros-agentes                      lista los `claude -p` ajenos
+#                                                    sobre este workspace; sale 0
+#                                                    si está libre, 1 si no
 #   devkit-run --test                               autoprueba
 #
 # La tabla rol -> modelo/esfuerzo/turnos vive en devkit/agents/roles.toml.
@@ -121,6 +124,15 @@ role_of() {  # role_of <prompt>
 # FRONTERA_CACHE_DIR para no repetir la llamada en cada lanzamiento (DEVKIT-54:
 # "una llamada mínima por modelo", "una vez por arranque"). Devuelve
 # verdadero/falso por código de salida.
+#
+# "Mínima" hay que forzarlo: una sonda lanzada tal cual desde /workspace hereda
+# todo el contexto del proyecto (AGENTS.md, las skills, los servidores MCP) y
+# deja de ser una sonda. Medido en DEVKIT-54 con `fable`: 41 s y USD 0.95 para
+# responder "ok", con 243k tokens de caché leídos. Como el timeout por defecto
+# son 30 s, el primer modelo de la lista se marcaba caído en cada arranque y
+# todo el flujo caía al segundo sin que nada lo avisara. Aislada —desde un
+# directorio vacío, sin MCP y sin herramientas— la misma sonda tarda 2 s y
+# cuesta centavos, que es lo que se quería.
 modelo_disponible() {  # modelo_disponible <alias>
   local modelo_id=$1 cache
   cache="$FRONTERA_CACHE_DIR/$modelo_id"
@@ -129,11 +141,16 @@ modelo_disponible() {  # modelo_disponible <alias>
     [ "$(cat "$cache" 2>/dev/null)" = "si" ]
     return
   fi
-  local resultado=no
-  if timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" --model "$modelo_id" \
-       --output-format json >/dev/null 2>&1; then
+  local resultado=no vacio
+  vacio=$(mktemp -d)
+  if (cd "$vacio" && timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" \
+        --model "$modelo_id" --output-format json \
+        --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+        --disallowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
+        >/dev/null 2>&1); then
     resultado=si
   fi
+  rm -rf "$vacio"
   printf '%s' "$resultado" > "$cache" 2>/dev/null
   [ "$resultado" = "si" ]
 }
@@ -234,6 +251,56 @@ forzar_task_block() {  # forzar_task_block <prompt> <logf>
   "$HERE/devkit-run.sh" task-block "$clave" "$motivo" >/dev/null 2>&1
 }
 
+# Procesos `claude -p` ajenos que ya están trabajando sobre este workspace.
+#
+# Existe por la Ampliación 2 de DEVKIT-54. Una skill que comprueba si hay otro
+# agente corriendo con un `pgrep -f "<Clave>"` a secas se encuentra a sí misma
+# cuatro veces: la Clave viaja en el argumento del lanzador, así que coinciden
+# el `devkit-run.sh --worker`, el subshell que corre la skill, su vigilante y
+# el propio `claude -p`. task-start leyó esos cuatro como "hay un segundo
+# proceso sobre /workspace" y bloqueó la card sin motivo.
+#
+# La regla: descartar la ascendencia propia (que cubre el `claude -p` de uno
+# mismo y su lanzador), descartar cualquier `devkit-run.sh` (lanzador y
+# vigilante, que no son agentes) y quedarse solo con procesos `claude -p`.
+
+# Cadena de PIDs desde el proceso actual hasta la raíz. La skill llama a este
+# script desde su herramienta Bash, así que su propio `claude -p` es un
+# ancestro, no el PID actual: filtrar solo por `$$` no alcanza.
+ancestros_propios() {
+  local pid=$$ padre
+  while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ]; do
+    printf '%s ' "$pid"
+    padre=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    [ "$padre" != "$pid" ] || break
+    pid=$padre
+  done
+}
+
+# Filtrado puro, separado de la consulta a `ps` para poder probarlo con una
+# tabla fija en la autoprueba. Lee "<pid> <args>" por línea en stdin.
+filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
+  local propios=" $1 " pid args
+  while read -r pid args; do
+    [ -n "$pid" ] || continue
+    case "$propios" in *" $pid "*) continue ;; esac
+    case "$args" in *devkit-run.sh*) continue ;; esac
+    case "$args" in
+      *claude*" -p "*|*claude*" -p") printf '%s %s\n' "$pid" "$args" ;;
+    esac
+  done
+}
+
+# Imprime un proceso ajeno por línea. Sale 0 si el workspace está libre y 1 si
+# lo ocupa otro agente, para usarlo directo en un `if`.
+otros_agentes() {
+  local encontrados
+  encontrados=$(ps -eo pid=,args= 2>/dev/null | filtrar_agentes "$(ancestros_propios)")
+  [ -z "$encontrados" ] && return 0
+  printf '%s\n' "$encontrados"
+  return 1
+}
+
 run_tests() {
   local fail=0 tmp
   check() {
@@ -254,6 +321,26 @@ run_tests() {
   check "rol de task-fix" implementacion "$(role_of '/task-fix DEVKIT-44')"
   check "rol de task-submit" implementacion "$(role_of '/task-submit DEVKIT-44')"
   check "rol de task-document" implementacion "$(role_of '/task-document DEVKIT-44')"
+
+  # Comprobación de concurrencia (DEVKIT-54, Ampliación 2). La tabla imita lo
+  # que devolvió `ps` el 2026-09-16: tres procesos propios del lanzador más el
+  # `claude -p` propio, que es de donde salió el falso positivo. Solo el
+  # `claude -p` ajeno debe aparecer.
+  local tabla propios
+  propios="37786 37792 37794"
+  tabla='37786 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37792 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37793 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37794 claude -p /task-start DEVKIT-54 --model opus --effort high --output-format json
+40001 claude -p /pr-review 38 --model fable --effort high --output-format json'
+  check "concurrencia: solo cuenta el claude -p ajeno" \
+    "40001 claude -p /pr-review 38 --model fable --effort high --output-format json" \
+    "$(printf '%s\n' "$tabla" | filtrar_agentes "$propios")"
+  # El vigilante (37793) no está en la lista de propios y aun así se descarta,
+  # porque sus argumentos son los de devkit-run.sh: sin esa regla, un
+  # lanzamiento se vería a sí mismo como agente ajeno.
+  check "concurrencia: sin ajenos, el workspace está libre" "" \
+    "$(printf '%s\n' "$tabla" | grep -v '^40001 ' | filtrar_agentes "$propios")"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
@@ -588,6 +675,10 @@ case "${1:-}" in
         "$(date -u +%FT%TZ)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
     fi
     exit $rc
+    ;;
+  --otros-agentes)
+    otros_agentes
+    exit $?
     ;;
   --test)
     run_tests
