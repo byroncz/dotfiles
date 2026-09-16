@@ -11,7 +11,7 @@ lenguaje natural de una o varias tareas, o una Épica.
 ## Pasos
 
 1. Lee `.claude/devkit-notion.json` para obtener el `data_source_id` de
-   Tareas, y la clave `project` de `devkit.toml` (raíz del workspace) para el
+   Tareas, y la clave `project` de `.devkit/devkit.toml` para el
    código del proyecto. Busca en Proyectos la fila cuyo Código coincide; su
    URL es la relación Proyecto.
 2. Para cada tarea pedida, decide `Nivel`: Épica si agrupa varios entregables

@@ -10,6 +10,21 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Raíz limpia: `devkit.toml` se muda a `.devkit/` (DEVKIT-53)
+
+- `devkit.toml` deja la raíz del proyecto y pasa a `.devkit/devkit.toml`,
+  versionado igual que antes. `AGENTS.md`, `CLAUDE.md` y `.claude/` se quedan
+  en la raíz porque las herramientas (Codex, Claude Code) obligan a tenerlos
+  ahí; todo lo demás que el devkit necesita en un proyecto vive en `.devkit/`.
+- `entrypoint.sh` crea y lee `devkit.toml` en la ruta nueva, y avisa si
+  `CLAUDE.md` existe sin la línea `@AGENTS.md`.
+- `devkit.sh` (host), `devkit-test.sh`, `watch.sh` y las skills
+  `project-init`, `task-create`, `pr-review`, `template-update` y
+  `template-propagate` apuntan a `.devkit/devkit.toml`.
+- Cambios requeridos: `template-update` mueve `devkit.toml` de la raíz a
+  `.devkit/` la primera vez que un proyecto sube a esta versión, y lo dice en
+  su comentario. Ningún paso manual en el Mac.
+
 ### El token del editor deja de filtrarse por logs y terminal (DEVKIT-51)
 
 - `/run/devkit/vscode.log` nace en `600` (antes `644`) y el arranque de

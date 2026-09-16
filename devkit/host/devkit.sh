@@ -11,7 +11,7 @@
 #                               reconstruye las capas que cambiaron (en modo dev,
 #                               con el devkit/ del workspace)
 #   devkit rebuild <proyecto>   reconstruir las imágenes desde cero y recrear
-#   devkit update <proyecto>    subir a la versión de template que pide devkit.toml
+#   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
 #   devkit ls                   proyectos instanciados
@@ -32,12 +32,12 @@ toml_list() {
   sed -n "s/^$1[[:space:]]*=[[:space:]]*\\[\\(.*\\)\\].*/\\1/p" \
     | tr ',' '\n' | sed -E 's/^[[:space:]"]*//; s/[[:space:]"]*$//' | tr '\n' ' ' | sed 's/ *$//'
 }
-# `apt` y `domains` de devkit.toml alimentan el build y el proxy vía compose,
-# que los interpola desde este .env: sin esto, editar devkit.toml no hacía
+# `apt` y `domains` de .devkit/devkit.toml alimentan el build y el proxy vía
+# compose, que los interpola desde este .env: sin esto, editar devkit.toml no hacía
 # nada (DEVKIT-6). Solo si el contenedor ya existe: en el primer `up` el
 # proyecto aún no está clonado.
 sync_toml_env() {
-  toml="$(docker exec "devkit-$proj" cat /workspace/devkit.toml 2>/dev/null)" || return 0
+  toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || return 0
   apt="$(printf '%s\n' "$toml" | toml_list apt)"
   domains="$(printf '%s\n' "$toml" | toml_list domains)"
   grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
@@ -115,10 +115,10 @@ case "$cmd" in
   recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate ;;
   rebuild)  confirm && sync_toml_env && sync_dev_template && compose build --no-cache && compose up -d --force-recreate ;;
   update)
-    toml="$(docker exec "devkit-$proj" cat /workspace/devkit.toml 2>/dev/null)" \
+    toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
     target="$(printf '%s\n' "$toml" | toml_field template)"
-    [ -n "$target" ] || { echo "devkit.toml no declara 'template'" >&2; exit 1; }
+    [ -n "$target" ] || { echo ".devkit/devkit.toml no declara 'template'" >&2; exit 1; }
     current="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" | head -1)"
     if [ "$target" = "$current" ]; then
       # En modo dev no hay etiqueta que descargar: el template es el workspace y

@@ -32,8 +32,8 @@ ti.
 |---|---|---|
 | ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) | **Docker + Compose** | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa a internet) y `proxy` (única salida, con lista blanca). |
 | ![Debian](https://img.shields.io/badge/Debian_trixie--slim-A81D33?logo=debian&logoColor=white) | **Debian trixie-slim** | Imagen base sin lenguaje preinstalado. Usuario `dev` sin `sudo`. |
-| ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
-| ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
+| ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `.devkit/devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
+| ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `.devkit/devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
 | ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Único editor del devkit: `devkit code <proyecto>` abre la URL con token, ya en `/workspace`. Con la extensión Claude Code instalada desde Open VSX. Su terminal integrada abre ahí mismo y sostiene la sesión: si cierras la pestaña, se reconecta hasta tres horas después. Las skills solo funcionan desde `/workspace` (regla de `AGENTS.md`), así que la terminal integrada ya arranca en el lugar correcto. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. `devkit shell` abre una shell suelta, sin la persistencia del editor. |
@@ -65,7 +65,7 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
 | `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. En modo dev, también rearma el contexto de build. |
-| `devkit update <proyecto>` | Sube a la versión de template que pide `devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
+| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit ls` | Proyectos instanciados. |
@@ -407,7 +407,8 @@ observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
 ## Qué declara cada proyecto
 
-Un solo archivo en la raíz, `devkit.toml`:
+Un solo archivo, versionado en `.devkit/devkit.toml` (la raíz del proyecto
+queda libre para sus propios `AGENTS.md`, `CLAUDE.md` y `README.md`):
 
 ```toml
 [devkit]

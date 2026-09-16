@@ -118,7 +118,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # --- Extensión Claude Code para openvscode-server, desde Open VSX ----------
 # Versionada en el template (ARG de arriba), instalada al build: nunca a mano
 # en el contenedor. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
-# (redirección de descarga) van en `domains` de devkit.toml.
+# (redirección de descarga) van en `domains` de .devkit/devkit.toml.
 RUN set -eux; \
     case "$(uname -m)" in \
       x86_64)  ovx_platform=linux-x64 ;; \
@@ -134,7 +134,7 @@ RUN set -eux; \
 
 # --- Herramientas de Python para el editor ---------------------------------
 # Un Python fijo solo para las herramientas. El de cada proyecto lo decide su
-# devkit.toml (clave `python`) al arrancar.
+# .devkit/devkit.toml (clave `python`) al arrancar.
 RUN uv python install "${TOOLS_PYTHON}" \
  && uv tool install --python "${TOOLS_PYTHON}" ruff \
  && uv tool install --python "${TOOLS_PYTHON}" basedpyright \

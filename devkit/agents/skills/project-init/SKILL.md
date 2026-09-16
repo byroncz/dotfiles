@@ -13,7 +13,7 @@ repo en GitHub.
 1. Lee `.claude/devkit-notion.json`. Busca en Proyectos una fila con ese
    Código. Si existe, no la dupliques: verifica el resto y termina.
 2. Crea la fila en Proyectos: Nombre, Código, Repo, Versión del template
-   (clave `template` de `devkit.toml` en la raíz del workspace, o `dev`),
+   (clave `template` de `.devkit/devkit.toml`, o `dev`),
    Estado `Activo`. En el cuerpo, dos líneas: qué es el proyecto y enlace a
    su `AGENTS.md`.
 3. En la página de esa fila, crea dos vistas enlazadas:
@@ -23,6 +23,6 @@ repo en GitHub.
      `Proyecto` = esta fila, ordenada por `Fecha` descendente.
 4. Verifica y reporta con una lista de tres comprobaciones: fila creada con
    URL, vista Kanban creada, vista Documentación creada.
-5. Si `devkit.toml` del workspace aún tiene `project = "PROJ"` (placeholder
+5. Si `.devkit/devkit.toml` aún tiene `project = "PROJ"` (placeholder
    de `entrypoint.sh`), cámbialo por el código real y haz commit:
    `chore(<CÓDIGO>-0): registrar proyecto`. Usa `-0` porque aún no hay card.

@@ -564,11 +564,11 @@ esac
 log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
 
 while true; do
-  # Se relee en cada vuelta: en un proyecto nuevo, devkit.toml arranca con
+  # Se relee en cada vuelta: en un proyecto nuevo, .devkit/devkit.toml arranca con
   # `project = "PROJ"` y project-init lo corrige después, sin reiniciar el
   # contenedor.
   CODE=""
-  [ -f "$WS/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/devkit.toml" | head -1)"
+  [ -f "$WS/.devkit/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1)"
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     BOT="$(gh api user --jq .login 2>/dev/null)"
     log "consultando GitHub"

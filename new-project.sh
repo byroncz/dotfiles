@@ -13,7 +13,7 @@
 #  y el comando ~/.devkit/bin/devkit.
 #
 #  Este script no toca el repo del proyecto: no tiene forma de hacerlo, solo
-#  descarga el template. `devkit.toml` (versión de template, código de
+#  descarga el template. `.devkit/devkit.toml` (versión de template, código de
 #  Notion) lo crea `entrypoint.sh` dentro del contenedor, en el primer
 #  arranque, una vez que el repo existe.
 # ---------------------------------------------------------------------------
