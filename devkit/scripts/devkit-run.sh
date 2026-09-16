@@ -226,7 +226,7 @@ FIN
   mkdir -p "$tmp/nested/scripts"
   cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
   check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-revision high 50" \
-    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
+    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
 
   git -C "$tmp" init -q
   git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
