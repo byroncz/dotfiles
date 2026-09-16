@@ -10,6 +10,46 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Notion por token: `task-close` y `task-block` en bash, `task-document` nueva (DEVKIT-55)
+
+- Secreto nuevo `notion_token` en Bitwarden: conexión interna de Notion,
+  tipo Access Token, con acceso a la página "Ingeniería". `entrypoint.sh` lo
+  deja como archivo `/run/devkit/notion_token` (600) y no lo exporta como
+  variable; avisa si falta. `pr-guard.sh` bloquea leer esa ruta igual que la
+  del token del editor.
+- `devkit/scripts/notion.sh` habla con la API de Notion desde bash: `card
+  <Clave>` (por `ID` y `Proyecto`), `set <page_id> Prop=valor...`, `comentar`,
+  `documentacion` (entrada por la relación `Tarea`), más `pagina`, `hijas` y
+  `criterios` para el cierre de Épica. El token viaja por descriptor, nunca
+  por argumento. Autoprueba con `notion.sh --test`.
+- `task-close` y `task-block` dejan de ser skills y pasan a
+  `devkit/scripts/task-close.sh` y `task-block.sh`. Hacen lo mismo que antes
+  (`Hecha`, `Cierre`, comentario con enlace, marcador `devkit-closed`, cierre
+  de la Épica con la regla de DEVKIT-44, siguiente hija con `devkit-run`;
+  `Bloqueada` con comentario y `wip` si hay cambios) sin lanzar modelo.
+  `devkit-run task-close|task-block ...` los llama en primer plano.
+- `watch.sh` cierra los PRs mergeados en un bucle aparte cada 30 s
+  (`DEVKIT_WATCH_MERGED_INTERVAL`), no cada 5 min detrás de la skill en curso.
+  La línea `task-close-<n> terminado: bash, cerrado Ns después del merge` en
+  `watch.log` da la medida.
+- La entrada de Documentación la escribe la skill nueva `task-document`
+  cuando `pr-review` da OK: `watch.sh` decide `documentar` si el último
+  informe OK del head no tiene marcador `<!-- devkit-doc sha=<head> -->`. Si
+  la card vuelve atrás y un head nuevo recibe OK, corre otra vez y actualiza
+  la misma entrada. `task-close.sh` la lanza si al cerrar no existe.
+- El rol `contabilidad` desaparece de `roles.toml` y de `devkit-run.sh`.
+- `devkit-run` exporta `DEVKIT_SCRIPTS_DIR` y `DEVKIT_RUN_DIR` al `claude -p`
+  que lanza, y `entrypoint.sh` exporta `DEVKIT_SCRIPTS_DIR` antes de arrancar
+  `watch.sh`. Sin eso, una skill que invocaba
+  `${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh` caía a la copia
+  de la imagen, vieja en modo dev, y lanzaba con modelo vacío. Ahora un
+  modelo vacío no se lanza: `devkit-run` sale con 65 y deja `ALARMA: modelo
+  vacío` en `watch.log`.
+- Cambios requeridos: crear en Notion la conexión interna, darle acceso a la
+  página "Ingeniería" y guardar su token en Bitwarden con la clave
+  `notion_token`; luego `devkit recreate`. Sin el secreto, `task-close.sh` y
+  `task-block.sh` fallan con un mensaje claro y el bucle deja `ALARMA:`.
+
 ### Modelos por frontera: `roles.toml` declara una lista ordenada (DEVKIT-54)
 
 - `devkit/agents/roles.toml` cambia de fijar un modelo por nombre en cada rol

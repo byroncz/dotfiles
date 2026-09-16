@@ -15,12 +15,14 @@ Cambios por versión: [`devkit/CHANGELOG.md`](devkit/CHANGELOG.md).
    abre un PR a `main`.
 3. Un bucle dentro del contenedor lanza un revisor independiente sobre el PR.
    Si pide cambios, un corrector los atiende y el revisor vuelve a mirar;
-   cuando da el OK, te pide el review. Tras tres ciclos sin OK, bloquea la
+   cuando da el OK, te pide el review y escribe la entrada de Documentación,
+   para que la leas antes de aprobar. Tras tres ciclos sin OK, bloquea la
    card y te avisa.
 4. Tú apruebas el PR y GitHub lo mergea solo. Si en vez de aprobar comentas,
    el corrector atiende tu comentario y el ciclo sigue.
-5. El mismo bucle detecta el merge, cierra la card, escribe la entrada de
-   Documentación y trabaja la siguiente hija hasta dejar su PR abierto.
+5. El mismo bucle detecta el merge en menos de un minuto, cierra la card en
+   bash (sin lanzar un agente) y arranca la siguiente hija hasta dejar su PR
+   abierto.
 
 Estados de una card: `Backlog → Lista → En progreso → Revisión automática →
 Lista para merge → Hecha`, más `Bloqueada` cuando el agente necesita algo de
@@ -41,7 +43,7 @@ ti.
 | ![Codex](https://img.shields.io/badge/Codex-000000?logo=openai&logoColor=white) | **Codex** | Segundo agente, preparado pero no instalado: lee el mismo `AGENTS.md` y las mismas skills (estándar Agent Skills). |
 | ![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white) | **GitHub + gh** | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge y borrado de ramas activados. Los agentes actúan con la cuenta máquina `byroncz-bot`. |
 | ![Git](https://img.shields.io/badge/Git-F05032?logo=git&logoColor=white) | **Git** | Una rama por card, un commit squash en `main` por PR, Conventional Commits con la Clave como ámbito. |
-| ![Notion](https://img.shields.io/badge/Notion-000000?logo=notion&logoColor=white) | **Notion** | Centro de tareas: bases Proyectos, Tareas y Documentación. Los agentes la leen y escriben con el plugin oficial de Notion para Claude Code. |
+| ![Notion](https://img.shields.io/badge/Notion-000000?logo=notion&logoColor=white) | **Notion** | Centro de tareas: bases Proyectos, Tareas y Documentación. Los agentes la leen y escriben con el plugin oficial de Notion para Claude Code; los scripts bash (`notion.sh`, `task-close.sh`, `task-block.sh`), con la API de Notion y el token de una conexión interna (secreto `notion_token`). |
 | ![Bitwarden](https://img.shields.io/badge/Bitwarden_Secrets-175DDC?logo=bitwarden&logoColor=white) | **Bitwarden Secrets Manager** | Único lugar de los secretos. Un token en `~/.devkit/bws-token` los trae al arrancar a un `tmpfs` que muere con el contenedor. |
 | ![rclone](https://img.shields.io/badge/rclone_+_Dropbox-0061FF?logo=dropbox&logoColor=white) | **rclone + Dropbox** | Respaldo continuo de `sandbox.local/`, el único directorio fuera de git que sobrevive a un rebuild. Cada minuto, con papelera por día. |
 | ![Terminal](https://img.shields.io/badge/Terminal.app-000000?logo=apple&logoColor=white) | **Terminal.app** | La terminal de macOS, sin instalar nada. Ahí corre el comando `devkit`. |
@@ -121,18 +123,33 @@ workspace, `recreate` avisa y se reinstalan con
 | `g`, `gs`, `gl`, `ll` | Alias: `git`, `git status -sb`, `git log` gráfico, `ls -lah`. |
 | `devkit-run` | Alias a `$DEVKIT_SCRIPTS_DIR/devkit-run.sh` (ver la fila de más abajo): así se lanza sin escribir la ruta completa. `DEVKIT_SCRIPTS_DIR` lo exporta el arranque a `/run/devkit/env`, y es `/workspace/devkit/scripts` en modo dev o `/opt/devkit/scripts` si no: el mismo `SCRIPTS_DIR` que usa `watch.sh`, para que un cambio al script en dev corra igual desde la skill y a mano, sin esperar a un `devkit recreate`. |
 | `/opt/devkit/scripts/dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
-| `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos, el relanzamiento por cuota agotada con logs falsos y las cuatro alarmas del monitoreo mínimo; sale con 1 si un caso falla. |
+| `/opt/devkit/scripts/watch-test.sh` | Prueba `watch.sh` sin GitHub y sin gastar cuota: la tabla de decisión con PRs sintéticos, el relanzamiento por cuota agotada con logs falsos, las cuatro alarmas del monitoreo mínimo y el ciclo OK → documentar → merge → cerrar con `task-close.sh` y `task-block.sh` reales contra dobles de `gh` y de `notion.sh`; sale con 1 si un caso falla. |
+| `/opt/devkit/scripts/notion.sh` | Cliente de la API de Notion para bash (DEVKIT-55): `card <Clave>` (la card como JSON, buscada por `ID` y `Proyecto`), `set <page_id> Prop=valor...` (el tipo de cada propiedad sale de la página; `Prop=` vacío la borra), `comentar <page_id> <texto>` (las URL quedan como enlace), `documentacion <page_id>` (entrada de Documentación por la relación `Tarea`), y `pagina`, `hijas` y `criterios`, que usa `task-close.sh` para la Épica. Lee el token de `/run/devkit/notion_token` y se lo pasa a `curl` por descriptor, nunca por argumento ni variable de entorno. Reintenta un `429` o un `5xx`. Sin el token sale con 3 y lo dice. `--test` corre su autoprueba con un doble de `curl`. |
+| `/opt/devkit/scripts/task-close.sh <Clave> [PR]` (o `devkit-run task-close <Clave> [PR]`) | Cierra una card con el PR mergeado, en bash (antes era la skill `task-close`): `Estado` = `Hecha`, `Cierre`, `PR` si faltaba, comentario "Cerrada. Documentación: <URL>" y marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR. Si la card no tiene entrada de Documentación, lanza `task-document`. Si es la última hija de su Épica, cierra la Épica con la regla de DEVKIT-44 (`En progreso` y Criterios de aceptación definidos) y lanza `task-document` para la entrada consolidada; si no, lanza con `devkit-run task-start` la siguiente hija libre (`Lista`, dependencias en `Hecha`, por `Orden` y `Prioridad`). Borra la rama local solo con el workspace libre y si su punta es el head mergeado. Idempotente: una card ya `Hecha` solo recibe el marcador si le falta. |
+| `/opt/devkit/scripts/task-block.sh <Clave> <motivo>` (o `devkit-run task-block <Clave> <motivo>`) | Bloquea una card, en bash (antes era la skill `task-block`): `Estado` = `Bloqueada` y un comentario "Bloqueada desde <estado anterior>." con el motivo. Si el workspace está en la rama de la card con cambios sin commit y nadie más lo ocupa, los guarda en un commit `wip(<Clave>)` y hace push. Lo usan `watch.sh`, `devkit-run` y las skills, por ruta; una card ya `Bloqueada` no se toca. El motivo recomendado para un agente: "Qué intenté: ... Qué necesito: ...". |
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): ese archivo es el token del editor en crudo y no se pega en un chat ni en una card (DEVKIT-51). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`, solo en la shell interactiva) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high\|xhigh\|max>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por su papel en el flujo (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca; lo llaman por ruta explícita (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el alias `devkit-run`, porque sus `SKILL.md` corren en el Bash no interactivo de `claude -p`, que no carga `zshrc` (DEVKIT-54). `watch.sh` lo usa también (ver más abajo). `devkit-run --otros-agentes` responde si otro agente ya ocupa el workspace: imprime los procesos `claude -p` ajenos y sale 0 si está libre, 1 si no. Es lo que debe usar una skill en vez de un `pgrep -f <Clave>`, que devuelve como ajenos los cuatro procesos propios del lanzamiento (el `--worker`, su subshell, su vigilante y el `claude -p` de uno mismo) porque la Clave viaja en sus argumentos; ese falso positivo bloqueó una card sin motivo en DEVKIT-54. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token` o `/run/devkit/notion_token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): esos archivos son el token del editor y el de Notion en crudo, y no se pegan en un chat ni en una card (DEVKIT-51, DEVKIT-55). Para hablar con Notion desde bash está `notion.sh`, que lee el token sin imprimirlo. Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`, solo en la shell interactiva) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high\|xhigh\|max>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por su papel en el flujo (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, bloquea la card con `task-block.sh` y un motivo forzado. `devkit-run task-close ...` y `devkit-run task-block ...` no lanzan modelo: corren en primer plano `task-close.sh` y `task-block.sh` (DEVKIT-55). Exporta `DEVKIT_SCRIPTS_DIR` (su propio directorio) y `DEVKIT_RUN_DIR` al `claude -p` que lanza, para que una skill que invoca otro script por ruta llegue a la misma copia y no a la de la imagen, vieja en modo dev; si el modelo resuelto sale vacío, no lanza: sale con 65 y deja `ALARMA: modelo vacío` en `watch.log` (antes la CLI moría con un 400 en el primer turno, DEVKIT-55). `task-close.sh` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte, así corre con el rol que le toca; `epic-plan` lo llama por ruta explícita (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el alias `devkit-run`, porque su `SKILL.md` corre en el Bash no interactivo de `claude -p`, que no carga `zshrc` (DEVKIT-54). `watch.sh` lo usa también (ver más abajo). `devkit-run --otros-agentes` responde si otro agente ya ocupa el workspace: imprime los procesos `claude -p` ajenos y sale 0 si está libre, 1 si no. Es lo que debe usar una skill en vez de un `pgrep -f <Clave>`, que devuelve como ajenos los cuatro procesos propios del lanzamiento (el `--worker`, su subshell, su vigilante y el `claude -p` de uno mismo) porque la Clave viaja en sus argumentos; ese falso positivo bloqueó una card sin motivo en DEVKIT-54. `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
-(cada 5 min). `watch.sh` mira cada PR cuyo título empieza por una Clave del
-proyecto y lanza en modo headless la skill que toca. Su único estado son los
-marcadores que las skills dejan en el PR; un rebuild no pierde nada.
+(cada 5 min los PRs abiertos, cada 30 s los mergeados). `watch.sh` mira cada
+PR cuyo título empieza por una Clave del proyecto y lanza en modo headless la
+skill que toca, o el script bash si es cerrar o bloquear. Su único estado son
+los marcadores que las skills y los scripts dejan en el PR; un rebuild no
+pierde nada.
+
+Los PRs mergeados tienen su propio bucle dentro de `watch.sh`, cada
+`DEVKIT_WATCH_MERGED_INTERVAL` segundos (30), aparte del de los abiertos: ese
+se queda esperando mientras corre una skill, que puede tardar veinte minutos,
+y un merge en ese rato no se cerraba hasta que terminara. El cierre en bash
+tarda segundos y deja en `watch.log` cuánto pasó desde el merge:
+
+```
+task-close-40 terminado: bash, cerrado 34s después del merge :: task-close: lanzada la siguiente hija: task-start DEVKIT-56
+```
 
 | Lo que ve en el PR | Qué lanza |
 |---|---|
@@ -140,8 +157,9 @@ marcadores que las skills dejan en el PR; un rebuild no pierde nada.
 | Último marcador `verdict=CAMBIOS` para el head, sin respuesta `devkit-fix` | `/task-fix <Clave>` |
 | Último marcador `verdict=CAMBIOS` para el head, con respuesta `devkit-fix` sin push nuevo (descartó todo o solo comentó) | `/pr-review <N>` otra vez, con la respuesta a la vista |
 | Último marcador `OK` y un comentario o review tuyo posterior (un approve no cuenta) | `/task-fix <Clave> "<tu comentario>"`; la card vuelve a `Revisión automática` |
-| Tres informes `CAMBIOS` desde el último `OK` o el último bloqueo, ya atendidos | Marcador `<!-- devkit-block sha=<head> -->` en el PR y `/task-block <Clave>`. No lo toca más hasta que muevas la card a `Revisión automática` y comentes en el PR qué hacer |
-| Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `/task-close <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
+| Último marcador `OK` para el head, sin marcador `<!-- devkit-doc sha=<head> -->` | `/task-document <Clave> <N>`, que escribe o actualiza la entrada de Documentación y deja ese marcador. Si la card vuelve atrás y un head nuevo recibe `OK`, corre otra vez sobre la misma entrada |
+| Tres informes `CAMBIOS` desde el último `OK` o el último bloqueo, ya atendidos | Marcador `<!-- devkit-block sha=<head> -->` en el PR y `task-block.sh <Clave> <motivo>`. No lo toca más hasta que muevas la card a `Revisión automática` y comentes en el PR qué hacer |
+| Mergeado en las últimas 48 h y sin marcador `devkit-closed` | `task-close.sh <Clave> <URL>`, que al terminar deja el marcador `<!-- devkit-closed sha=<merge commit> -->` en el PR |
 | Mergeado y con marcador `devkit-closed` | Nada: una línea `ya cerrado` en el log |
 
 El bucle no siempre espera el intervalo completo: duerme en tramos de 5 s y
@@ -177,8 +195,9 @@ la posición desde la que empieza a buscar el primero disponible.
 `revisión` (`pr-review` y `epic-plan`, desde DEVKIT-50: un mal desglose de
 Épica cuesta más que cualquier card) usa el primer modelo de la lista;
 `implementación` (`task-start`, `task-fix`, `task-submit`, `task-document`)
-el segundo; `contabilidad` (`task-close`, `task-block`, que solo comentan o
-cierran, sin escribir código) el tercero. El esfuerzo es `high` en todos los
+el segundo. Cerrar y bloquear no tienen rol: desde DEVKIT-55 son bash
+(`task-close.sh`, `task-block.sh`) y no lanzan modelo, así que el rol
+`contabilidad` que los agrupaba se retiró. El esfuerzo es `high` en todos los
 roles salvo `epic-plan`, que sube a `max`: un mal desglose se paga en todas
 sus hijas. El `Tipo` de la card (`feature`, `bug`, `chore`) ya no elige
 modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
@@ -218,7 +237,7 @@ así:
 pr-review-31-a1b2c3d terminado: modelo=fable esfuerzo=high costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
 ```
 
-Al terminar `task-close` de un PR mergeado, el bucle suma el `costo=` de todas
+Al terminar `task-close.sh` de un PR mergeado, el bucle suma el `costo=` de todas
 las líneas de ese número de PR en `watch.log` (todas sus rondas de revisión y
 corrección, no solo la del cierre) y deja una línea con el total del ciclo:
 
@@ -247,7 +266,7 @@ pedía DEVKIT-45 vive en `pr-guard.sh` (cada bloqueo suyo, en
 
 **Cuota agotada.** Si un `claude -p` muere porque se acabó la cuota de la
 suscripción, el agente no puede reaccionar: sin cuota no habla con el modelo y
-ninguna skill sirve, `task-block` incluida. Reacciona el bucle, que es bash. Lo
+ninguna skill sirve. Reacciona el bucle, que es bash. Lo
 reconoce por el código de salida distinto de cero más el aviso del límite en el
 log de la skill, saca de ahí la hora en que se reinicia la ventana y deja dos
 líneas en `watch.log`:
@@ -293,7 +312,8 @@ Variables: `DEVKIT_WATCH_INTERVAL` (segundos, 300), `DEVKIT_WATCH_MAX_CYCLES`
 (3), `DEVKIT_WATCH_QUOTA_RETRIES` (3), `DEVKIT_WATCH_QUOTA_WAIT` (1800, la
 espera fija), `DEVKIT_WATCH_QUOTA_MIN_WAIT` (60), `DEVKIT_WATCH_QUOTA_MAX_WAIT`
 (86400, tope por si el aviso trae una hora absurda), `DEVKIT_WATCH_SKILL_TIMEOUT`
-(1200), `DEVKIT_WATCH_SKILL_POLL` (5) y `DEVKIT_WATCH_ORPHAN_AGE` (1800). Para
+(1200), `DEVKIT_WATCH_SKILL_POLL` (5), `DEVKIT_WATCH_ORPHAN_AGE` (1800) y
+`DEVKIT_WATCH_MERGED_INTERVAL` (30, el bucle de PRs mergeados). Para
 ver qué decidiría sobre un PR sin esperar al bucle:
 
 ```sh
@@ -303,7 +323,7 @@ gh pr view <N> --json comments | bash /opt/devkit/scripts/watch.sh --decide-merg
 
 `--decide` responde por un PR abierto; `--decide-merged`, por uno ya mergeado
 (`cerrar` o `cerrada <sha>`), que no tiene head que revisar y solo se pregunta
-si `task-close` ya pasó.
+si `task-close.sh` ya pasó.
 
 La tabla de decisión tiene una prueba reproducible sin GitHub:
 `bash /opt/devkit/scripts/watch-test.sh` corre cada caso (PR vacío, `CAMBIOS`
@@ -320,10 +340,13 @@ resumen trae el modelo del rol resuelto por `devkit-run.sh` y que
 `--cycle-cost <N>` suma el costo de todas las líneas de ese PR en un log
 dado. `devkit-run.sh --test` prueba aparte la resolución de rol, el
 lanzamiento en segundo plano (numeración del log, candado con `watch.sh`), el
-aviso de presupuesto de turnos excedido, la cadena `task-close` → `task-start`
+aviso de presupuesto de turnos excedido, la cadena `epic-plan` → `task-start`
 (dos resúmenes con roles distintos), la anulación manual por
-`--modelo`/`--esfuerzo` y el relanzamiento forzado de `task-block` ante una
-pregunta abierta. De la lista `frontera` prueba la resolución normal, la caída
+`--modelo`/`--esfuerzo`, el bloqueo con `task-block.sh` ante una pregunta
+abierta, la delegación de `devkit-run task-block` al script, que un modelo
+vacío no se lanza y que el `claude -p` recibe `DEVKIT_SCRIPTS_DIR` y
+`DEVKIT_RUN_DIR` del lanzador aunque el entorno no los traiga o traiga la
+copia de la imagen. De la lista `frontera` prueba la resolución normal, la caída
 al siguiente modelo cuando el primero no responde, que la caída queda en
 `watch.log` y que con la caché escrita no se vuelve a sondear. Esa prueba de
 caída usa tres modelos, no dos, a propósito: con dos, "el siguiente de la
@@ -343,6 +366,23 @@ prueba aparte con el hook `--orphan-branch <edad> <tiene PR: si|no> <skill
 viva: si|no>`, que llama a la decisión pura sin tocar git ni `gh`. El comando
 `--agentes-vivos` se prueba contra un doble con la misma forma de línea de
 proceso que arma `devkit-run.sh --worker`, sin lanzar un `claude -p` real.
+
+El ciclo OK → documentar → merge → cerrar (DEVKIT-55) se prueba de punta a
+punta: `--decide` pasa de `documentar` a `nada` cuando aparece el marcador
+`devkit-doc` del head; `--run-skill` corre `task-document` con el segundo
+modelo de la frontera; y el hook `--merged-once` corre una pasada del bucle
+de mergeados contra un `gh` de mentira, con `task-close.sh` real y un doble
+de `notion.sh`. Comprueba la card en `Hecha` con `Cierre` y `PR`, el
+comentario con el enlace, el marcador `devkit-closed`, la siguiente hija
+libre elegida por `Orden` y dependencias, el cierre en menos de 60 s desde
+el merge y que una segunda pasada no repite nada. Casos aparte cubren la card
+ya `Hecha`, el PR sin merge, la entrada de Documentación que falta, la última
+hija que cierra la Épica, la Épica sin criterios y el bloqueo con
+`--block-pr` y `task-block.sh`. `notion.sh --test` prueba el cliente contra
+un doble de `curl`: el filtro por `ID` y `Proyecto`, que el token viaja solo
+como cabecera por descriptor, los tipos de `set`, los enlaces y tramos de
+`comentar`, la búsqueda por `Tarea`, la sección de criterios, los errores y
+el reintento de un `429`.
 
 Revisión de PRs: `/pr-review <N>` actúa como revisor independiente del
 autor. Comprueba cada criterio de aceptación de la card ejecutando algo, lee
@@ -389,14 +429,21 @@ commit. Un commit por hallazgo con la Clave como
 único que `pr-review` relee en el ciclo siguiente. Al terminar deja la card
 en `Revisión automática`. Nunca revisa, aprueba ni mergea.
 
-Cierre de PRs: `/task-close <Clave> [URL]` deja la card en `Hecha`, escribe la
-entrada de Documentación y publica en el PR el marcador
-`<!-- devkit-closed sha=<merge commit> -->` con el enlace a esa entrada, o
-solo, si la card ya estaba `Hecha` y no tiene entrada que enlazar.
+Documentación al aprobar: `/task-document <Clave> [N]` escribe la entrada de
+Documentación de la card (Qué cambió, Por qué, Cómo probarlo, Cambios
+requeridos, Enlaces) cuando `pr-review` da `OK`, y deja en el PR el marcador
+`<!-- devkit-doc sha=<head> -->`. Antes la escribía `task-close` al cerrar,
+cuando ya nadie la leía para revisar; ahora está lista antes de que apruebes, y
+si la revisión vuelve a abrir la card, la siguiente pasada actualiza la misma
+entrada, que encuentra por la relación `Tarea`. Nunca cambia el `Estado`.
+
+Cierre de PRs: `task-close.sh <Clave> [URL]` deja la card en `Hecha` y publica
+en el PR el marcador `<!-- devkit-closed sha=<merge commit> -->` con el enlace
+a la entrada de Documentación, o solo, si no hay entrada que enlazar.
 El marcador es lo que impide repetir el cierre: `/run/devkit/launched` vive en
 tmpfs y nace vacío en cada `devkit recreate`, así que antes el bucle relanzaba
-`task-close` sobre cada PR mergeado en las últimas 48 h, con card ya cerrada
-(unos 0,47 USD y 150 s por ejecución inútil). Para ponerlo a mano en un PR ya
+el cierre sobre cada PR mergeado en las últimas 48 h, con card ya cerrada
+(unos 0,47 USD y 150 s por ejecución inútil cuando era una skill). Para ponerlo a mano en un PR ya
 cerrado, o para poner al día un repo que viene de una versión anterior:
 
 ```sh
@@ -410,21 +457,25 @@ gh pr comment <N> --body "<!-- devkit-closed sha=$(gh pr view <N> --json mergeCo
 | `/project-init` | Alta de proyecto en Notion | Humano, una vez |
 | `/epic-plan <Clave>` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `/task-create <texto>` | Nace en Backlog | Humano o agente |
-| `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close` |
+| `/task-start [Clave]` | Lista → En progreso | Agente; también `epic-plan` y `task-close.sh` |
 | `/task-submit [Clave]` | En progreso → Revisión automática | Agente |
 | `/pr-review <número de PR>` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `/task-fix <Clave> [texto]` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
-| `/task-close <Clave>` | Lista para merge → Hecha | `watch.sh` tras el merge |
-| `/task-block <Clave> <motivo>` | Cualquiera → Bloqueada | Agente |
+| `/task-document <Clave> [N]` | Entrada de Documentación de una card en Lista para merge (o de una Épica cerrada); no cambia el Estado | `watch.sh` tras el `OK` de `pr-review`; `task-close.sh` si falta |
 | `/project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `/template-update <X.Y.Z>` | Sube la versión del template del proyecto y pone al día `AGENTS.md` | Agente |
 | `/template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
+
+Cerrar y bloquear ya no son skills (DEVKIT-55): `task-close.sh` (Lista para
+merge → Hecha, lo lanza `watch.sh` tras el merge) y `task-block.sh`
+(Cualquiera → Bloqueada, lo lanzan el agente, `watch.sh` y `devkit-run`). Ver
+sus filas en la tabla de comandos.
 
 Detalle y convenciones: [`devkit/agents/skills/README.md`](devkit/agents/skills/README.md).
 
 **Modo headless.** `watch.sh` invoca las skills con `claude -p`, donde no hay
 quien conteste: una pregunta al humano mata el proceso y deja la card a medias,
-así que equivale a `/task-block`. Toda ejecución headless termina en un estado
+así que equivale a bloquear la card con `task-block.sh`. Toda ejecución headless termina en un estado
 observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
 - `/task-start` lee los comentarios de la card antes de publicar el plan:
@@ -433,22 +484,19 @@ observable de la card, nunca a la espera. Dos skills lo hacen explícito:
   crear la rama y comentar el plan: implementa la card hasta cumplir todos
   los criterios de aceptación y termina ejecutando `/task-submit`. Si falta
   una decisión, un acceso o un criterio de aceptación, o se atasca más de dos
-  intentos en el mismo problema, ejecuta `/task-block` con la petición
+  intentos en el mismo problema, ejecuta `task-block.sh` con la petición
   concreta. Una ejecución que no deja la card en `Revisión automática` o
   `Bloqueada` es un corte, no un avance.
-- `/task-close`, al cerrar una hija de una Épica que aún tiene hermanas
-  pendientes, lanza la siguiente con
-  `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start
-  <Clave>` como proceso aparte y termina ahí mismo (DEVKIT-50): trabajarla en
-  la misma ejecución la dejaba correr con el rol de contabilidad de
-  `task-close` en vez del que le toca. `/epic-plan` hace lo mismo con la
-  primera hija. Las dos llaman al script por ruta explícita, no por el alias
-  `devkit-run`: el alias vive en `zshrc` y el Bash no interactivo de
-  `claude -p` no lo carga, así que `epic-plan` y `task-close` se quedaban sin
-  arrancar la hija siguiente (DEVKIT-54). Cuando todas las hijas terminan,
-  `task-close` cierra la Épica solo si está `En progreso` y tiene Criterios
-  de aceptación; si no cumple alguna, lo deja anotado en la Épica y no la
-  mueve a `Hecha`.
+- `task-close.sh`, al cerrar una hija de una Épica que aún tiene hermanas
+  pendientes, lanza la siguiente con `devkit-run task-start <Clave>` como
+  proceso aparte, con el rol que le toca (DEVKIT-50). `/epic-plan` hace lo
+  mismo con la primera hija, por ruta explícita,
+  `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`, no por el
+  alias `devkit-run`: el alias vive en `zshrc` y el Bash no interactivo de
+  `claude -p` no lo carga (DEVKIT-54). Cuando todas las hijas terminan,
+  `task-close.sh` cierra la Épica solo si está `En progreso` y tiene
+  Criterios de aceptación; si no cumple alguna, lo deja anotado en la Épica y
+  no la mueve a `Hecha`.
 
 ## Qué declara cada proyecto
 
