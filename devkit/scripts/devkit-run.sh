@@ -740,6 +740,18 @@ FIN
   DEVKIT_TASK_BLOCK_BIN="$bloqueo" bash "$HERE/devkit-run.sh" task-block DEVKIT-3 falta el token >/dev/null 2>&1
   check "devkit-run task-block delega en el script bash" 'DEVKIT-3|falta|el|token|' \
     "$(cat "$tmp/bloqueo.args" 2>/dev/null)"
+  # Un watch.sh viejo pide las skills retiradas por --sync: van a los scripts
+  # y no llegan a `claude`.
+  rm -f "$tmp/bloqueo.args"
+  DEVKIT_CLAUDE_BIN=/bin/false DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" --sync '/task-block DEVKIT-3 tres ciclos sin OK' >/dev/null 2>&1
+  check "--sync /task-block (watch.sh viejo) va al script" 'DEVKIT-3|tres ciclos sin OK|' \
+    "$(cat "$tmp/bloqueo.args" 2>/dev/null)"
+  rm -f "$tmp/bloqueo.args"
+  DEVKIT_CLAUDE_BIN=/bin/false DEVKIT_TASK_CLOSE_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" --sync '/task-close DEVKIT-3 https://github.com/o/r/pull/9' >/dev/null 2>&1
+  check "--sync /task-close (watch.sh viejo) va al script" 'DEVKIT-3|https://github.com/o/r/pull/9|' \
+    "$(cat "$tmp/bloqueo.args" 2>/dev/null)"
 
   # Modelo vacío (DEVKIT-55): con una lista `frontera` vacía no hay modelo que
   # resolver. Antes se lanzaba `claude --model ""` y moría con un 400; ahora no
@@ -823,6 +835,23 @@ case "${1:-}" in
     exit 0
     ;;
   --sync)
+    # Un `watch.sh` anterior a DEVKIT-55, todavía vivo tras el merge hasta el
+    # próximo `devkit recreate`, sigue pidiendo "/task-close <Clave> <URL>" y
+    # "/task-block <Clave> <motivo>" como skills. Esas skills ya no existen:
+    # se atienden con los scripts bash, para que el cambio de versión no deje
+    # cards sin cerrar ni un `claude -p` improvisando un paso que no conoce.
+    case "${2:-}" in
+      /task-close\ *|/task-block\ *)
+        read -r sync_skill sync_clave sync_resto <<<"${2#/}"
+        if [ "$sync_skill" = task-block ]; then
+          "$TASK_BLOCK_BIN" "$sync_clave" "$sync_resto"
+        else
+          # shellcheck disable=SC2086  # la URL del PR es una sola palabra
+          "$TASK_CLOSE_BIN" "$sync_clave" $sync_resto
+        fi
+        exit $?
+        ;;
+    esac
     read -r modelo esfuerzo _ < <(model_effort_of "${2:-}")
     modelo_valido "${modelo:-}" "${2:-}" || exit 65
     run_claude "${2:-}" "$modelo" "$esfuerzo"

@@ -49,6 +49,10 @@ versión que usa un proyecto y la destino.
   página "Ingeniería" y guardar su token en Bitwarden con la clave
   `notion_token`; luego `devkit recreate`. Sin el secreto, `task-close.sh` y
   `task-block.sh` fallan con un mensaje claro y el bucle deja `ALARMA:`.
+  Hasta el `recreate`, el `watch.sh` que ya corre sigue pidiendo
+  `/task-close` y `/task-block` como skills; `devkit-run --sync` los atiende
+  con los scripts, así que el cierre funciona igual, pero con el tick viejo de
+  5 min: el bucle de 30 s llega con el `recreate`.
 
 ### Modelos por frontera: `roles.toml` declara una lista ordenada (DEVKIT-54)
 
