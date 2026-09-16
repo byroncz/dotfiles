@@ -27,6 +27,7 @@ alias g='git'
 alias gs='git status -sb'
 alias gl='git log --oneline --graph --decorate -20'
 alias ll='ls -lah --color=auto'
+alias c='clear'
 alias devkit-net-denied='/opt/devkit/scripts/net-denied.sh'
 alias devkit-run='${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh'
 
