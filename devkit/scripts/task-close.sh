@@ -105,7 +105,7 @@ if [ -z "$pr" ]; then
   say "$clave sin PR; comentado en la card"
   exit 1
 fi
-if ! pr_json=$("$GH" pr view "$pr" --json state,mergeCommit,url,number,comments,headRefOid 2>/dev/null); then
+if ! pr_json=$("$GH" pr view "$pr" --json state,mergeCommit,url,number,comments,headRefOid,body,reviews 2>/dev/null); then
   say "gh no pudo leer el PR $pr"
   exit 1
 fi
@@ -117,6 +117,20 @@ sha=$(jq -r '.mergeCommit.oid // ""' <<<"$pr_json")
 pr_url=$(jq -r .url <<<"$pr_json")
 pr_num=$(jq -r .number <<<"$pr_json")
 
+# --- Marcas de modelo (DEVKIT-58) ------------------------------------------
+# Este script es bash y no usa modelo, así que no tiene marca propia: copia al
+# comentario de cierre la de quien implementó (cuerpo del PR, la escribe
+# task-submit) y la del último informe de pr-review. Así la card dice con qué
+# modelo y esfuerzo se produjo lo que se mergeó sin abrir el PR. Una marca que
+# falta se dice como tal, no se deduce de roles.toml: el rol dice qué se
+# pretendía lanzar, no qué corrió.
+marca() {  # marca <verbo> <texto>: última línea "<verbo> con ..." del texto
+  printf '%s\n' "$2" | tr -d '\r' | grep -oE "$1 con [^,]+, esfuerzo .+" | tail -1 | sed -E 's/[[:space:].]+$//'
+}
+marca_impl=$(marca Implementado "$(jq -r '.body // ""' <<<"$pr_json")")
+marca_rev=$(marca Revisado "$(jq -r '[(.reviews // [])[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body // ""' <<<"$pr_json")")
+marcas="${marca_impl:-Implementado: sin marca en el PR}. ${marca_rev:-Revisado: sin marca en el último informe}. Cierre sin modelo (task-close.sh)."
+
 # --- Card ------------------------------------------------------------------
 transicion=0
 doc_url=""
@@ -127,12 +141,12 @@ if [ "$estado" != "Hecha" ]; then
   transicion=1
   if doc=$("$NOTION" documentacion "$id"); then
     doc_url=$(jq -r .url <<<"$doc")
-    "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url"
+    "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url. $marcas"
   elif documentando "$clave"; then
-    "$NOTION" comentar "$id" "Cerrada. La entrada de Documentación la está escribiendo task-document."
+    "$NOTION" comentar "$id" "Cerrada. La entrada de Documentación la está escribiendo task-document. $marcas"
     say "$clave sin entrada de Documentación todavía; task-document ya corre, no se relanza"
   else
-    "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: se lanza task-document para escribirla."
+    "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: se lanza task-document para escribirla. $marcas"
     "$DEVKIT_RUN" task-document "$clave" >/dev/null 2>&1 \
       && say "$clave sin entrada de Documentación; lanzado task-document" \
       || say "$clave sin entrada de Documentación y no pude lanzar task-document"

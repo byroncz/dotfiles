@@ -20,7 +20,8 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 3. Commit de lo pendiente con Conventional Commits y la Clave como ámbito.
    `git push`.
 4. Si ya existe un PR para la rama (`gh pr view --json url`), no crees otro:
-   actualiza su descripción si cambió el alcance y salta al paso 6.
+   actualiza su descripción si cambió el alcance (conserva la línea
+   "Implementado con ..." del paso 5; si falta, agrégala) y salta al paso 6.
 5. Crea el PR con `gh pr create --base main --title "<Clave> <título de la
    card>" --body-file -` y este cuerpo:
 
@@ -33,7 +34,22 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 
    ## Card
    <URL de la card en Notion>
+
+   Implementado con <modelo>, esfuerzo <esfuerzo>
    ```
+
+   La última línea sale de las variables que `devkit-run` exporta al
+   `claude -p` (DEVKIT-58):
+
+   ```sh
+   echo "Implementado con ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"
+   ```
+
+   Cópiala tal cual, en una línea propia y sin formato. Si las variables
+   vienen vacías (sesión interactiva, sin `devkit-run`), escribe el alias del
+   modelo que te ejecuta (`fable`, `opus`, `sonnet`) y `esfuerzo sin
+   registrar`; nunca inventes un esfuerzo. `task-close.sh` lee esta línea
+   para el comentario de cierre.
 
 6. Activa el auto-merge: `gh pr merge --auto --squash`. Si GitHub lo rechaza
    porque el repo no lo permite, comenta en la card que falta activar
