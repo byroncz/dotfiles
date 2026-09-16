@@ -47,8 +47,9 @@
 # de `gh pr view <N> --json comments`. Los hooks `--quota-hit`, `--quota-reset`
 # y `--run-skill` prueban el relanzamiento por cuota agotada; ver watch-test.sh.
 #
-# Monitoreo mínimo sin modelo (DEVKIT-46): cuatro alarmas en bash, todas como
-# líneas "ALARMA: ..." en watch.log, sin costo de tokens: skill que terminó
+# Monitoreo mínimo sin modelo (DEVKIT-46): cinco alarmas en bash, todas como
+# líneas "ALARMA: ..." en watch.log, sin costo de tokens. Las cuatro primeras
+# son estas (la quinta, más abajo): skill que terminó
 # con error, skill de más de `DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo
 # (1200 por defecto), `result` que termina en pregunta en vez de un estado
 # observable, y rama de una card sin PR y sin `claude -p` vivo hace más de
@@ -82,7 +83,7 @@ QUOTA_RETRIES="${DEVKIT_WATCH_QUOTA_RETRIES:-3}"
 QUOTA_WAIT="${DEVKIT_WATCH_QUOTA_WAIT:-1800}"
 QUOTA_MIN_WAIT="${DEVKIT_WATCH_QUOTA_MIN_WAIT:-60}"
 QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
-# Monitoreo mínimo sin modelo (DEVKIT-46): cuatro alarmas en bash, todas como
+# Monitoreo mínimo sin modelo (DEVKIT-46): cinco alarmas en bash, todas como
 # líneas "ALARMA: ..." en watch.log. `SKILL_TIMEOUT`/`SKILL_POLL` gobiernan la
 # alarma de skill lenta; `ORPHAN_MAX_AGE`, la de rama huérfana.
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
