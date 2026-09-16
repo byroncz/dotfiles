@@ -202,7 +202,7 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 |---|---|
 | Terminal en el Mac | Terminal.app, macOS 26. Corre solo el comando `devkit`: el trabajo real pasa por el editor en el navegador o por `devkit shell` |
 | Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
-| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensión Claude Code instalada desde Open VSX, `ruff` y `basedpyright` instalados con `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2 |
+| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensión Claude Code instalada desde Open VSX, `ruff` y `basedpyright` instalados con `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. Chat integrado (Copilot Chat) apagado con `chat.disableAIFeatures` desde DEVKIT-66: el agente del devkit es Claude Code, y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. El ajuste oculta el chat y sus vistas sin desinstalar nada; Claude Code no depende de él |
 
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
