@@ -420,12 +420,15 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 # lo usa el relanzamiento de un task-fix vacío (DEVKIT-57). El modelo con el
 # que corrió queda en ULTIMO_MODELO para quien llama.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto skill_pid watcher_pid resultado en_linea
   logf="$RUN_DIR/$name.log"
   # Antes del candado: `devkit-run --estado` cuenta el lanzamiento desde aquí,
-  # aunque espere a otra skill o a la sonda de modelos (DEVKIT-57).
+  # aunque espere a otra skill o a la sonda de modelos (DEVKIT-57). Se corta
+  # por caracteres, como `prompt_en_linea` de devkit-run.sh: `cut -c` corta
+  # por bytes y partiría un acento, y --estado ya no reconocería la línea.
+  en_linea=$(printf '%s' "$prompt" | tr '\n"' '  ')
   printf '%s %s lanzando (origen=bucle): "%s" log=%s\n' "$(date -u +%FT%TZ)" "$name" \
-    "$(printf '%s' "$prompt" | tr '\n"' '  ' | cut -c1-120)" "$logf"
+    "${en_linea:0:120}" "$logf"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
   # mismo workspace se pisarían la rama.

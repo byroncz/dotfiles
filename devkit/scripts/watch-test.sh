@@ -251,7 +251,7 @@ corre_doble() {
   DEVKIT_WATCH_QUOTA_RETRIES="${RETRIES:-3}" \
   DEVKIT_WATCH_SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}" \
   DEVKIT_WATCH_SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}" \
-    bash "$WATCH" --run-skill "pr-review-9-abc1234" "/pr-review 9" "revisar:9:abc1234" \
+    bash "$WATCH" --run-skill "${NOMBRE:-pr-review-9-abc1234}" "${PROMPT:-/pr-review 9}" "revisar:9:abc1234" \
     >"$OUT" 2>&1
   LLAMADAS=$(cat "$dir/llamadas" 2>/dev/null || echo 0)
   LAUNCHED_FILE="$dir/run/launched"
@@ -316,6 +316,14 @@ check_log "la línea de resumen trae el modelo del rol de revisión" \
 # `devkit-run --estado`.
 check_log "run_skill deja la línea lanzando con origen bucle" \
   'pr-review-9-abc1234 lanzando \(origen=bucle\): "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
+# Un comentario humano con acentos de más de 120 bytes: el corte es por
+# caracteres, así que la línea sigue siendo UTF-8 válido y --estado la muestra.
+NOMBRE=fix-humano-9 PROMPT="/task-fix DEVKIT-9 $(printf 'á%.0s' $(seq 1 80))" corre_doble 0
+check_igual "prompt acentuado largo: la línea lanzando es UTF-8 válido" 0 \
+  "$(iconv -f UTF-8 -t UTF-8 "$OUT" >/dev/null 2>&1; echo $?)"
+check_igual "prompt acentuado largo: devkit-run --estado lo muestra" 1 \
+  "$(DEVKIT_WATCH_LOG="$OUT" DEVKIT_RUN_DIR="$(dirname "$OUT")/run" bash "$HERE/devkit-run.sh" --estado 2>&1 \
+    | grep -c 'DEVKIT-9')"
 
 # --- Costo total del ciclo de un PR (DEVKIT-45) ------------------------------
 # cycle_cost suma "costo=" de todas las líneas de un PR en watch.log, no solo
