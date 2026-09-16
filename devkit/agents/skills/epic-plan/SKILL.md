@@ -43,5 +43,6 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
 
 - El humano puede vetar en cualquier momento moviendo una hija a Backlog o
   Bloqueada. No discutas el veto; respétalo.
-- Si la Épica no tiene criterios de aceptación, no planifiques: usa
-  `task-block` sobre la Épica pidiendo criterios.
+- Si la Épica no tiene criterios de aceptación, no planifiques: bloquéala
+  con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave>
+  "<motivo>"` pidiendo criterios.

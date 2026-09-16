@@ -131,10 +131,11 @@ trabajo de `pr-review`.
 - No amplíes el alcance: un hallazgo no autoriza a refactorizar lo que no
   nombra. Lo que descubras fuera del alcance va a una card nueva con
   `task-create`, y se menciona en la línea de respuesta del hallazgo.
-- La guardia contra bucles infinitos (tres ciclos sin `OK` → `task-block`)
+- La guardia contra bucles infinitos (tres ciclos sin `OK` → `task-block.sh`)
   la aplica el bucle del contenedor, no esta skill. Si recibes un hallazgo
-  que ya atendiste dos veces con el mismo texto, en vez de insistir usa
-  `task-block` con la Clave y ese hallazgo como motivo.
+  que ya atendiste dos veces con el mismo texto, en vez de insistir bloquea
+  la card con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh"
+  <Clave> "<motivo>"`, con ese hallazgo como motivo.
 - Modo headless (`claude -p "/task-fix <Clave> [texto]"`): sin preguntas.
   Si falta algo (card sin PR, PR cerrado, hallazgo ilegible), responde qué
   falta y termina sin tocar la rama. Un hallazgo ilegible se responde como

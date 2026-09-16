@@ -59,7 +59,7 @@ has_flag() {
   return 1
 }
 
-# True si el segmento solo comprueba que /run/devkit/vscode-token existe
+# True si el segmento solo comprueba que un token de /run/devkit existe
 # (test/[/[[ con -e/-f/-r/-s), no si lee su contenido. Lista blanca, no
 # negra: cualquier otra forma de tocar la ruta cae al bloqueo por defecto
 # del llamador. El comando de la comprobación debe ser el primer token del
@@ -227,6 +227,14 @@ reason_for_segment() {
     return 0
   fi
 
+  # DEVKIT-55: la misma regla para el token de Notion. Los scripts que lo usan
+  # (notion.sh, task-close.sh, task-block.sh) lo leen por dentro; un agente no
+  # necesita tocar la ruta.
+  if [[ "$nseg" =~ /run/devkit/notion_token ]] && ! is_token_existence_check "$nseg"; then
+    printf 'leer /run/devkit/notion_token expone el token de Notion; usa notion.sh, que lo lee sin imprimirlo'
+    return 0
+  fi
+
   return 1
 }
 
@@ -346,6 +354,13 @@ run_tests() {
   # que termina imprimiendo el token.
   check 'ls /run/devkit/vscode-token | xargs cat' block
   check 'stat -c %n /run/devkit/vscode-token | xargs cat' block
+
+  # DEVKIT-55: el token de Notion sigue la misma regla que el del editor.
+  check 'cat /run/devkit/notion_token' block
+  check 'curl -H "Authorization: Bearer $(cat /run/devkit/notion_token)" https://api.notion.com/v1/users' block
+  check 'base64 /run/devkit/notion_token' block
+  check 'test -s /run/devkit/notion_token' allow
+  check 'bash /workspace/devkit/scripts/notion.sh card DEVKIT-55' allow
 
   # DEVKIT-20, cuarta ronda: --auto es booleano y "=false"/"=0" lo apaga,
   # el mismo caso que "sin --auto" ya prohíbe.
