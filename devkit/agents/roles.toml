@@ -1,39 +1,47 @@
 # Tabla rol -> modelo, esfuerzo y presupuesto de turnos, en un solo archivo
-# del template (DEVKIT-45). La lee `devkit/scripts/devkit-run.sh`, el único
-# punto de lanzamiento de una skill en segundo plano; ver ese script para
-# cómo se resuelve el rol de cada skill.
+# del template (DEVKIT-45, reescrita en DEVKIT-54). La lee
+# `devkit/scripts/devkit-run.sh`, el único punto de lanzamiento de una skill
+# en segundo plano; ver ese script para cómo se resuelve el rol de cada
+# skill.
 #
-# Modelos: alias válidos para `claude --model` en esta versión de la CLI
-# (`claude --help`). `max_turns` es un presupuesto, no un límite: la CLI
-# instalada (2.1.270) no expone `--max-turns`, así que devkit-run compara
-# `num_turns` del resultado contra este número y solo avisa en el log si se
-# excede. Ver la entrada de Documentación de DEVKIT-45 para la evidencia.
+# Modelo por papel en el flujo, no por Tipo de la card (DEVKIT-54): un mal
+# desglose de Épica o una revisión floja cuestan más que cualquier card
+# individual, y el modelo barato no ahorró nada en la práctica (evidencia en
+# la entrada de Documentación de DEVKIT-54: DEVKIT-51 en Sonnet necesitó tres
+# ciclos, y un task-fix en Haiku por rol `chore` concluyó "nada que corregir"
+# con un veredicto CAMBIOS vigente). El Tipo sigue eligiendo el prefijo de
+# rama (`feat/`, `fix/`, `chore/`) y la sección del CHANGELOG; ya no elige
+# modelo.
 #
-# contabilidad: skills que solo comentan o cierran una card ya resuelta
-# (task-close, task-block), sin escribir código. El modelo más barato y
-# esfuerzo bajo alcanzan.
-contabilidad.model = "claude-haiku-4-5-20251001"
-contabilidad.effort = "low"
-contabilidad.max_turns = 15
+# `frontera` es la lista ordenada de modelos de frontera, por alias de
+# `claude --model`. `devkit-run` prueba el primero disponible en cada
+# arranque (una llamada mínima por modelo, cacheada en `/run/devkit/`) y cae
+# al siguiente si no responde. Cada rol declara `model_index`: la posición
+# (1-based) en esta lista desde la que empieza a buscar.
+frontera = ["fable", "opus", "sonnet"]
 
-# implementación: el resto de las skills (task-start, task-fix, task-submit,
-# epic-plan, etc.), una tabla por `Tipo` de card. `chore` suele ser
-# mecánico (renombrar, mover, documentar) y tolera el modelo barato;
-# `feature` y `bug` tocan lógica y se quedan con el modelo fuerte.
-implementacion.feature.model = "claude-sonnet-5"
-implementacion.feature.effort = "medium"
-implementacion.feature.max_turns = 40
-
-implementacion.bug.model = "claude-sonnet-5"
-implementacion.bug.effort = "medium"
-implementacion.bug.max_turns = 30
-
-implementacion.chore.model = "claude-haiku-4-5-20251001"
-implementacion.chore.effort = "medium"
-implementacion.chore.max_turns = 25
-
-# revisión: pr-review, siempre el modelo más fuerte y esfuerzo alto, sin
-# importar el Tipo de la card que revisa (DEVKIT-45, criterio de aceptación).
-revision.model = "claude-opus-5"
+# revisión: pr-review y epic-plan, siempre el primer modelo de la lista.
+# `max_turns` es un presupuesto, no un límite: la CLI instalada (2.1.270) no
+# expone `--max-turns`, así que devkit-run compara `num_turns` del resultado
+# contra este número y solo avisa en el log si se excede.
+revision.model_index = 1
 revision.effort = "high"
 revision.max_turns = 50
+
+# epic-plan pesa más que pr-review dentro de revisión: un mal desglose se
+# paga en todas sus hijas, así que sube a esfuerzo máximo.
+epic-plan.effort = "max"
+
+# implementación: task-start, task-fix, task-submit y task-document (nace en
+# la hija siguiente de la Épica de DEVKIT-54; declara su rol aquí para no
+# volver a tocar este archivo cuando se cree). Segundo modelo de la lista.
+implementacion.model_index = 2
+implementacion.effort = "high"
+implementacion.max_turns = 40
+
+# contabilidad: skills que solo comentan o cierran una card ya resuelta
+# (task-close, task-block), sin escribir código. Tercer modelo de la lista.
+# Se retira en la hija siguiente de esta Épica, no aquí.
+contabilidad.model_index = 3
+contabilidad.effort = "high"
+contabilidad.max_turns = 15

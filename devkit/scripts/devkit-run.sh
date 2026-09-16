@@ -15,7 +15,7 @@
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
-#   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]
+#   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]
 #     La línea de resumen en watch.log marca "(anulación manual)".
 #
 # Modos que usa `watch.sh` (no para uso manual):
@@ -26,6 +26,11 @@
 #   devkit-run --test                               autoprueba
 #
 # La tabla rol -> modelo/esfuerzo/turnos vive en devkit/agents/roles.toml.
+# Desde DEVKIT-54, el modelo no se elige por Tipo de la card sino por el papel
+# de la skill en el flujo: `roles.toml` declara una lista `frontera` ordenada
+# de alias de modelo y cada rol un `model_index` (posición 1-based desde la
+# que empieza a buscar). El Tipo sigue eligiendo prefijo de rama y sección
+# del CHANGELOG, pero ya no modelo.
 # Los permisos (qué puede correr una skill sin pedir permiso) siguen en
 # `devkit/agents/settings.json`: este script no los toca ni los reemplaza.
 # `docs/ARCHITECTURE.md` 8.2 documenta que la lista `allow` de ese archivo no
@@ -60,6 +65,12 @@ if [ -z "$ROLES_FILE" ]; then
   fi
 fi
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
+# Cache de disponibilidad de modelo, una vez por arranque: /run/devkit es
+# tmpfs y nace vacío en cada `devkit recreate`, igual que /run/devkit/launched
+# (DEVKIT-24), así que el resultado no sobrevive a un rebuild y se vuelve a
+# comprobar entonces.
+FRONTERA_CACHE_DIR="${DEVKIT_FRONTERA_CACHE_DIR:-$RUN_DIR/frontera}"
+MODEL_CHECK_TIMEOUT="${DEVKIT_MODEL_CHECK_TIMEOUT:-30}"
 # Mismo candado que `run_skill` en watch.sh: un solo `claude -p` a la vez
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
@@ -70,22 +81,32 @@ LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
 SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 
-# Última coincidencia de "<rol>.<campo> = valor" en roles.toml, sin comillas.
-# roles.toml usa claves punteadas (TOML válido) a propósito: este grep no
-# necesita entender tablas ni tipos, solo esa forma fija.
-role_field() {  # role_field <rol> <campo>
+# Última coincidencia de "<clave>.<campo> = valor" en roles.toml, sin
+# comillas. La clave puede ser un rol (`revision`, `implementacion`,
+# `contabilidad`) o el nombre de una skill puntual (`epic-plan`), para
+# anular un campo del rol sin crear un rol nuevo. roles.toml usa claves
+# punteadas (TOML válido) a propósito: este grep no necesita entender tablas
+# ni tipos, solo esa forma fija.
+role_field() {  # role_field <clave> <campo>
   grep -E "^${1}\.${2}[[:space:]]*=" "$ROLES_FILE" 2>/dev/null | tail -1 \
     | sed -E 's/^[^=]+=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/'
 }
 
+# Lista `frontera = ["a", "b", "c"]` de roles.toml, un alias de modelo por
+# línea de salida, en el orden declarado. Es un array, no un escalar, así que
+# no usa role_field.
+frontera_list() {
+  grep -E '^frontera[[:space:]]*=' "$ROLES_FILE" 2>/dev/null | tail -1 \
+    | sed -E 's/^frontera[[:space:]]*=[[:space:]]*\[(.*)\][[:space:]]*$/\1/' \
+    | tr ',' '\n' | sed -E 's/^[[:space:]"]+//; s/[[:space:]"]+$//'
+}
+
 # Rol de una skill a partir del primer token del prompt ("/pr-review 31" ->
-# "pr-review"). Grupos del criterio de aceptación de DEVKIT-45: contabilidad
-# (task-close, task-block: solo comentan o cierran, no escriben código),
-# revision (pr-review, siempre el modelo fuerte) e implementacion (el resto).
-# epic-plan entra en revision desde DEVKIT-50: un mal desglose de Épica cuesta
-# más que cualquier card individual, así que se queda con el modelo fuerte y
-# esfuerzo alto en vez del que le tocaría por Tipo (que además no tiene,
-# porque una Épica no es feature/bug/chore).
+# "pr-review"). Grupos del criterio de aceptación de DEVKIT-45/DEVKIT-54:
+# contabilidad (task-close, task-block: solo comentan o cierran, no escriben
+# código), revisión (pr-review, epic-plan: un mal desglose o una revisión
+# floja cuestan más que cualquier card) e implementación (el resto:
+# task-start, task-fix, task-submit, task-document).
 role_of() {  # role_of <prompt>
   local skill
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
@@ -96,31 +117,63 @@ role_of() {  # role_of <prompt>
   esac
 }
 
-# Tipo de la card (feature/bug/chore) para el rol implementación. watch.sh no
-# consulta Notion desde bash (ver la nota de `work_state` ahí), así que se
-# deriva del prefijo de la rama actual: feat/, fix/ o chore/, el mismo que
-# usa `task-start` para nombrarla (AGENTS.md). Sin rama de card todavía (por
-# ejemplo, `task-start` antes de crear la suya, que corre en `main`), no hay
-# forma de saberlo sin tocar Notion: usa "feature" como término medio
-# razonado, más caro que chore pero lejos del modelo de revisión, en vez de
-# bloquear el lanzamiento por un dato que no existe todavía.
-tipo_of() {
-  local branch
-  branch=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)
-  case "$branch" in
-    feat/*) printf 'feature' ;;
-    fix/*) printf 'bug' ;;
-    chore/*) printf 'chore' ;;
-    *) printf 'feature' ;;
-  esac
+# Si el modelo <alias> responde, con el resultado cacheado en
+# FRONTERA_CACHE_DIR para no repetir la llamada en cada lanzamiento (DEVKIT-54:
+# "una llamada mínima por modelo", "una vez por arranque"). Devuelve
+# verdadero/falso por código de salida.
+modelo_disponible() {  # modelo_disponible <alias>
+  local modelo_id=$1 cache
+  cache="$FRONTERA_CACHE_DIR/$modelo_id"
+  mkdir -p "$FRONTERA_CACHE_DIR" 2>/dev/null
+  if [ -f "$cache" ]; then
+    [ "$(cat "$cache" 2>/dev/null)" = "si" ]
+    return
+  fi
+  local resultado=no
+  if timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" --model "$modelo_id" \
+       --output-format json >/dev/null 2>&1; then
+    resultado=si
+  fi
+  printf '%s' "$resultado" > "$cache" 2>/dev/null
+  [ "$resultado" = "si" ]
 }
 
-# "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt.
+# Primer modelo disponible de `frontera`, buscando desde la posición
+# <indice_inicial> (1-based) hacia el final de la lista. Si ninguno responde,
+# devuelve el último de la lista completa como último recurso: lanzar con el
+# modelo más débil vale más que no lanzar nada.
+resolver_modelo() {  # resolver_modelo <indice_inicial>
+  local idx=${1:-1} modelos modelo i=0
+  modelos=$(frontera_list)
+  [ -n "$idx" ] || idx=1
+  while IFS= read -r modelo; do
+    i=$((i + 1))
+    [ -n "$modelo" ] || continue
+    [ "$i" -ge "$idx" ] || continue
+    if modelo_disponible "$modelo"; then
+      printf '%s' "$modelo"
+      return 0
+    fi
+  done <<EOF
+$modelos
+EOF
+  printf '%s' "$modelos" | tail -1
+}
+
+# "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt. El esfuerzo
+# admite una anulación por skill (por ejemplo `epic-plan.effort`) por encima
+# del que trae su rol; el modelo sale siempre de `resolver_modelo` con el
+# `model_index` del rol.
 model_effort_of() {  # model_effort_of <prompt>
-  local role
+  local role skill idx modelo esfuerzo turnos
+  skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   role=$(role_of "$1")
-  [ "$role" = "implementacion" ] && role="implementacion.$(tipo_of)"
-  printf '%s %s %s' "$(role_field "$role" model)" "$(role_field "$role" effort)" "$(role_field "$role" max_turns)"
+  idx=$(role_field "$role" model_index)
+  modelo=$(resolver_modelo "$idx")
+  esfuerzo=$(role_field "$skill" effort)
+  [ -n "$esfuerzo" ] || esfuerzo=$(role_field "$role" effort)
+  turnos=$(role_field "$role" max_turns)
+  printf '%s %s %s' "$modelo" "$esfuerzo" "$turnos"
 }
 
 # Ejecuta la skill en primer plano; deja el JSON de `claude -p` en stdout.
@@ -199,50 +252,15 @@ run_tests() {
   check "rol de task-block" contabilidad "$(role_of '/task-block DEVKIT-44 razón')"
   check "rol de task-start" implementacion "$(role_of '/task-start')"
   check "rol de task-fix" implementacion "$(role_of '/task-fix DEVKIT-44')"
+  check "rol de task-submit" implementacion "$(role_of '/task-submit DEVKIT-44')"
+  check "rol de task-document" implementacion "$(role_of '/task-document DEVKIT-44')"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
-  ROLES_FILE="$tmp/roles.toml" cat >"$tmp/roles.toml" <<'FIN'
-contabilidad.model = "modelo-barato"
-contabilidad.effort = "low"
-contabilidad.max_turns = 15
-implementacion.feature.model = "modelo-fuerte"
-implementacion.feature.effort = "medium"
-implementacion.feature.max_turns = 40
-implementacion.chore.model = "modelo-barato"
-implementacion.chore.effort = "medium"
-implementacion.chore.max_turns = 25
-revision.model = "modelo-revision"
-revision.effort = "high"
-revision.max_turns = 50
-FIN
-  check "campo de contabilidad" "modelo-barato" \
-    "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model)"
-  check "campo de revisión" "modelo-revision" "$(ROLES_FILE="$tmp/roles.toml" role_field revision model)"
 
-  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
-  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
-  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
-  mkdir -p "$tmp/nested/scripts"
-  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
-  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-revision high 50" \
-    "$(DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
-
-  git -C "$tmp" init -q
-  git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
-  git -C "$tmp" checkout -q -b feat/DEVKIT-1-algo
-  check "tipo desde rama feat/" feature "$(WS="$tmp" tipo_of)"
-  git -C "$tmp" checkout -q -b chore/DEVKIT-2-algo
-  check "tipo desde rama chore/" chore "$(WS="$tmp" tipo_of)"
-
-  check "modelo/esfuerzo de pr-review" "modelo-revision high 50" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/pr-review 9')"
-  check "modelo/esfuerzo de task-close" "modelo-barato low 15" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/task-close DEVKIT-2 url')"
-  check "modelo/esfuerzo de implementación en rama chore/" "modelo-barato medium 25" \
-    "$(ROLES_FILE="$tmp/roles.toml" WS="$tmp" model_effort_of '/task-fix DEVKIT-2')"
-
-  # --worker de punta a punta, con un doble de `claude` que no gasta cuota.
+  # Un doble de `claude` que no gasta cuota: responde bien a cualquier
+  # `--model`, así sirve tanto para las comprobaciones de disponibilidad como
+  # para los lanzamientos de punta a punta de más abajo.
   local doble
   doble="$tmp/claude"
   cat >"$doble" <<'FIN'
@@ -250,9 +268,95 @@ FIN
 printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
 FIN
   chmod +x "$doble"
+
+  cat >"$tmp/roles.toml" <<'FIN'
+frontera = ["modelo-barato", "modelo-medio", "modelo-fuerte"]
+contabilidad.model_index = 1
+contabilidad.effort = "low"
+contabilidad.max_turns = 15
+implementacion.model_index = 3
+implementacion.effort = "medium"
+implementacion.max_turns = 40
+revision.model_index = 3
+revision.effort = "high"
+revision.max_turns = 50
+epic-plan.effort = "max"
+FIN
+
+  check "campo model_index de contabilidad" "1" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field contabilidad model_index)"
+  check "campo model_index de revisión" "3" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field revision model_index)"
+  check "anulación de esfuerzo por skill (epic-plan)" "max" \
+    "$(ROLES_FILE="$tmp/roles.toml" role_field epic-plan effort)"
+  check "lista de frontera, una por línea" "modelo-barato
+modelo-medio
+modelo-fuerte" "$(ROLES_FILE="$tmp/roles.toml" frontera_list)"
+
+  # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
+  # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
+  # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
+  mkdir -p "$tmp/nested/scripts"
+  cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
+  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-fuerte high 50" \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" \
+       DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-fallback" \
+       bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
+
+  # Resolución normal de la lista (DEVKIT-54): con todos los modelos
+  # disponibles, resolver_modelo devuelve el que toca por model_index, sin
+  # caer al siguiente.
+  check "resolución normal: primer modelo de la lista" "modelo-barato" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-1" resolver_modelo 1)"
+  check "resolución normal: tercer modelo de la lista" "modelo-fuerte" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-3" resolver_modelo 3)"
+
+  # Caída al siguiente modelo (DEVKIT-54): un doble que rechaza un alias
+  # puntual simula un modelo que no existe o no responde; resolver_modelo
+  # debe caer al siguiente de la lista, y quedar cacheado que el primero no
+  # sirve.
+  local caido
+  caido="$tmp/claude-caido"
+  cat >"$caido" <<'FIN'
+#!/usr/bin/env bash
+modelo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) modelo=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [ "$modelo" = "modelo-inexistente" ]; then
+  echo "error: modelo desconocido" >&2
+  exit 1
+fi
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$caido"
+  cat >"$tmp/roles-caida.toml" <<'FIN'
+frontera = ["modelo-inexistente", "modelo-bueno"]
+implementacion.model_index = 1
+implementacion.effort = "high"
+implementacion.max_turns = 10
+FIN
+  check "caída al siguiente modelo cuando el primero no responde" "modelo-bueno" \
+    "$(CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-caida" resolver_modelo 1)"
+  check "el modelo caído queda cacheado como no disponible" "no" \
+    "$(cat "$tmp/frontera-caida/modelo-inexistente" 2>/dev/null)"
+
+  check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" model_effort_of '/pr-review 9')"
+  check "modelo/esfuerzo de epic-plan (esfuerzo máximo por skill)" "modelo-fuerte max 50" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" model_effort_of '/epic-plan DEVKIT-1')"
+  check "modelo/esfuerzo de task-close" "modelo-barato low 15" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-close" model_effort_of '/task-close DEVKIT-2 url')"
+  check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-fuerte medium 40" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --worker de punta a punta, con el mismo doble de arriba.
   mkdir -p "$tmp/run"
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --worker '/task-close DEVKIT-2 url' "$tmp/run/task-close-1.log" \
       modelo-barato low 15 >/dev/null 2>&1
   check "worker deja el log de claude" 'listo' \
@@ -266,7 +370,7 @@ FIN
   local antes despues rc espera=0
   antes=$(date +%s%N)
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" pr-review DEVKIT-2 >/dev/null 2>&1
   rc=$?
   despues=$(date +%s%N)
@@ -297,7 +401,7 @@ FIN
   local tenedor=$!
   sleep 0.1  # deja que el subshell de arriba tome el candado primero
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --worker '/task-close DEVKIT-2 url' "$tmp/run/candado.log" \
       modelo-barato low 15 >/dev/null 2>&1
   wait "$tenedor" 2>/dev/null
@@ -315,6 +419,8 @@ FIN
   # mismo entorno de prueba, imitando lo que hace la skill al tomar la
   # siguiente hija. Debe quedar en watch.log un resumen por cada rol
   # (contabilidad para task-close, implementación para task-start).
+  git -C "$tmp" init -q
+  git -C "$tmp" commit -q --allow-empty -m init --no-gpg-sign
   git -C "$tmp" checkout -q -b feat/DEVKIT-3-algo
   local cadena
   cadena="$tmp/claude-cadena"
@@ -323,7 +429,7 @@ FIN
 case "\$2" in
   */task-close*)
     DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \\
-      DEVKIT_ROLES_FILE="$tmp/roles.toml" \\
+      DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \\
       bash "$HERE/devkit-run.sh" task-start DEVKIT-3 >/dev/null 2>&1
     ;;
 esac
@@ -332,7 +438,7 @@ FIN
   chmod +x "$cadena"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-close DEVKIT-3 url >/dev/null 2>&1
   espera=0
   while [ "$(grep -cE 'devkit-run "/task-(close|start)' "$tmp/run/watch.log" 2>/dev/null)" -lt 2 ] \
@@ -346,7 +452,7 @@ FIN
   # Anulación manual: --modelo/--esfuerzo pisan el rol resuelto y la línea de
   # resumen lo marca, sin comparar contra el presupuesto de roles.toml.
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --modelo modelo-a-mano --esfuerzo high task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
   while [ ! -e "$tmp/run/task-fix-1.log" ] && [ "$espera" -lt 40 ]; do
@@ -370,7 +476,7 @@ FIN
   chmod +x "$pregunton"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$pregunton" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
   while [ "$(grep -c 'relanza task-block forzado' "$tmp/run/watch.log" 2>/dev/null)" -lt 1 ] \
@@ -380,6 +486,18 @@ FIN
   done
   check "pregunta abierta alarma y relanza task-block forzado" 'relanza task-block forzado: DEVKIT-3' \
     "$(grep -oE 'relanza task-block forzado: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+
+  # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
+  # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
+  # lanzar la siguiente hija porque sus SKILL.md invocaban el alias). La
+  # ruta explícita por `DEVKIT_SCRIPTS_DIR`, que es como las llaman ahora,
+  # debe resolver igual en ese Bash no interactivo y sin el alias cargado.
+  check "el alias devkit-run no existe en un bash -c no interactivo" '' \
+    "$(bash -c 'type devkit-run' 2>/dev/null)"
+  check "la ruta explícita por DEVKIT_SCRIPTS_DIR encuentra el script sin el alias" 'lanzado: /task-start DEVKIT-9' \
+    "$(DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+       bash -c '"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start DEVKIT-9' | head -1)"
 
   # --modelo/--esfuerzo sin valor deben salir con el mensaje de uso, no
   # colgar el proceso (DEVKIT-50, H3).
@@ -393,20 +511,21 @@ FIN
   # sobre la de ../agents y la del template fallback.
   mkdir -p "$tmp/.devkit"
   cat >"$tmp/.devkit/roles.toml" <<'FIN'
-contabilidad.model = "anulacion-proyecto"
+frontera = ["anulacion-proyecto"]
+contabilidad.model_index = 1
 contabilidad.effort = "high"
 contabilidad.max_turns = 99
-revision.model = "anulacion-proyecto"
+revision.model_index = 1
 revision.effort = "high"
 revision.max_turns = 99
-implementacion.chore.model = "anulacion-proyecto"
-implementacion.chore.effort = "high"
-implementacion.chore.max_turns = 99
+implementacion.model_index = 1
+implementacion.effort = "high"
+implementacion.max_turns = 99
 FIN
   check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
-  check "ROLES_FILE desde .devkit/roles.toml (task-close en chore)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-1" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
+  check "ROLES_FILE desde .devkit/roles.toml (task-close)" "anulacion-proyecto high 99" \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
 
   return $fail
 }
@@ -496,14 +615,14 @@ while true; do
   case "${1:-}" in
     --modelo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
       modelo_manual="$2"; shift 2 ;;
     --esfuerzo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
@@ -515,7 +634,7 @@ done
 skill="${1:-}"
 clave="${2:-}"
 if [ -z "$skill" ] || [ -z "$clave" ]; then
-  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high>] <skill> <Clave> [texto extra...]" >&2
+  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
   echo "     devkit-run --test   corre la autoprueba" >&2
   exit 64
 fi

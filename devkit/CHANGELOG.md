@@ -10,6 +10,35 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Modelos por frontera: `roles.toml` declara una lista ordenada (DEVKIT-54)
+
+- `devkit/agents/roles.toml` cambia de fijar un modelo por nombre en cada rol
+  a declarar una lista `frontera` ordenada de alias (hoy `fable, opus,
+  sonnet`) y un `model_index` por rol: la posición desde la que
+  `devkit-run.sh` busca el primero disponible. El `Tipo` de la card ya no
+  elige modelo (sigue eligiendo prefijo de rama y sección del CHANGELOG).
+- Reparto por papel en el flujo: `epic-plan` y `pr-review` usan el primer
+  modelo de la lista; `task-start`, `task-fix`, `task-submit` y
+  `task-document` (nace en la hija siguiente de esta Épica), el segundo;
+  `task-close` y `task-block`, el tercero. Esfuerzo `high` en todos salvo
+  `epic-plan`, que sube a `max`.
+- La disponibilidad de cada modelo se comprueba una sola vez por arranque
+  (una llamada mínima, `claude -p "ok" --model <alias>`), con el resultado
+  cacheado en `/run/devkit/frontera/<alias>` (tmpfs: se repite en cada
+  `devkit recreate`). Si el modelo que le toca a un rol no responde,
+  `devkit-run` cae al siguiente de la lista.
+- `epic-plan/SKILL.md` y `task-close/SKILL.md` lanzan la siguiente/primera
+  hija por la ruta explícita del script
+  (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el
+  alias `devkit-run`: el alias solo existe en `zshrc` y el Bash no
+  interactivo de `claude -p` no lo carga, así que las dos skills se quedaban
+  sin arrancar la hija siguiente. `task-fix/SKILL.md` trae ahora el `jq`
+  explícito sobre `reviews` para hallar el marcador `devkit-review`, y aclara
+  que el ejemplo sobre `comments` sirve solo para el marcador `devkit-fix`.
+- Cambios requeridos: ninguno. `--modelo`/`--esfuerzo` de `devkit-run` siguen
+  anulando la resolución en un lanzamiento puntual, y `.devkit/roles.toml`
+  sigue anulando la tabla completa por proyecto con el mismo formato nuevo.
+
 ### Raíz limpia: `devkit.toml` se muda a `.devkit/` (DEVKIT-53)
 
 - `devkit.toml` deja la raíz del proyecto y pasa a `.devkit/devkit.toml`,
