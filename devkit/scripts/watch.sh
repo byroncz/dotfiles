@@ -7,8 +7,14 @@
 #   último marcador CAMBIOS para el head, respuesta sin push -> pr-review de nuevo
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
 #   último marcador OK para el head, sin devkit-doc del head -> task-document
-#   3 ciclos revisor -> corrector sin OK                    -> task-block.sh
+#   último marcador OK para el head                         -> task-next.sh
+#   3 ciclos respondidos y CAMBIOS otra vez en el head      -> task-block.sh
 #   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
+#
+# task-next.sh arranca la siguiente hija libre de la Épica en cuanto la card
+# entra en `Lista para merge`, sin esperar el approve humano ni el merge
+# (DEVKIT-56). Corre una vez por head en cada vida del contenedor; es
+# idempotente, así que repetirlo tras un rebuild no lanza nada dos veces.
 #
 # task-block.sh y task-close.sh son bash contra la API de Notion (DEVKIT-55),
 # no skills: no gastan modelo ni esperan el candado de `claude -p`. Los PRs
@@ -80,6 +86,7 @@ ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 # cabe de sobra en el límite de 5000 peticiones por hora del token.
 TASK_CLOSE="${DEVKIT_TASK_CLOSE_BIN:-$SCRIPTS_DIR/task-close.sh}"
 TASK_BLOCK="${DEVKIT_TASK_BLOCK_BIN:-$SCRIPTS_DIR/task-block.sh}"
+TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$SCRIPTS_DIR/task-next.sh}"
 MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
@@ -89,7 +96,7 @@ MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 #   fix        <head> <sha del marcador CAMBIOS>      -
 #   fix-humano <head> <fecha del último comentario>   <texto en base64>
 #   documentar <head> OK                              -
-#   bloquear   <head> <ciclos sin OK>                 -
+#   bloquear   <head> <ciclos respondidos sin OK>     -
 #   bloqueado  <head> <fecha del bloqueo>             -
 #   nada       <head> <veredicto vigente>             -
 # Los marcadores se reconocen por su texto, no por su autor: así valen aunque
@@ -110,6 +117,16 @@ MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 # y un head nuevo recibe otro OK, falta el marcador de ese head y task-document
 # corre de nuevo sobre la misma entrada. Un comentario humano manda sobre
 # documentar: primero se corrige.
+#
+# La guarda de tres ciclos (DEVKIT-56). Un ciclo es un informe CAMBIOS que el
+# corrector respondió con su `devkit-fix`. `bloquear` sale solo cuando ya hay
+# `max` ciclos y el último informe es CAMBIOS sobre el head vigente: un
+# CAMBIOS sobre un head que el corrector ya superó no dice nada del código
+# actual, y ese head se revisa primero. El conteo vuelve a cero con un OK, un
+# bloqueo o un `devkit-fix` con `manual=1`: lo publica un task-fix que no lanzó
+# este bucle (un humano con `devkit-run`, a menudo con `--modelo`, que
+# watch.log marca "anulación manual"). Antes, ese fix manual sobre un head nuevo
+# completaba el tercer ciclo y el bucle bloqueaba sin revisarlo (PR 38).
 DECIDE='
 def markers($re; $ts):
   [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
@@ -117,7 +134,7 @@ def markers($re; $ts):
 .headRefOid as $head
 | (.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
    | sort_by(.at)) as $reviews
-| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+) -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
 | ($reviews | last) as $last
@@ -125,8 +142,10 @@ def markers($re; $ts):
 | ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
 | ($block_at != "" and $last != null and $block_at > $last.at and ($resumed | not)) as $blocked
 | (([$reviews[] | select(.verdict == "OK") | .at] | max) // "") as $ok_at
-| ([$ok_at, $block_at] | max) as $reset_at
-| ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at)] | length) as $cambios
+| (([$fixes[] | select(.manual != null) | .at] | max) // "") as $manual_at
+| ([$ok_at, $block_at, $manual_at] | max) as $reset_at
+| ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at) | . as $r
+    | select(any($fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
 | (([$reviews[].at, $fixes[].at, $blocks[].at] | max) // "") as $bot_at
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),
@@ -150,8 +169,8 @@ def markers($re; $ts):
      else ["bloqueado", $head, $block_at, "-"] end)
   elif ($human | length) > 0 and $last != null and $last.verdict == "OK" and $last.sha == $head then
     ["fix-humano", $head, $human_at, $human_text]
-  elif $cambios >= $max and ($pending_fix | not) then
-    ["bloquear", $head, ($cambios | tostring), "-"]
+  elif $ciclos >= $max and $last != null and $last.verdict == "CAMBIOS" and $last.sha == $head then
+    ["bloquear", $head, ($ciclos | tostring), "-"]
   elif $last == null or $last.sha != $head then
     ["revisar", $head, ($last.sha // "-"), "-"]
   elif $pending_fix then
@@ -403,7 +422,9 @@ run_skill() {
   read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --rol "$prompt")
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
-  DEVKIT_LOCK_HELD=1 "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
+  # DEVKIT_LANZADOR=watch le dice a task-fix que lo lanzó el bucle: sin ella,
+  # su `devkit-fix` lleva `manual=1` y reinicia la guarda (DEVKIT-56).
+  DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!
@@ -578,6 +599,19 @@ Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. 
   [ "$rc" -eq 0 ] || log "ALARMA: task-block-$num terminó con error (rc=$rc); ver $RUN_DIR/task-block-$num.log"
 }
 
+# Siguiente hija al OK del revisor, en bash (DEVKIT-56). La línea de watch.log
+# es la evidencia de que la hija arrancó mientras el PR espera el approve.
+chain_next() {  # chain_next <num> <Clave>
+  local num=$1 key=$2 out rc estado
+  out=$("$TASK_NEXT" "$key" 2>&1)
+  rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/task-next-$num.log"
+  estado=terminado
+  [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
+  log "task-next-$num $estado: bash, $key en Lista para merge :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+  [ "$rc" -eq 0 ] || log "ALARMA: task-next-$num terminó con error (rc=$rc); ver $RUN_DIR/task-next-$num.log"
+}
+
 # Cierre de un PR mergeado, en bash (DEVKIT-55). La línea de resumen dice
 # cuántos segundos pasaron desde el merge hasta que la card quedó cerrada:
 # es la medida del criterio "menos de un minuto".
@@ -632,9 +666,12 @@ check_merged_prs() {
 #   --merged-once           una pasada del bucle de PRs mergeados
 #   --block-pr <num> <Clave> <url> <head> <ciclos>
 #                           el bloqueo por tres ciclos sin OK
-# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los dos
-# últimos, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN o
-# DEVKIT_TASK_BLOCK_BIN. Ver watch-test.sh.
+#   --chain-next <num> <Clave>
+#                           la siguiente hija al OK del revisor
+# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los tres
+# últimos, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
+# DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh. Ver
+# watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -669,6 +706,10 @@ case "${1:-}" in
     ;;
   --block-pr)
     block_pr "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+    exit 0
+    ;;
+  --chain-next)
+    chain_next "${2:-}" "${3:-}"
     exit 0
     ;;
 esac
@@ -737,17 +778,32 @@ while true; do
             run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "fix-humano:$num:$ref"
             ;;
           documentar)
-            launched "documentar:$num:$head" && continue
-            mark "documentar:$num:$head"
-            log "PR #$num ($key) OK en $short: lanzando task-document"
-            run_skill "task-document-$num-$short" "/task-document $key $num" "documentar:$num:$head"
+            if ! launched "documentar:$num:$head"; then
+              mark "documentar:$num:$head"
+              log "PR #$num ($key) OK en $short: lanzando task-document"
+              run_skill "task-document-$num-$short" "/task-document $key $num" "documentar:$num:$head"
+            fi
+            # Después de documentar: la hija nueva hace `git switch` y
+            # espera el candado, así que no le quita el turno a la entrada.
+            if ! launched "encadenar:$num:$head"; then
+              mark "encadenar:$num:$head"
+              chain_next "$num" "$key"
+            fi
+            ;;
+          nada)
+            # OK ya documentado (por ejemplo, en una vida anterior del
+            # contenedor): el encadenamiento se intenta igual una vez.
+            if [ "$ref" = OK ] && ! launched "encadenar:$num:$head"; then
+              mark "encadenar:$num:$head"
+              chain_next "$num" "$key"
+            fi
             ;;
           bloquear)
             launched "bloquear:$num:$head" && continue
             mark "bloquear:$num:$head"
             block_pr "$num" "$key" "$url" "$head" "$ref"
             ;;
-          bloqueado|nada) ;;
+          bloqueado) ;;
           *) log "PR #$num: decisión desconocida '$action'" ;;
         esac
       done

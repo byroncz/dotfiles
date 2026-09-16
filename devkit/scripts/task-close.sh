@@ -3,7 +3,8 @@
 # task-close a la que reemplaza, en bash y en segundos: `Hecha`, `Cierre`,
 # comentario con el enlace a la entrada de Documentación, marcador
 # `devkit-closed` en el PR, cierre de la Épica si era la última hija y
-# lanzamiento de la siguiente hija con `devkit-run`.
+# lanzamiento de la siguiente hija con `task-next.sh` (DEVKIT-56), que también
+# llama watch.sh cuando el revisor da OK.
 #
 # Uso:
 #   task-close.sh <Clave> [URL o número del PR]
@@ -24,6 +25,7 @@ WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
+TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$HERE/task-next.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
@@ -181,40 +183,14 @@ exec 9>&-
 padre=$(jq -r '.padre[0] // ""' <<<"$card")
 [ -n "$padre" ] || exit 0
 hijas=$("$NOTION" hijas "$padre") || { say "no pude leer las hijas de la Épica"; exit 1; }
-epica=$("$NOTION" pagina "$padre") || { say "no pude leer la Épica"; exit 1; }
-eclave=$(clave_de "$epica")
 
 if [ "$(jq '[.[] | select(.estado != "Hecha")] | length' <<<"$hijas")" -eq 0 ]; then
-  cerrar_epica "$padre" "$eclave"
+  epica=$("$NOTION" pagina "$padre") || { say "no pude leer la Épica"; exit 1; }
+  cerrar_epica "$padre" "$(clave_de "$epica")"
   exit $?
 fi
 
-# Siguiente hija libre, con las reglas de task-start: `Lista`, nivel Tarea,
-# todo `Depende de` en `Hecha`, orden por `Orden` y luego por `Prioridad`. Una
-# dependencia fuera de la Épica se consulta aparte.
-hechas=$(jq -c '[.[] | select(.estado == "Hecha") | .id]' <<<"$hijas")
-for dep in $(jq -r --argjson h "$hechas" \
-    '[.[] | select(.estado == "Lista") | .depende[]] | unique | map(select(. as $d | $h | index($d) | not)) | .[]' <<<"$hijas"); do
-  if [ "$(jq -r --arg d "$dep" '[.[] | select(.id == $d)] | length' <<<"$hijas")" -eq 0 ] \
-     && [ "$("$NOTION" pagina "$dep" 2>/dev/null | jq -r .estado)" = "Hecha" ]; then
-    hechas=$(jq -c --arg d "$dep" '. + [$d]' <<<"$hechas")
-  fi
-done
-siguiente=$(jq -r --argjson h "$hechas" --arg c "$codigo" '
-  def prio: {"alta": 0, "media": 1, "baja": 2}[. // ""] // 3;
-  [.[] | select(.estado == "Lista" and .nivel == "Tarea")
-       | select(all(.depende[]; . as $d | $h | index($d)))]
-  | sort_by([(.orden // 1e9), (.prioridad | prio)])
-  | first // empty | "\($c)-\(.numero)"' <<<"$hijas")
-
-if [ -n "$siguiente" ]; then
-  "$DEVKIT_RUN" task-start "$siguiente" >/dev/null 2>&1 \
-    && say "lanzada la siguiente hija: task-start $siguiente" \
-    || say "no pude lanzar task-start $siguiente"
-elif [ "$(jq '[.[] | select(.estado == "Lista")] | length' <<<"$hijas")" -gt 0 ]; then
-  esperan=$(jq -r --arg c "$codigo" '[.[] | select(.estado == "Lista") | "\($c)-\(.numero)"] | join(", ")' <<<"$hijas")
-  "$NOTION" comentar "$padre" "Tras cerrar $clave no hay hija libre: $esperan esperan dependencias que no están Hecha."
-  say "sin hija libre; $esperan esperan dependencias"
-else
-  say "sin hijas en Lista; la Épica sigue con hijas en curso"
-fi
+# La siguiente hija la elige task-next.sh, el mismo que llama watch.sh al OK
+# del revisor (DEVKIT-56). Su última línea es la de este cierre.
+"$TASK_NEXT" "$clave" | sed 's/^task-next: /task-close: /'
+exit "${PIPESTATUS[0]}"
