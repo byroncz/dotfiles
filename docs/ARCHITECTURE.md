@@ -403,6 +403,38 @@ copia sin `frontera`, resolvió un modelo vacío y murió en el primer turno.
 `devkit-run` tampoco lanza ya con un modelo vacío: sale con 65 y deja una
 `ALARMA` en `watch.log`.
 
+Qué hace cada agente se responde sin lanzar otro agente, con
+`devkit-run --estado` (DEVKIT-57). La fuente es `watch.log`, no la lista de
+procesos: todo lanzamiento, de `devkit-run` o de `run_skill` en `watch.sh`,
+escribe antes una línea `<id> lanzando (origen=<quién>): "<prompt>"
+log=<log>`, y su resumen final lleva el mismo `<id>`. Mirar solo procesos
+falla en la ventana entre pedir un lanzamiento y que exista su `claude -p`
+(candado, sonda de modelos, `nohup`): el 2026-09-16, `--agentes-vivos` dijo
+"sin agentes vivos" dos segundos después de "lanzando pr-review". Con la
+línea como origen, un lanzamiento está `en curso` desde que se pide, y uno
+que nunca llegó a correr se ve como `no arrancó` en vez de desaparecer. El
+cruce con `ps` y con los logs distingue el resto: `terminó`, `error` y
+`bloqueada`, que toma el motivo de la línea que deja `task-block.sh`. Quién
+lanzó lo declara el que llama con `DEVKIT_ORIGEN` (`bucle`, `task-close`);
+si no, se deduce del primer `claude -p /<skill>` entre los procesos padre, y
+sin ninguno es `humano`. La variable no pasa al `claude -p`: describe este
+lanzamiento, no los que la skill haga después.
+
+`devkit-run` en segundo plano ya no vuelve a ciegas. Espera el marcador
+`/run/devkit/ready` del arranque, y tras el `nohup` espera hasta 5 s a su
+worker: si muere sin resumen `terminado`, imprime el log y sale con error.
+El caso de origen fue un `task-start` lanzado desde el editor recién abierto
+que imprimió su PID y nunca corrió; el humano lo descubrió al ir a mirar.
+
+`watch.sh` suma una quinta alarma: un `task-fix` que responde "nada que
+corregir" o "informe desactualizado" con el último informe `CAMBIOS` sobre
+el mismo head. El bucle no puede avanzar solo: no hay `devkit-fix` que
+dispare otra revisión y `launched` impide relanzar el mismo fix. Se relanza
+una vez con el siguiente modelo de `frontera`, porque la causa conocida es
+el modelo (un task-fix en Haiku, DEVKIT-54), y si responde igual se bloquea
+la card. Relanzar sin límite gastaría cuota en un ciclo que un humano
+resuelve en un minuto.
+
 ## 6. Flujo de trabajo
 
 ### 6.1 Jerarquía

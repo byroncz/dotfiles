@@ -8,10 +8,21 @@
 # Uso normal, para un humano o para task-close al tomar la siguiente hija:
 #   devkit-run <skill> <Clave> [texto extra...]
 #     Arma el prompt "/<skill> <Clave> [texto extra]", lo lanza con `nohup`
-#     desde /workspace y vuelve enseguida. Log en
+#     desde /workspace y vuelve en cuanto confirma que arrancó. Log en
 #     /run/devkit/<skill>-<n>.log (n crece si ya hay uno); al terminar,
 #     agrega el resumen de costo a watch.log, igual que una skill lanzada por
 #     el bucle.
+#     Antes de lanzar espera el marcador /run/devkit/ready del arranque del
+#     contenedor. Después espera hasta 5 s: si el worker muere en ese rato
+#     sin resumen "terminado", imprime las últimas líneas del log y sale con
+#     70 (DEVKIT-57). Un `task-start` lanzado con el editor recién abierto
+#     imprimió su PID y nunca corrió, y nadie lo supo hasta ir a mirar.
+#
+# Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
+#   devkit-run --estado [--seguir]
+#     Tabla de los últimos lanzamientos: skill, card, quién lanzó, hace
+#     cuánto y estado (en curso, terminó, error, bloqueada, no arrancó).
+#     `--seguir` la refresca cada 3 s hasta Ctrl-C.
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
@@ -26,7 +37,14 @@
 #   devkit-run --otros-agentes                      lista los `claude -p` ajenos
 #                                                    sobre este workspace; sale 0
 #                                                    si está libre, 1 si no
+#   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
+#                                                    que sigue a <alias> en
+#                                                    `frontera` (vuelve al primero
+#                                                    tras el último)
 #   devkit-run --test                               autoprueba
+#
+# `--sync` usa DEVKIT_MODELO_FORZADO en vez del modelo del rol cuando viene no
+# vacía: así relanza watch.sh un task-fix con otro modelo (DEVKIT-57).
 #
 # La tabla rol -> modelo/esfuerzo/turnos vive en devkit/agents/roles.toml.
 # Desde DEVKIT-54, el modelo no se elige por Tipo de la card sino por el papel
@@ -93,6 +111,22 @@ SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 # Se pueden sustituir por un doble en la autoprueba, para no tocar Notion.
 TASK_BLOCK_BIN="${DEVKIT_TASK_BLOCK_BIN:-$HERE/task-block.sh}"
 TASK_CLOSE_BIN="${DEVKIT_TASK_CLOSE_BIN:-$HERE/task-close.sh}"
+# Arranque y estado de los lanzamientos (DEVKIT-57). READY lo escribe
+# entrypoint.sh como último paso del arranque; `devkit shell` y `devkit code`
+# ya lo esperan desde el host, y ahora también `devkit-run`.
+READY_FILE="${DEVKIT_READY_FILE:-$RUN_DIR/ready}"
+READY_TIMEOUT="${DEVKIT_READY_TIMEOUT:-120}"
+# Segundos que espera tras lanzar para confirmar que el worker sigue vivo.
+ARRANQUE_ESPERA="${DEVKIT_ARRANQUE_ESPERA:-5}"
+# Un lanzamiento sin proceso visible ni resumen cuenta como `en curso` durante
+# este margen, contado desde su línea "lanzando": entre esa línea y el
+# `claude -p` pasan la sonda de modelos (hasta 30 s por modelo) y el `nohup`.
+# El 2026-09-16, `watch.sh --agentes-vivos` dijo "sin agentes vivos" dos
+# segundos después de "lanzando pr-review" por mirar solo los procesos.
+ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
+ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
+ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
+PS_BIN="${DEVKIT_PS_BIN:-ps}"
 
 # Última coincidencia de "<clave>.<campo> = valor" en roles.toml, sin
 # comillas. La clave puede ser un rol (`revision`, `implementacion`) o el
@@ -225,6 +259,26 @@ resolver_modelo() {  # resolver_modelo <indice_inicial>
   printf '%s' "${modelos[$(( ${#modelos[@]} - 1 ))]}"
 }
 
+# Modelo disponible que sigue a <alias> en `frontera` (DEVKIT-57). Lo usa
+# watch.sh para relanzar un task-fix que respondió "nada que corregir" con un
+# CAMBIOS vigente: otro modelo lee el mismo informe con otros ojos. Si <alias>
+# es el último o no está en la lista, empieza por el primero; repetir el
+# mismo modelo que ya falló no aporta otra lectura.
+siguiente_modelo() {  # siguiente_modelo <alias>
+  local actual=$1 modelo i=0 pos=0
+  local -a modelos=()
+  while IFS= read -r modelo; do
+    [ -n "$modelo" ] && modelos+=("$modelo")
+  done < <(frontera_list)
+  [ "${#modelos[@]}" -gt 0 ] || return 1
+  for modelo in "${modelos[@]}"; do
+    i=$((i + 1))
+    [ "$modelo" = "$actual" ] && pos=$i
+  done
+  [ "$pos" -lt "${#modelos[@]}" ] || pos=0
+  resolver_modelo "$((pos + 1))"
+}
+
 # "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt. El esfuerzo
 # admite una anulación por skill (por ejemplo `epic-plan.effort`) por encima
 # del que trae su rol; el modelo sale siempre de `resolver_modelo` con el
@@ -256,7 +310,12 @@ model_effort_of() {  # model_effort_of <prompt>
 # `task-close` murió en el primer turno. El valor es $HERE y no lo que traiga
 # el entorno: el script que resolvió este lanzamiento es el que deben usar
 # los lanzamientos que salgan de él.
+#
+# DEVKIT_ORIGEN y DEVKIT_MODELO_FORZADO van vacías: describen este lanzamiento,
+# no los que la skill haga después (DEVKIT-57). Un epic-plan que lanza
+# task-start debe verse como origen `epic-plan`, no heredar el de su lanzador.
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
+  DEVKIT_ORIGEN="" DEVKIT_MODELO_FORZADO="" \
   DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_RUN_DIR="$RUN_DIR" \
   "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
@@ -373,6 +432,256 @@ otros_agentes() {
   [ -z "$encontrados" ] && return 0
   printf '%s\n' "$encontrados"
   return 1
+}
+
+# --- Quién lanzó, arranque y estado de los lanzamientos (DEVKIT-57) ---------
+#
+# Cada lanzamiento deja en watch.log una línea con forma fija:
+#   <fecha> <id> lanzando (origen=<origen>): "<prompt>" log=<log>
+# donde <id> es el nombre del log sin `.log` (`task-start-3`,
+# `pr-review-41-4391e46`). La escriben este script, antes del `nohup`, y
+# `run_skill` en watch.sh, antes de tomar el candado. `--estado` parte de esas
+# líneas y no de los procesos: un lanzamiento existe desde que se pidió, no
+# desde que su `claude -p` aparece en `ps`.
+
+# Origen de un lanzamiento: `humano`, `bucle`, `task-close` o la skill que lo
+# pidió (`epic-plan`). Quien llama puede declararlo con DEVKIT_ORIGEN:
+# watch.sh pone `bucle` y task-close.sh pone `task-close`. Si no viene, se
+# busca entre los ancestros el primer `claude -p /<skill>`: epic-plan llama a
+# devkit-run desde su herramienta Bash, así que su `claude -p` es ancestro.
+# Sin ninguno de los dos, lo lanzó un humano desde la terminal.
+#
+# Filtrado puro, como filtrar_agentes: lee "<pid> <args>" de los ancestros,
+# del más cercano al más lejano.
+origen_de() {
+  local pid args skill
+  while read -r pid args; do
+    case "$args" in *devkit-run.sh*) continue ;; *claude*) ;; *) continue ;; esac
+    skill=$(printf '%s' "$args" | grep -oE '(^| )-p /[a-zA-Z-]+' | head -1 | sed -E 's#.*-p /##')
+    if [ -n "$skill" ]; then
+      printf '%s' "$skill"
+      return 0
+    fi
+  done
+  printf 'humano'
+}
+
+origen_lanzamiento() {
+  if [ -n "${DEVKIT_ORIGEN:-}" ]; then
+    printf '%s' "$DEVKIT_ORIGEN"
+    return 0
+  fi
+  local pid
+  for pid in $(ancestros_propios); do
+    printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" 2>/dev/null)"
+  done | origen_de
+}
+
+# El prompt en una sola línea, sin comillas y corto: un task-fix con el
+# comentario del humano trae saltos de línea que romperían la forma fija.
+prompt_en_linea() {  # prompt_en_linea <prompt>
+  local p
+  p=$(printf '%s' "$1" | tr '\n"' '  ')
+  printf '%s' "${p:0:120}"
+}
+
+linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log>
+  printf '%s %s lanzando (origen=%s): "%s" log=%s\n' \
+    "$(date -u +%FT%TZ)" "$1" "$2" "$(prompt_en_linea "$3")" "$4"
+}
+
+# Espera el marcador de fin de arranque. Sin él, el contenedor todavía está
+# leyendo secretos o clonando, y un `claude -p` lanzado en ese rato puede
+# morir sin token ni rastro: el caso de origen de DEVKIT-57.
+esperar_arranque() {  # esperar_arranque <prompt>
+  [ -e "$READY_FILE" ] && return 0
+  local t=0
+  printf 'devkit-run: esperando a que termine el arranque del contenedor' >&2
+  while [ ! -e "$READY_FILE" ] && [ "$t" -lt "$READY_TIMEOUT" ]; do
+    sleep 1
+    t=$((t + 1))
+    printf '.' >&2
+  done
+  printf '\n' >&2
+  [ -e "$READY_FILE" ] && return 0
+  printf 'devkit-run: el arranque del contenedor no terminó en %ss (falta %s); no se lanza "%s".\n' \
+    "$READY_TIMEOUT" "$READY_FILE" "$1" >&2
+  printf 'Mira qué pasó con `devkit logs <proyecto>` desde el host y vuelve a lanzar cuando termine.\n' >&2
+  printf '%s devkit-run "%s" ALARMA: arranque del contenedor sin terminar tras %ss; no se lanza\n' \
+    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$READY_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+  return 1
+}
+
+# Confirma que el lanzamiento en segundo plano arrancó. Espera hasta
+# ARRANQUE_ESPERA segundos mirando al worker; si sigue vivo, arrancó (corre
+# su `claude -p` o espera el candado). Si murió, solo vale como arranque si
+# dejó su resumen "terminado" en watch.log: una skill muy corta. En otro
+# caso imprime el final del log y las alarmas, y devuelve falso.
+confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
+  local pid=$1 prompt=$2 logf=$3 id t=0 pasos claude_pid alarmas
+  id=$(basename "$logf" .log)
+  pasos=$((ARRANQUE_ESPERA * 5))
+  while [ "$t" -lt "$pasos" ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 0.2
+    t=$((t + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    claude_pid=$(ps -eo pid=,args= 2>/dev/null | grep -F -- "-p $prompt" \
+      | grep -v -e 'devkit-run.sh' -e 'grep' | awk 'NR == 1 {print $1}')
+    if [ -n "$claude_pid" ]; then
+      echo "arrancó: claude -p vivo (pid $claude_pid)"
+    else
+      echo "arrancó: el worker (pid $pid) espera el candado; síguelo con devkit-run --estado"
+    fi
+    return 0
+  fi
+  if grep -qF "terminado [$id]:" "$WATCH_LOG" 2>/dev/null; then
+    echo "arrancó y ya terminó; resumen en $WATCH_LOG"
+    return 0
+  fi
+  {
+    printf 'devkit-run: "%s" no arrancó: el worker murió en sus primeros %ss sin terminar.\n' "$prompt" "$ARRANQUE_ESPERA"
+    printf 'Últimas líneas de %s:\n' "$logf"
+    if [ -s "$logf" ]; then
+      tail -n 20 "$logf" | sed 's/^/  /'
+    else
+      echo "  (log vacío: claude -p no llegó a escribir)"
+    fi
+    alarmas=$(grep -F "\"$(prompt_en_linea "$prompt")\"" "$WATCH_LOG" 2>/dev/null | grep 'ALARMA' | tail -3)
+    if [ -n "$alarmas" ]; then
+      echo "Alarmas en $WATCH_LOG:"
+      printf '%s\n' "$alarmas" | sed 's/^/  /'
+    fi
+  } >&2
+  printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
+    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+  return 1
+}
+
+# Lanzamientos registrados en watch.log, uno por línea "lanzando", en TSV:
+# <n.º de línea> <fecha> <id> <origen> <prompt> <log>.
+lanzamientos() {  # lanzamientos <watch.log>
+  grep -nE '^[^ ]+ [^ ]+ lanzando \(origen=[^)]*\): ".*" log=[^ ]+$' "$1" 2>/dev/null \
+    | sed -E 's/^([0-9]+):([^ ]+) ([^ ]+) lanzando \(origen=([^)]*)\): "(.*)" log=([^ ]+)$/\1\t\2\t\3\t\4\t\5\t\6/'
+}
+
+hace() {  # hace <segundos>
+  local s=$1
+  [ "$s" -ge 0 ] 2>/dev/null || s=0
+  if [ "$s" -lt 60 ]; then printf '%ss' "$s"
+  elif [ "$s" -lt 3600 ]; then printf '%sm' "$((s / 60))"
+  elif [ "$s" -lt 86400 ]; then printf '%sh%02dm' "$((s / 3600))" "$((s % 3600 / 60))"
+  else printf '%sd' "$((s / 86400))"
+  fi
+}
+
+# Una fila TSV por lanzamiento: skill, card, origen, hace cuánto, estado y
+# detalle. Estados:
+#   en curso    sin resumen, y su proceso vive, o se lanzó hace menos de
+#               ESTADO_GRACIA segundos, o espera el candado
+#   terminó     resumen "terminado"
+#   error       resumen con rc distinto de cero, o log escrito sin resumen
+#               y sin proceso (murió a medias)
+#   bloqueada   terminó o falló, y task-block.sh bloqueó su card después de
+#               lanzarlo; el detalle es el motivo
+#   no arrancó  sin resumen, sin proceso y sin log pasado el margen, o
+#               marcado así por confirmar_arranque
+# Lee `ps` de PS_BIN y la hora de <ahora>, para probarlo con datos fijos.
+estado_filas() {  # estado_filas <watch.log> <ahora epoch>
+  local wlog=$1 ahora=$2 procesos candado=libre
+  procesos=$("$PS_BIN" -eo pid=,args= 2>/dev/null)
+  # Lectura, no escritura: abrir el candado con `>` le cambiaría el mtime,
+  # que watch.sh usa como señal de actividad para la alarma de rama huérfana.
+  if [ -e "$LOCK" ] && exec 7<"$LOCK"; then
+    flock -n 7 || candado=ocupado
+    exec 7<&-
+  fi
+  local ln ts id origen prompt logf skill arg clave t0 edad resto fin estado detalle bloqueo
+  while IFS=$'\t' read -r ln ts id origen prompt logf <&3; do
+    skill=${prompt%% *}
+    skill=${skill#/}
+    arg=$(printf '%s' "$prompt" | awk '{print $2}')
+    clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+    # pr-review recibe el número de PR, no la Clave: se toma de la línea
+    # "PR #<n> (<Clave>)" que el bucle escribe antes de lanzarlo.
+    if [ -z "$clave" ] && [ -n "$arg" ]; then
+      clave=$(head -n "$ln" "$wlog" | grep -oE "PR #$arg \([A-Z][A-Z0-9]+-[0-9]+\)" | tail -1 \
+        | grep -oE '[A-Z][A-Z0-9]+-[0-9]+')
+    fi
+    t0=$(date -d "$ts" +%s 2>/dev/null || echo "$ahora")
+    edad=$((ahora - t0))
+    resto=$(tail -n +"$((ln + 1))" "$wlog")
+    fin=$(printf '%s\n' "$resto" | grep -m1 -E \
+      "^[^ ]+ ($id terminado: |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]$)")
+    estado="" detalle=""
+    if [ -n "$fin" ]; then
+      case "$fin" in
+        *"ALARMA: no arrancó"*) estado="no arrancó"; detalle="el worker murió al arrancar; ver $logf" ;;
+        *"terminó con error"*|*"falló (rc="*)
+          estado=error
+          detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1); ver $logf" ;;
+        *) estado=terminó ;;
+      esac
+    elif grep -qF -- "$logf" <<<"$procesos" \
+         || { [ "$origen" = bucle ] && grep -qF -- "--sync /$skill $arg" <<<"$procesos"; }; then
+      estado="en curso"
+    elif [ "$edad" -lt "$ESTADO_GRACIA" ]; then
+      estado="en curso"; detalle="arrancando"
+    elif [ "$candado" = ocupado ] && printf '%s\n' "$resto" | grep -qE "^[^ ]+ $id espera: "; then
+      estado="en curso"; detalle="espera el candado"
+    elif [ -s "$logf" ]; then
+      estado=error; detalle="murió sin resumen; ver $logf"
+    else
+      estado="no arrancó"; detalle="sin proceso, log ni resumen tras $(hace "$edad")"
+    fi
+    # Bloqueo de la card después del lanzamiento y antes de que otro
+    # lanzamiento de la misma card tome el relevo. La Clave va seguida de un
+    # espacio o de la comilla final del prompt: así DEVKIT-57 no pasa por
+    # DEVKIT-5.
+    if [ -n "$clave" ] && [ "$estado" != "en curso" ]; then
+      bloqueo=$(printf '%s\n' "$resto" | awk -v c="$clave" '
+        / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
+        index($0, " task-block.sh " c " Bloqueada") { print; exit }')
+      if [ -n "$bloqueo" ]; then
+        estado=bloqueada
+        detalle=$(printf '%s' "$bloqueo" | sed -E 's/^.* task-block\.sh [^ ]+ Bloqueada desde [^:]*: //')
+        detalle=${detalle:0:100}
+      fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}"
+  done 3< <(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
+}
+
+# Rellena a <n> caracteres. `printf %-Ns` cuenta bytes, y "terminó" o
+# "no arrancó" desalinearían la tabla.
+rellenar() {  # rellenar <texto> <ancho>
+  local s=$1 n=$2
+  printf '%s%*s' "$s" "$(( n > ${#s} ? n - ${#s} : 0 ))" ''
+}
+
+mostrar_estado() {
+  local filas skill clave origen edad estado detalle
+  filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
+  if [ -z "$filas" ]; then
+    echo "sin lanzamientos registrados en $WATCH_LOG"
+    return 0
+  fi
+  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
+    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+  while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+    printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
+      "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
+  done <<<"$filas"
+}
+
+seguir_estado() {
+  while true; do
+    [ -t 1 ] && printf '\033[H\033[2J'
+    printf 'devkit-run --estado  %s  (cada %ss; Ctrl-C para salir)\n\n' "$(date +%T)" "$ESTADO_INTERVALO"
+    mostrar_estado
+    [ -t 1 ] || echo
+    sleep "$ESTADO_INTERVALO"
+  done
 }
 
 run_tests() {
@@ -599,6 +908,11 @@ FIN
 
   # --worker de punta a punta, con el mismo doble de arriba.
   mkdir -p "$tmp/run"
+  # Arranque terminado y confirmación corta (DEVKIT-57): sin el marcador, cada
+  # lanzamiento de abajo esperaría 120 s; con 5 s de confirmación, la cadena
+  # epic-plan -> task-start no cabe en su tope de espera.
+  : >"$tmp/run/ready"
+  export DEVKIT_ARRANQUE_ESPERA=1
   DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" --worker '/task-document DEVKIT-2' "$tmp/run/task-document-1.log" \
@@ -842,6 +1156,115 @@ FIN
   check "ROLES_FILE desde .devkit/roles.toml (task-fix)" "anulacion-proyecto high 99" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/task-fix DEVKIT-2')"
 
+  # --- DEVKIT-57: quién lanzó, arranque y --estado ---------------------------
+  # Origen por ancestros: el `claude -p /epic-plan` más cercano gana; los
+  # lanzadores devkit-run.sh no cuentan; sin claude -p, humano.
+  check "origen: claude -p /epic-plan entre los ancestros" epic-plan \
+    "$(printf '%s\n' '500 bash -c devkit-run.sh task-start DEVKIT-3' \
+         '400 /bin/zsh -c source snapshot; devkit-run task-start DEVKIT-3' \
+         '300 claude -p /epic-plan DEVKIT-1 --model fable --effort max' \
+         '200 bash /workspace/devkit/scripts/devkit-run.sh --worker /epic-plan DEVKIT-1 x.log fable max 50' \
+         | origen_de)"
+  check "origen: sin claude -p entre los ancestros es humano" humano \
+    "$(printf '%s\n' '500 bash devkit-run.sh task-start DEVKIT-3' '400 -zsh' '1 /sbin/init' | origen_de)"
+  check "origen: DEVKIT_ORIGEN declarado manda" task-close \
+    "$(DEVKIT_ORIGEN=task-close origen_lanzamiento)"
+
+  # Siguiente modelo de frontera: el que sigue, y tras el último, el primero.
+  check "siguiente modelo tras modelo-barato" modelo-medio \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-sig" WATCH_LOG="$tmp/sonda-watch.log" siguiente_modelo modelo-barato)"
+  check "siguiente modelo tras el último vuelve al primero" modelo-barato \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-sig" WATCH_LOG="$tmp/sonda-watch.log" siguiente_modelo modelo-fuerte)"
+
+  # Arranque fallido 1: sin el marcador ready, no lanza y lo dice.
+  local sin_ready salida
+  sin_ready="$tmp/run-sin-ready"
+  mkdir -p "$sin_ready"
+  salida=$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$sin_ready" DEVKIT_WS="$tmp" DEVKIT_READY_TIMEOUT=1 \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-5 2>&1); rc=$?
+  check "arranque sin terminar: sale con 69 y no lanza" "69 no" \
+    "$rc $([ -e "$sin_ready/task-start-1.log" ] && echo si || echo no)"
+  check "arranque sin terminar: mensaje claro" 'el arranque del contenedor no terminó en 1s' \
+    "$(printf '%s' "$salida" | grep -oE 'el arranque del contenedor no terminó en 1s')"
+
+  # Arranque fallido 2: claude -p muere enseguida con error. devkit-run no
+  # vuelve con "lanzado" a secas: imprime el final del log y sale con 70.
+  local muere
+  muere="$tmp/claude-muere"
+  printf '#!/usr/bin/env bash\necho "error: token OAuth ausente" >&2\nexit 1\n' >"$muere"
+  chmod +x "$muere"
+  salida=$(DEVKIT_CLAUDE_BIN="$muere" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" --modelo modelo-x task-start DEVKIT-6 2>&1); rc=$?
+  check "arranque fallido: sale con 70" 70 "$rc"
+  check "arranque fallido: imprime las últimas líneas del log" 'error: token OAuth ausente' \
+    "$(printf '%s' "$salida" | grep -oE 'error: token OAuth ausente' | head -1)"
+
+  # --estado con un watch.log fijo, un `ps` de mentira y una hora fija: un
+  # caso por estado. Las fechas se cuentan hacia atrás desde AHORA.
+  local est ahora pslist
+  est="$tmp/estado"
+  mkdir -p "$est"
+  ahora=$(date -d '2026-09-16T12:00:00Z' +%s)
+  printf '{"result":"a medias"}\n' >"$est/task-fix-2.log"
+  : >"$est/task-start-2.log"
+  cat >"$est/watch.log" <<FIN
+2026-09-16T11:00:00Z PR #41 (DEVKIT-56) head abc1234 sin informe: lanzando pr-review
+2026-09-16T11:00:00Z pr-review-41-abc1234 lanzando (origen=bucle): "/pr-review 41" log=$est/pr-review-41-abc1234.log
+2026-09-16T11:05:00Z pr-review-41-abc1234 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T11:08:00Z task-start-5 lanzando (origen=humano): "/task-start DEVKIT-5" log=$est/task-start-5.log
+2026-09-16T11:10:00Z task-start-1 lanzando (origen=task-close): "/task-start DEVKIT-57" log=$est/task-start-1.log
+2026-09-16T11:12:00Z task-block.sh DEVKIT-5 Bloqueada desde En progreso: motivo de la cinco.
+2026-09-16T11:12:05Z devkit-run "/task-start DEVKIT-5" terminado [task-start-5]: modelo=opus esfuerzo=high :: bloqueada
+2026-09-16T11:20:00Z task-fix-1 lanzando (origen=humano): "/task-fix DEVKIT-58" log=$est/task-fix-1.log
+2026-09-16T11:21:00Z devkit-run "/task-fix DEVKIT-58" falló (rc=1) [task-fix-1]: modelo=opus esfuerzo=high :: error
+2026-09-16T11:30:00Z task-start-3 lanzando (origen=epic-plan): "/task-start DEVKIT-59" log=$est/task-start-3.log
+2026-09-16T11:31:00Z task-block.sh DEVKIT-59 Bloqueada desde En progreso: Qué intenté: X. Qué necesito: el token de Y.
+2026-09-16T11:31:05Z devkit-run "/task-start DEVKIT-59" terminado [task-start-3]: modelo=opus esfuerzo=high :: bloqueada
+2026-09-16T11:40:00Z task-start-2 lanzando (origen=humano): "/task-start DEVKIT-60" log=$est/task-start-2.log
+2026-09-16T11:59:58Z task-fix-2 lanzando (origen=humano): "/task-fix DEVKIT-61" log=$est/task-fix-2.log
+FIN
+  pslist="$tmp/ps-estado"
+  printf '#!/usr/bin/env bash\necho "4242 bash devkit-run.sh --worker /task-start DEVKIT-57 %s/task-start-1.log opus high 40"\n' "$est" >"$pslist"
+  chmod +x "$pslist"
+  local filas
+  filas=$(PS_BIN="$pslist" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
+  fila() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5 "|" $3; exit}'; }
+  check "estado terminó (pr-review, Clave desde la línea del PR)" "terminó|bucle" "$(fila DEVKIT-56)"
+  check "estado en curso (proceso vivo)" "en curso|task-close" "$(fila DEVKIT-57)"
+  check "estado error (rc distinto de cero)" "error|humano" "$(fila DEVKIT-58)"
+  check "estado bloqueada, con el motivo" "bloqueada|epic-plan" "$(fila DEVKIT-59)"
+  check "motivo del bloqueo en el detalle" "Qué intenté: X. Qué necesito: el token de Y." \
+    "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-59" {print $6}')"
+  # Un lanzamiento de DEVKIT-57 entre medio no corta el bloqueo de DEVKIT-5:
+  # la Clave se compara completa, no como prefijo.
+  check "estado bloqueada con otra Clave que la extiende en medio" "bloqueada|humano" "$(fila DEVKIT-5)"
+  check "estado no arrancó (sin proceso, log vacío, pasado el margen)" "no arrancó|humano" "$(fila DEVKIT-60)"
+  # Evidencia del 2026-09-16: dos segundos después de "lanzando", sin ningún
+  # proceso todavía, el lanzamiento ya cuenta como en curso.
+  check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
+  check "la tabla trae skill y hace cuánto" "task-fix 2s" \
+    "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
+  check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
+    "$(WATCH_LOG="$est/vacio.log" mostrar_estado)"
+
+  # De punta a punta: un lanzamiento real deja su línea lanzando y --estado
+  # lo muestra terminado. El origen esperado se calcula aquí y no se fija en
+  # `humano`: esta prueba puede correr dentro de un `claude -p /task-start`
+  # de verdad, y entonces ese es el origen correcto.
+  local origen_esperado
+  origen_esperado=$(unset DEVKIT_ORIGEN; origen_lanzamiento)
+  : >"$tmp/run/watch.log"
+  env -u DEVKIT_ORIGEN DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-submit DEVKIT-7 >/dev/null 2>&1
+  check "lanzamiento real: línea lanzando con el origen de sus ancestros" \
+    "lanzando (origen=${origen_esperado:-?}): \"/task-submit DEVKIT-7\"" \
+    "$(grep -oE 'lanzando \(origen=[^)]*\): "/task-submit DEVKIT-7"' "$tmp/run/watch.log" | head -1)"
+  check "lanzamiento real: --estado lo muestra terminado" "terminó" \
+    "$(DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
+
   return $fail
 }
 
@@ -869,6 +1292,7 @@ case "${1:-}" in
         ;;
     esac
     read -r modelo esfuerzo _ < <(model_effort_of "${2:-}")
+    [ -z "${DEVKIT_MODELO_FORZADO:-}" ] || modelo=$DEVKIT_MODELO_FORZADO
     modelo_valido "${modelo:-}" "${2:-}" || exit 65
     run_claude "${2:-}" "$modelo" "$esfuerzo"
     exit $?
@@ -911,7 +1335,10 @@ case "${1:-}" in
     [ $rc -eq 0 ] || estado="falló (rc=$rc)"
     resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")"
     [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
-    printf '%s devkit-run "%s" %s: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$estado" "$resumen_txt" >> "$WATCH_LOG"
+    # `[<id>]` une el resumen con su línea "lanzando" para `--estado`: dos
+    # lanzamientos del mismo prompt solo se distinguen por el log.
+    printf '%s devkit-run "%s" %s [%s]: %s\n' "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$estado" \
+      "$(basename "$logf" .log)" "$resumen_txt" >> "$WATCH_LOG"
     if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
@@ -927,6 +1354,18 @@ case "${1:-}" in
     ;;
   --otros-agentes)
     otros_agentes
+    exit $?
+    ;;
+  --estado)
+    if [ "${2:-}" = --seguir ]; then seguir_estado; fi
+    mostrar_estado
+    exit 0
+    ;;
+  --seguir)
+    seguir_estado
+    ;;
+  --siguiente-modelo)
+    siguiente_modelo "${2:-}"
     exit $?
     ;;
   --test)
@@ -994,6 +1433,9 @@ esac
 prompt="/$skill $clave"
 [ $# -eq 0 ] || prompt="$prompt $*"
 
+# Antes de resolver el modelo: la sonda de frontera también necesita el
+# token que el arranque todavía no terminó de cargar.
+esperar_arranque "$prompt" || exit 69
 mkdir -p "$RUN_DIR"
 n=1
 while [ -e "$RUN_DIR/$skill-$n.log" ]; do n=$((n + 1)); done
@@ -1010,8 +1452,15 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 # Sin DEVKIT_LANZADOR: la pone `watch.sh` solo a lo que lanza su bucle, y un
 # `claude -p` lanzado por el bucle que a su vez llama a devkit-run no debe
 # heredarla. Un task-fix lanzado así es manual y marca `manual=1` (DEVKIT-56).
-nohup env -u DEVKIT_LANZADOR "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
+#
+# La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
+# para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
+linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" >> "$WATCH_LOG" 2>/dev/null
+nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO \
+  "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
   >/dev/null 2>&1 &
+worker=$!
 disown
 echo "lanzado: $prompt"
-echo "modelo=$modelo esfuerzo=$esfuerzo log=$logf pid=$!"
+echo "modelo=$modelo esfuerzo=$esfuerzo log=$logf pid=$worker"
+confirmar_arranque "$worker" "$prompt" "$logf" || exit 70

@@ -43,6 +43,13 @@ if [ "$anterior" = "Bloqueada" ]; then
 fi
 
 "$NOTION" set "$id" Estado=Bloqueada || { echo "task-block: no pude cambiar el Estado de $clave" >&2; exit 1; }
+# Línea para `devkit-run --estado` (DEVKIT-57): muestra el lanzamiento como
+# `bloqueada` con este motivo, sin consultar Notion. En una sola línea, cortada
+# por caracteres y no por bytes (`cut -c`), para no partir un acento.
+motivo_en_linea=$(printf '%s' "$motivo" | tr '\n' ' ')
+printf '%s task-block.sh %s Bloqueada desde %s: %s\n' "$(date -u +%FT%TZ)" "$clave" "$anterior" \
+  "${motivo_en_linea:0:300}" \
+  >>"${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}" 2>/dev/null
 "$NOTION" comentar "$id" "Bloqueada desde $anterior.
 $motivo" || echo "task-block: $clave quedó Bloqueada pero no pude comentar el motivo" >&2
 
