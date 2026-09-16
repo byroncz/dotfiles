@@ -98,7 +98,7 @@ trabajo de `pr-review`.
    saludos ni resumen:
 
    ```
-   <!-- devkit-fix sha=<head nuevo> review=<sha del marcador atendido> -->
+   <!-- devkit-fix sha=<head nuevo> review=<sha del marcador atendido><marca manual> -->
    <!-- devkit-fixes -->
    H1 | atendido | <sha corto>
    H2 | atendido | <sha corto>
@@ -112,6 +112,11 @@ trabajo de `pr-review`.
    una línea. Es lo único que `pr-review` lee de ti en el siguiente ciclo.
    Cuando atiendes un comentario humano sin marcador previo, `review=` lleva
    el `headRefOid` que leíste en el paso 2.
+   `<marca manual>` es ` manual=1` (con el espacio delante) si no te lanzó el
+   bucle, y nada si te lanzó. Lo sabes por la variable de entorno:
+   `printenv DEVKIT_LANZADOR` imprime `watch` solo cuando te lanzó `watch.sh`.
+   Con `manual=1`, el bucle reinicia su conteo de tres ciclos y revisa tu
+   head en vez de bloquear la card (DEVKIT-56).
 9. `Estado` de la card = `Revisión automática`, venga de ahí o de
    `Lista para merge`. No comentes en la card: el ciclo vive en el PR.
 10. Limpia la copia de trabajo si la creaste (paso 4).
@@ -131,8 +136,9 @@ trabajo de `pr-review`.
 - No amplíes el alcance: un hallazgo no autoriza a refactorizar lo que no
   nombra. Lo que descubras fuera del alcance va a una card nueva con
   `task-create`, y se menciona en la línea de respuesta del hallazgo.
-- La guardia contra bucles infinitos (tres ciclos sin `OK` → `task-block.sh`)
-  la aplica el bucle del contenedor, no esta skill. Si recibes un hallazgo
+- La guardia contra bucles infinitos (tres ciclos respondidos y otro
+  `CAMBIOS` sobre el head vigente → `task-block.sh`) la aplica el bucle del
+  contenedor, no esta skill. Si recibes un hallazgo
   que ya atendiste dos veces con el mismo texto, en vez de insistir bloquea
   la card con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh"
   <Clave> "<motivo>"`, con ese hallazgo como motivo.

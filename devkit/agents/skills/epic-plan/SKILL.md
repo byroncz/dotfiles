@@ -22,13 +22,25 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
      exceda el alcance va a una Épica nueva en Backlog vía `task-create`.
    - Entre tres y ocho hijas. Si salen más, la Épica es demasiado grande:
      propón partirla y detente.
+   - Dependencias. Para cada par de hijas, anota qué archivos va a tocar
+     cada una. **Si tocan los mismos archivos, dependen**: la de mayor
+     `Orden` lleva a la otra en `Depende de` y espera a que esté `Hecha`
+     (mergeada). Si no comparten archivos, no dependen, aunque una siga a la
+     otra en `Orden`: arrancará en cuanto la anterior pase a `Lista para
+     merge`, sin esperar el approve humano (DEVKIT-56). Dos ramas que
+     editan el mismo archivo en paralelo acaban en conflicto de merge; dos
+     que no, no. También depende la hija que necesita código que otra crea
+     (un script, una función), aunque no edite su archivo.
 4. Si alguna hija ya existe (misma Épica como Padre), no la dupliques:
    reutilízala y ajusta `Orden`.
 5. Crea las hijas con `task-create`, con `Padre` = la Épica, `Nivel` Tarea,
-   `Orden` 1..n, `Depende de` cuando una necesite a otra, y `Estado`
-   **`Lista`**: la aprobación de la Épica cubre a sus hijas.
+   `Orden` 1..n, `Depende de` según la regla del paso 3 (vacío si no
+   comparte archivos con ninguna anterior), y `Estado` **`Lista`**: la
+   aprobación de la Épica cubre a sus hijas. En las Notas de cada hija con
+   `Depende de`, una línea con el motivo: qué archivos comparten.
 6. Publica en la Épica un comentario con el desglose: una línea por hija con
-   Clave, título y dependencias. Máximo diez líneas.
+   Clave, título y dependencias ("espera a Hecha de X" o "arranca con la
+   anterior en Lista para merge"). Máximo diez líneas.
 7. Mueve la Épica a `En progreso`.
 8. Lanza la primera hija como proceso aparte y termina aquí:
    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" task-start

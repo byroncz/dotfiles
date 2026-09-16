@@ -27,6 +27,7 @@ review() { printf '{"author":{"login":"%s"},"state":"%s","submittedAt":"%s","bod
 comment() { printf '{"author":{"login":"%s"},"createdAt":"%s","body":"%s"}' "$1" "$2" "$3"; }
 rev() { review humano COMMENTED "$1" "<!-- devkit-review sha=$2 verdict=$3 -->"; }
 fix() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->"; }
+fixm() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 manual=1 -->"; }
 block() { comment "$BOT" "$1" "<!-- devkit-block sha=$2 -->"; }
 closed() { comment "$BOT" "$1" "<!-- devkit-closed sha=$2 -->"; }
 doc() { comment "$BOT" "$1" "<!-- devkit-doc sha=$2 -->"; }
@@ -65,9 +66,29 @@ check "CAMBIOS con documentación de un OK anterior: no documenta" fix b2 \
 check "OK y comentario humano posterior" fix-humano a1 "$(rev T01 a1 OK)" -- "$(comment humano T02 'falta la prueba X')"
 check "OK y approve humano con texto" nada a1 "$(rev T01 a1 OK)" "$(review humano APPROVED T02 'bien')" -- "$(doc T03 a1)"
 check "comentario humano anterior al marcador" nada a1 "$(rev T02 a1 OK)" -- "$(comment humano T01 'antes')" "$(doc T03 a1)"
-check "tres CAMBIOS respondidos y head nuevo" bloquear d4 \
+# Guarda de tres ciclos (DEVKIT-56): solo bloquea con el último CAMBIOS sobre
+# el head vigente. Un CAMBIOS sobre un head ya superado se revisa primero.
+check "tres ciclos respondidos, CAMBIOS sobre head superado: revisa" revisar d4 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
   "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 d4 c3)"
+check "tres ciclos respondidos y CAMBIOS sobre el head vigente" bloquear d4 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" "$(rev T07 d4 CAMBIOS)" -- \
+  "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 d4 c3)"
+check "tres ciclos, el último respondido sin push" bloquear c3 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
+  "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 c3 c3)"
+# Fix manual (PR 38): un task-fix que no lanzó el bucle marca `manual=1` y el
+# conteo vuelve a cero. Su head nuevo se revisa, y un CAMBIOS sobre él se
+# corrige en vez de bloquear, como sí pasa sin la marca (caso anterior a este).
+check "fix manual tras tres CAMBIOS: revisa el head nuevo" revisar d4 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
+  "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fixm T06 d4 c3)"
+check "CAMBIOS sobre el head del fix manual: corrige, no bloquea" fix d4 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" "$(rev T07 d4 CAMBIOS)" -- \
+  "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fixm T06 d4 c3)"
+check "fix manual sin push tras tres CAMBIOS: revisa" revisar c3 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
+  "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fixm T06 c3 c3)"
 check "tercer CAMBIOS todavía pendiente" fix c3 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
   "$(fix T02 b2 a1)" "$(fix T04 c3 b2)"
@@ -448,14 +469,22 @@ N="$CICLO/notion"
 tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
 jq -nc '{id: "epica-1", numero: 1, clave: "DEVKIT-1", estado: "En progreso", nivel: "Épica", padre: []}' >"$N/pagina-epica-1.json"
 # Tras el cierre, DEVKIT-3 ya figura Hecha entre las hijas. DEVKIT-5 tiene
-# menor Orden pero depende de DEVKIT-6, que sigue en curso: la siguiente
-# libre es DEVKIT-4.
+# menor Orden pero depende de DEVKIT-6, que espera su merge en Lista para
+# merge: la siguiente libre es DEVKIT-4.
 printf '[%s,%s,%s,%s]' "$(tarea card-3 3 Hecha 1 "")" "$(tarea card-4 4 Lista 3 card-3)" \
-  "$(tarea card-5 5 Lista 2 card-6)" "$(tarea card-6 6 "En progreso" 2 "")" >"$N/hijas-epica-1.json"
+  "$(tarea card-5 5 Lista 2 card-6)" "$(tarea card-6 6 "Lista para merge" 2 "")" >"$N/hijas-epica-1.json"
 printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
 
+# `ps` sin procesos: la prueba puede correr dentro de un `devkit-run --worker
+# /task-start` de verdad, que task-next.sh tomaría por una hija ya lanzada.
+cat >"$CICLO/ps-vacio" <<'FIN'
+#!/usr/bin/env bash
+exit 0
+FIN
+chmod +x "$CICLO/ps-vacio"
 ciclo_env=(FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH"
            DEVKIT_NOTION_BIN="$CICLO/notion.sh" DEVKIT_RUN_BIN="$CICLO/devkit-run.sh"
+           DEVKIT_PS_BIN="$CICLO/ps-vacio"
            DEVKIT_WS="$CICLO/ws" DEVKIT_RUN_DIR="$CICLO/run" DEVKIT_HOY=2026-09-16)
 
 # 1. OK del revisor: el bucle decide documentar y task-document corre con el
@@ -549,6 +578,54 @@ printf 'Pendientes de definir\n' >"$N/criterios-epica-1.txt"
 env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
 check_igual "task-close: Épica sin criterios no se cierra" "0 1" \
   "$(grep -c '^set epica-1' "$N/llamadas") $(grep -c '^comentar epica-1 Sus hijas terminaron' "$N/llamadas")"
+
+# --- Siguiente hija al OK del revisor (DEVKIT-56) ----------------------------
+# task-next.sh real, llamado por el hook --chain-next de watch.sh, contra los
+# mismos dobles. Épica 2 con dos hijas en Lista detrás de DEVKIT-10, que acaba
+# de recibir OK: DEVKIT-11 depende de ella (tocan los mismos archivos) y
+# DEVKIT-12 no. Arranca DEVKIT-12 aunque DEVKIT-11 tenga menor Orden.
+hija() {  # hija <id> <numero> <estado> <orden> <depende>, en la Épica 2
+  tarea "$@" | jq -c '.padre = ["epica-2"]'
+}
+hija card-10 10 "Lista para merge" 1 "" >"$N/card-DEVKIT-10.json"
+printf '[%s,%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 Lista 2 card-10)" \
+  "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" bash "$WATCH" --chain-next 50 DEVKIT-10 >"$CICLO/chain.log" 2>&1
+OUT="$CICLO/chain.log"
+check_igual "encadenar: al OK arranca la hija que no depende de la aprobada" "task-start DEVKIT-12" \
+  "$(cat "$N/lanzamientos")"
+check_log "encadenar: la línea de watch.log lo registra" \
+  'task-next-50 terminado: bash, DEVKIT-10 en Lista para merge :: task-next: lanzada la siguiente hija: task-start DEVKIT-12'
+
+# Solo queda la dependiente: espera el merge, sin lanzar ni comentar en la
+# Épica, porque el cierre de DEVKIT-10 vuelve a llamar a task-next.sh.
+printf '[%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 Lista 2 card-10)" >"$N/hijas-epica-2.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+check_igual "encadenar: la dependiente espera a Hecha" "task-next: sin hija libre; DEVKIT-11 esperan dependencias" \
+  "$(env "${ciclo_env[@]}" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
+check_igual "encadenar: esperar un merge no comenta en la Épica" "0 0" \
+  "$(wc -l <"$N/lanzamientos" | tr -d ' ') $(grep -c '^comentar' "$N/llamadas")"
+
+# Una hija ya en curso: no se arranca otra encima.
+printf '[%s,%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 "En progreso" 2 "")" \
+  "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
+: >"$N/lanzamientos"
+check_igual "encadenar: con una hermana En progreso no lanza" "task-next: no lanzo otra hija: DEVKIT-11 (En progreso) sigue en curso" \
+  "$(env "${ciclo_env[@]}" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
+
+# task-start ya lanzado al OK, esperando el candado, y el merge llega antes de
+# que cambie el Estado: task-close.sh no lo lanza dos veces.
+printf '[%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
+cat >"$CICLO/ps-arrancando" <<'FIN'
+#!/usr/bin/env bash
+echo "bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-12 /run/devkit/task-start-1.log opus high 40"
+FIN
+chmod +x "$CICLO/ps-arrancando"
+: >"$N/lanzamientos"
+check_igual "encadenar: task-start vivo para la hermana no se duplica" "task-next: no lanzo otra hija: task-start DEVKIT-12 ya corre o espera el candado" \
+  "$(env "${ciclo_env[@]}" DEVKIT_PS_BIN="$CICLO/ps-arrancando" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
+check_igual "encadenar: sin segundo lanzamiento" 0 "$(wc -l <"$N/lanzamientos" | tr -d ' ')"
 
 # Bloqueo por tres ciclos sin OK: marcador en el PR y task-block.sh real.
 tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
