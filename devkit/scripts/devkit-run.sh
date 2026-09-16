@@ -635,10 +635,12 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       estado="no arrancó"; detalle="sin proceso, log ni resumen tras $(hace "$edad")"
     fi
     # Bloqueo de la card después del lanzamiento y antes de que otro
-    # lanzamiento de la misma card tome el relevo.
+    # lanzamiento de la misma card tome el relevo. La Clave va seguida de un
+    # espacio o de la comilla final del prompt: así DEVKIT-57 no pasa por
+    # DEVKIT-5.
     if [ -n "$clave" ] && [ "$estado" != "en curso" ]; then
       bloqueo=$(printf '%s\n' "$resto" | awk -v c="$clave" '
-        / lanzando \(origen=/ && index($0, "\"/") && index($0, " " c) { exit }
+        / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
         index($0, " task-block.sh " c " Bloqueada") { print; exit }')
       if [ -n "$bloqueo" ]; then
         estado=bloqueada
@@ -1211,7 +1213,10 @@ FIN
 2026-09-16T11:00:00Z PR #41 (DEVKIT-56) head abc1234 sin informe: lanzando pr-review
 2026-09-16T11:00:00Z pr-review-41-abc1234 lanzando (origen=bucle): "/pr-review 41" log=$est/pr-review-41-abc1234.log
 2026-09-16T11:05:00Z pr-review-41-abc1234 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T11:08:00Z task-start-5 lanzando (origen=humano): "/task-start DEVKIT-5" log=$est/task-start-5.log
 2026-09-16T11:10:00Z task-start-1 lanzando (origen=task-close): "/task-start DEVKIT-57" log=$est/task-start-1.log
+2026-09-16T11:12:00Z task-block.sh DEVKIT-5 Bloqueada desde En progreso: motivo de la cinco.
+2026-09-16T11:12:05Z devkit-run "/task-start DEVKIT-5" terminado [task-start-5]: modelo=opus esfuerzo=high :: bloqueada
 2026-09-16T11:20:00Z task-fix-1 lanzando (origen=humano): "/task-fix DEVKIT-58" log=$est/task-fix-1.log
 2026-09-16T11:21:00Z devkit-run "/task-fix DEVKIT-58" falló (rc=1) [task-fix-1]: modelo=opus esfuerzo=high :: error
 2026-09-16T11:30:00Z task-start-3 lanzando (origen=epic-plan): "/task-start DEVKIT-59" log=$est/task-start-3.log
@@ -1232,6 +1237,9 @@ FIN
   check "estado bloqueada, con el motivo" "bloqueada|epic-plan" "$(fila DEVKIT-59)"
   check "motivo del bloqueo en el detalle" "Qué intenté: X. Qué necesito: el token de Y." \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-59" {print $6}')"
+  # Un lanzamiento de DEVKIT-57 entre medio no corta el bloqueo de DEVKIT-5:
+  # la Clave se compara completa, no como prefijo.
+  check "estado bloqueada con otra Clave que la extiende en medio" "bloqueada|humano" "$(fila DEVKIT-5)"
   check "estado no arrancó (sin proceso, log vacío, pasado el margen)" "no arrancó|humano" "$(fila DEVKIT-60)"
   # Evidencia del 2026-09-16: dos segundos después de "lanzando", sin ningún
   # proceso todavía, el lanzamiento ya cuenta como en curso.
