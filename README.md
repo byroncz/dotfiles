@@ -198,13 +198,15 @@ la posición desde la que empieza a buscar el primero disponible.
 `revisión` (`pr-review` y `epic-plan`, desde DEVKIT-50: un mal desglose de
 Épica cuesta más que cualquier card) usa el primer modelo de la lista;
 `implementación` (`task-start`, `task-fix`, `task-submit`, `task-document`)
-el segundo. Cerrar y bloquear no tienen rol: desde DEVKIT-55 son bash
-(`task-close.sh`, `task-block.sh`) y no lanzan modelo, así que el rol
-`contabilidad` que los agrupaba se retiró. El esfuerzo es `high` en todos los
-roles salvo `epic-plan`, que sube a `max`: un mal desglose se paga en todas
-sus hijas. El `Tipo` de la card (`feature`, `bug`, `chore`) ya no elige
-modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
-CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
+el segundo, salvo que el rol declare `rondas` (ver "Escalera de modelos por
+ronda" más abajo), que manda sobre `model_index` mientras esté activa. Cerrar
+y bloquear no tienen rol: desde DEVKIT-55 son bash (`task-close.sh`,
+`task-block.sh`) y no lanzan modelo, así que el rol `contabilidad` que los
+agrupaba se retiró. El esfuerzo es `high` en todos los roles salvo
+`epic-plan`, que sube a `max`, y salvo que `rondas` fije uno distinto por
+ronda: un mal desglose se paga en todas sus hijas. El `Tipo` de la card
+(`feature`, `bug`, `chore`) ya no elige modelo ni esfuerzo; sigue eligiendo el
+prefijo de rama y la sección del CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
 arranque del contenedor y el resultado queda cacheado en
 `/run/devkit/frontera/<alias>` (tmpfs: se vuelve a comprobar en cada `devkit
 recreate`). Un `si` vale todo el arranque; un `no` caduca a los 600 s
