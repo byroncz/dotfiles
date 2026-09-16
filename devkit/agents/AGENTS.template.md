@@ -10,8 +10,8 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 ## Cómo se trabaja aquí
 
 - Código del proyecto en Notion: el valor `project` de `.devkit/devkit.toml`.
-  Cada tarea es una card con Clave `<CÓDIGO>-<n>`. Las skills
-  en `.claude/skills/` definen cada paso.
+  Cada tarea es una card con Clave `<CÓDIGO>-<n>`. Las skills en
+  `.claude/skills/` definen cada paso.
 - Una card activa por sesión. Rama `<tipo>/<CÓDIGO>-<n>-slug` desde `main`
   (`feat/`, `fix/` o `chore/` según el Tipo de la card), PR a `main` con
   auto-merge. Nunca push directo a `main`. Nunca force push.

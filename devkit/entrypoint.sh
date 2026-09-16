@@ -165,8 +165,9 @@ if [ -d "$TEMPLATE_DIR/agents" ]; then
       mv "$WS/devkit.toml" "$WS/.devkit/devkit.toml"
       log "migración: devkit.toml movido de raíz a .devkit/"
     else
-      # Proyecto nuevo sin .devkit/devkit.toml aún: se crea con placeholders. project-init
-      # corrige `project`; template-update corrige `template` en el primer bump.
+      # Proyecto nuevo sin .devkit/devkit.toml: se crea con placeholders.
+      # project-init corrige `project`; template-update corrige `template`.
+
       {
         echo "[devkit]"
         printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"

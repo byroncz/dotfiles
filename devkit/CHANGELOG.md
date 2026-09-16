@@ -21,10 +21,14 @@ versión que usa un proyecto y la destino.
 - `devkit.sh` (host), `devkit-test.sh`, `watch.sh` y las skills
   `project-init`, `task-create`, `pr-review`, `template-update` y
   `template-propagate` apuntan a `.devkit/devkit.toml`.
-- Cambios requeridos: `template-update` mueve `devkit.toml` de la raíz a
-  `.devkit/` la primera vez que un proyecto sube a esta versión, y lo dice en
-  su comentario. **En el Mac**: reinstala el comando con
-  `new-project.sh <proyecto> --ref <etiqueta>` para que lea la ruta nueva; sin
+- Opcionalmente, `.devkit/roles.toml` anula la tabla de roles del template
+  (`devkit/agents/roles.toml`) en este proyecto solo. Si existe, `devkit-run.sh`
+  lo resuelve primero en el orden de búsqueda de roles.
+- Cambios requeridos: el arranque mueve `devkit.toml` de la raíz a `.devkit/`
+  la primera vez que un proyecto sube a esta versión; `template-update` lo
+  repite si hiciera falta. El movimiento se queda sin commit hasta que la card
+  de actualización lo incluya. **En el Mac**: reinstala el comando con
+  `new-project.sh <proyecto> --version <X.Y.Z>` para que lea la ruta nueva; sin
   esto, `devkit update` falla cuando `~/.devkit/bin/devkit` intenta abrir el
   archivo viejo.
 

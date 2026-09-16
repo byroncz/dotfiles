@@ -126,7 +126,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): ese archivo es el token del editor en crudo y no se pega en un chat ni en una card (DEVKIT-51). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (`devkit/agents/roles.toml`) y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca por su propio `Tipo`. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca por su propio `Tipo`. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -407,8 +407,9 @@ observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
 ## Qué declara cada proyecto
 
-Un solo archivo, versionado en `.devkit/devkit.toml` (la raíz del proyecto
-queda libre para sus propios `AGENTS.md`, `CLAUDE.md` y `README.md`):
+Un archivo obligatorio, versionado en `.devkit/devkit.toml`, y opcionalmente
+un segundo archivo de anulación de roles, `.devkit/roles.toml` (la raíz del
+proyecto queda libre para sus propios `AGENTS.md`, `CLAUDE.md` y `README.md`):
 
 ```toml
 [devkit]
@@ -423,12 +424,17 @@ reviewer = "usuario"   # opcional: usuario de GitHub al que pr-review pide el re
 Sin `reviewer`, `pr-review` usa el dueño del repo si es un usuario; en una
 organización hay que declararlo.
 
+Opcionalmente, `.devkit/roles.toml` anula la tabla de roles del template y
+controla qué modelo y esfuerzo recibe cada skill en este proyecto. Si existe,
+`devkit-run.sh` lo resuelve primero; sin él, todos los proyectos usan la tabla
+que viene en `devkit/agents/roles.toml` del template.
+
 En el Mac, `~/.devkit/<proyecto>/devkit.env` guarda solo lo personal: URL del
 repo, identidad git y remoto de Dropbox. **Importante**: cuando actualices a una
 versión que mueva `devkit.toml` a `.devkit/` (DEVKIT-53 en adelante),
-reinstala el comando local con `new-project.sh <proyecto> --ref <etiqueta>` para
-que lea la nueva ruta. Sin esto, `devkit update` falla cuando el comando viejo
-intenta abrir el archivo en la ubicación antigua.
+reinstala el comando local con `new-project.sh <proyecto> --version <X.Y.Z>`
+para que lea la nueva ruta. Sin esto, `devkit update` falla cuando el comando
+viejo intenta abrir el archivo en la ubicación antigua.
 
 ## Mantener este documento
 
