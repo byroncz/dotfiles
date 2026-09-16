@@ -140,6 +140,12 @@ fi
 # bucle pero no en el lanzamiento manual, hasta el próximo `devkit recreate`
 # (DEVKIT-50, hallazgo H2 de pr-review).
 printf 'export DEVKIT_SCRIPTS_DIR=%q\n' "$SCRIPTS_DIR" >> "$ENV_FILE"
+# Y en el entorno de este mismo proceso, que es el que lanza watch.sh: el
+# archivo de arriba ya se cargó en la fase 1, así que sin este export ni el
+# bucle ni los `claude -p` que lanza tenían la variable, y una skill que
+# invocaba `${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh` caía a
+# la copia de la imagen, vieja en modo dev (DEVKIT-55).
+export DEVKIT_SCRIPTS_DIR="$SCRIPTS_DIR"
 
 # /opt/devkit/image es la copia del template con la que se construyó la imagen.
 # Lo que está ahí (Dockerfile, zsh, proxy, vscode) no se refresca al
