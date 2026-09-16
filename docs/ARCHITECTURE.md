@@ -364,8 +364,16 @@ resuelve modelo y esfuerzo por el papel de la skill en el flujo (revisión,
 implementación o contabilidad), no por el `Tipo` de la card: `roles.toml`
 declara una lista `frontera` ordenada de modelos y cada rol el índice desde
 el que empieza a buscar el primero disponible, con caída al siguiente si no
-responde (DEVKIT-54). Detalle completo en el README, sección "Modelo,
-esfuerzo y costo por rol".
+responde (DEVKIT-54). La sonda que decide si un modelo responde corre aislada
+—directorio vacío, sin MCP y sin herramientas—; si no, hereda el contexto de
+`/workspace` y deja de ser una sonda, al punto de pasarse del timeout y marcar
+como caído al modelo que sí estaba disponible. Detalle completo en el README,
+sección "Modelo, esfuerzo y costo por rol".
+
+Una skill que necesite saber si otro agente ya ocupa el workspace pregunta con
+`devkit-run --otros-agentes`, nunca con un `pgrep` sobre la Clave: la Clave
+viaja en los argumentos del propio lanzador, así que un `pgrep` devuelve los
+cuatro procesos del lanzamiento en curso como si fueran ajenos (DEVKIT-54).
 
 ## 6. Flujo de trabajo
 

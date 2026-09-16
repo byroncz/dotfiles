@@ -22,11 +22,23 @@ versión que usa un proyecto y la destino.
   `task-document` (nace en la hija siguiente de esta Épica), el segundo;
   `task-close` y `task-block`, el tercero. Esfuerzo `high` en todos salvo
   `epic-plan`, que sube a `max`.
-- La disponibilidad de cada modelo se comprueba una sola vez por arranque
-  (una llamada mínima, `claude -p "ok" --model <alias>`), con el resultado
-  cacheado en `/run/devkit/frontera/<alias>` (tmpfs: se repite en cada
-  `devkit recreate`). Si el modelo que le toca a un rol no responde,
-  `devkit-run` cae al siguiente de la lista.
+- La disponibilidad de cada modelo se comprueba una sola vez por arranque,
+  con el resultado cacheado en `/run/devkit/frontera/<alias>` (tmpfs: se
+  repite en cada `devkit recreate`). Si el modelo que le toca a un rol no
+  responde, `devkit-run` cae al siguiente de la lista y lo escribe en
+  `watch.log` (`sonda de modelo: <alias> no responde ...`).
+- La sonda corre aislada: directorio vacío, `--strict-mcp-config` con una
+  configuración MCP vacía y sin herramientas. Sin aislarla hereda el contexto
+  de `/workspace` y deja de ser mínima: medido con `fable`, 41 s y USD 0.95
+  para responder "ok", por encima del timeout de 30 s, de modo que el primer
+  modelo de la lista quedaba marcado como caído en cada arranque. Aislada
+  tarda 2 s.
+- `devkit-run --otros-agentes` lista los procesos `claude -p` ajenos al
+  lanzamiento en curso y sale 0 si el workspace está libre. Es lo que deben
+  usar las skills en vez de un `pgrep -f <Clave>`: la Clave viaja en los
+  argumentos del lanzador, así que un `pgrep` devuelve los cuatro procesos
+  propios (el `--worker`, su subshell, su vigilante y el `claude -p` propio)
+  como si fueran de otro agente. `task-start/SKILL.md` lo deja escrito.
 - `epic-plan/SKILL.md` y `task-close/SKILL.md` lanzan la siguiente/primera
   hija por la ruta explícita del script
   (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el
