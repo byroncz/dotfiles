@@ -390,9 +390,12 @@ run_tests() {
   check "rol de pr-review" revision "$(role_of '/pr-review 31')"
   check "rol de epic-plan" revision "$(role_of '/epic-plan DEVKIT-1')"
   # DEVKIT-55: task-close y task-block son bash; el rol que los agrupaba ya no
-  # existe en la tabla del template.
+  # existe en la tabla del template. Fuera de dev no hay ../agents: se busca
+  # la tabla como ROLES_FILE, y un archivo ausente cuenta 0.
+  local tabla_template="$HERE/../agents/roles.toml"
+  [ -f "$tabla_template" ] || tabla_template="${DEVKIT_ROLES_FILE_FALLBACK:-/opt/devkit/template/agents/roles.toml}"
   check "roles.toml del template sin rol contabilidad" 0 \
-    "$(grep -c '^contabilidad\.' "$HERE/../agents/roles.toml" 2>/dev/null)"
+    "$(cat "$tabla_template" 2>/dev/null | grep -c '^contabilidad\.')"
   check "rol de task-start" implementacion "$(role_of '/task-start')"
   check "rol de task-fix" implementacion "$(role_of '/task-fix DEVKIT-44')"
   check "rol de task-submit" implementacion "$(role_of '/task-submit DEVKIT-44')"
