@@ -167,7 +167,6 @@ if [ -d "$TEMPLATE_DIR/agents" ]; then
     else
       # Proyecto nuevo sin .devkit/devkit.toml: se crea con placeholders.
       # project-init corrige `project`; template-update corrige `template`.
-
       {
         echo "[devkit]"
         printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
