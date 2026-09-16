@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# Cierra una card cuyo PR ya se mergeó (DEVKIT-55). Hace lo mismo que la skill
+# task-close a la que reemplaza, en bash y en segundos: `Hecha`, `Cierre`,
+# comentario con el enlace a la entrada de Documentación, marcador
+# `devkit-closed` en el PR, cierre de la Épica si era la última hija y
+# lanzamiento de la siguiente hija con `devkit-run`.
+#
+# Uso:
+#   task-close.sh <Clave> [URL o número del PR]
+#
+# La entrada de Documentación ya no se escribe aquí: la escribe la skill
+# `task-document` cuando `pr-review` da OK, antes del merge, para que refleje
+# lo que se revisó. Si al cerrar no existe (un merge manual antes de que el
+# bucle documentara, por ejemplo), se lanza `task-document` para que la
+# escriba igual.
+#
+# Idempotente: una card ya `Hecha` solo recibe el marcador en el PR si le
+# falta. La Épica y la siguiente hija se atienden solo en la ejecución que
+# pasa la card a `Hecha`, igual que la skill: repetirlas podría lanzar dos
+# veces la misma hija.
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WS="${DEVKIT_WS:-/workspace}"
+RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
+NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
+DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
+GH="${DEVKIT_GH_BIN:-gh}"
+LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
+HOY="${DEVKIT_HOY:-$(date +%F)}"
+
+say() { printf 'task-close: %s\n' "$*"; }
+
+clave="${1:-}"
+pr_arg="${2:-}"
+if [ -z "$clave" ]; then
+  echo "uso: task-close.sh <Clave> [URL o número del PR]" >&2
+  exit 64
+fi
+codigo=${clave%-*}
+
+card=$("$NOTION" card "$clave") || { say "no pude leer $clave en Notion"; exit 1; }
+id=$(jq -r .id <<<"$card")
+estado=$(jq -r '.estado // ""' <<<"$card")
+nivel=$(jq -r '.nivel // ""' <<<"$card")
+
+clave_de() { jq -r --arg c "$codigo" '"\($c)-\(.numero)"' <<<"$1"; }
+
+# --- Épica -----------------------------------------------------------------
+# Regla de DEVKIT-44: solo se cierra si todas sus hijas están Hecha, la Épica
+# está En progreso y tiene Criterios de aceptación de verdad. Cerrar sin el
+# chequeo dejó DEVKIT-19 en Hecha con todo su contenido sin ejecutar.
+cerrar_epica() {  # cerrar_epica <page_id> <Clave>
+  local eid=$1 eclave=$2 epica hijas pendientes criterios
+  epica=$("$NOTION" pagina "$eid") || { say "no pude leer la Épica $eclave"; return 1; }
+  if [ "$(jq -r .estado <<<"$epica")" = "Hecha" ]; then
+    say "la Épica $eclave ya está Hecha"
+    return 0
+  fi
+  hijas=$("$NOTION" hijas "$eid") || { say "no pude leer las hijas de $eclave"; return 1; }
+  pendientes=$(jq -r --arg c "$codigo" '[.[] | select(.estado != "Hecha") | "\($c)-\(.numero) (\(.estado))"] | join(", ")' <<<"$hijas")
+  if [ -n "$pendientes" ]; then
+    say "la Épica $eclave tiene hijas sin cerrar: $pendientes"
+    return 2
+  fi
+  criterios=$("$NOTION" criterios "$eid") || criterios=""
+  if [ "$(jq -r .estado <<<"$epica")" != "En progreso" ] || [ -z "$criterios" ] \
+     || printf '%s' "$criterios" | grep -qiE 'pendientes? de definir'; then
+    "$NOTION" comentar "$eid" "Sus hijas terminaron, pero la Épica no se cierra: le falta estar En progreso o tener Criterios de aceptación definidos (regla de DEVKIT-44)."
+    say "la Épica $eclave no cumple la regla de cierre de DEVKIT-44; comentado"
+    return 0
+  fi
+  "$NOTION" set "$eid" Estado=Hecha "Cierre=$HOY" || return 1
+  "$NOTION" comentar "$eid" "Cerrada: todas sus hijas están Hecha. La entrada de Documentación consolidada la escribe task-document."
+  "$DEVKIT_RUN" task-document "$eclave" >/dev/null 2>&1 \
+    && say "Épica $eclave Hecha; lanzado task-document para la entrada consolidada" \
+    || say "Épica $eclave Hecha; no pude lanzar task-document"
+}
+
+if [ "$nivel" = "Épica" ]; then
+  cerrar_epica "$id" "$clave"
+  rc=$?
+  [ "$rc" -eq 2 ] && rc=0
+  exit "$rc"
+fi
+
+# --- PR y merge ------------------------------------------------------------
+pr=${pr_arg:-$(jq -r '.pr // ""' <<<"$card")}
+if [ -z "$pr" ]; then
+  "$NOTION" comentar "$id" "task-close: la card no tiene PR registrado y no recibí uno; no se puede cerrar."
+  say "$clave sin PR; comentado en la card"
+  exit 1
+fi
+if ! pr_json=$("$GH" pr view "$pr" --json state,mergeCommit,url,number,comments,headRefOid 2>/dev/null); then
+  say "gh no pudo leer el PR $pr"
+  exit 1
+fi
+if [ "$(jq -r .state <<<"$pr_json")" != "MERGED" ]; then
+  say "PR no mergeado: $pr"
+  exit 0
+fi
+sha=$(jq -r '.mergeCommit.oid // ""' <<<"$pr_json")
+pr_url=$(jq -r .url <<<"$pr_json")
+pr_num=$(jq -r .number <<<"$pr_json")
+
+# --- Card ------------------------------------------------------------------
+transicion=0
+doc_url=""
+if [ "$estado" != "Hecha" ]; then
+  props=(Estado=Hecha "Cierre=$HOY")
+  [ -n "$(jq -r '.pr // ""' <<<"$card")" ] || props+=("PR=$pr_url")
+  "$NOTION" set "$id" "${props[@]}" || { say "no pude pasar $clave a Hecha"; exit 1; }
+  transicion=1
+  if doc=$("$NOTION" documentacion "$id"); then
+    doc_url=$(jq -r .url <<<"$doc")
+    "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url"
+  else
+    "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: se lanza task-document para escribirla."
+    "$DEVKIT_RUN" task-document "$clave" >/dev/null 2>&1 \
+      && say "$clave sin entrada de Documentación; lanzado task-document" \
+      || say "$clave sin entrada de Documentación y no pude lanzar task-document"
+  fi
+  say "$clave Hecha"
+else
+  say "$clave ya estaba Hecha"
+  doc=$("$NOTION" documentacion "$id") && doc_url=$(jq -r .url <<<"$doc")
+fi
+
+# --- Marcador en el PR -----------------------------------------------------
+# Mismo patrón que `DECIDE_MERGED` en watch.sh, sha incluido: un marcador sin
+# sha lo ignora el bucle, y este chequeo tampoco lo da por publicado.
+if [ -z "$sha" ]; then
+  say "el PR $pr_url no trae merge commit; no publico el marcador"
+elif [ "$(jq '[.comments[] | select(.body | test("<!-- devkit-closed sha=[0-9a-f]+ -->"))] | length' <<<"$pr_json")" -eq 0 ]; then
+  cuerpo="<!-- devkit-closed sha=$sha -->"
+  [ -z "$doc_url" ] || cuerpo="$cuerpo
+Documentación: $doc_url"
+  "$GH" pr comment "$pr_num" --body "$cuerpo" >/dev/null && say "marcador devkit-closed publicado en #$pr_num"
+fi
+
+# --- Limpieza local --------------------------------------------------------
+# Solo con el workspace libre: el bucle de merges corre en paralelo con las
+# skills, y un `git switch` en medio de un task-start le movería la rama.
+exec 9>"$LOCK"
+if flock -n 9; then
+  rama=$(jq -r '.rama // ""' <<<"$card" | sed -E 's#^.*/tree/##')
+  if [ -n "$rama" ] && git -C "$WS" show-ref --verify --quiet "refs/heads/$rama"; then
+    if [ "$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$rama" ]; then
+      if [ -z "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
+        git -C "$WS" switch -q main && git -C "$WS" pull -q --ff-only >/dev/null 2>&1
+      fi
+    fi
+    # `-d` no sirve tras un squash merge: la rama no queda como ancestro de
+    # main. Se fuerza solo si su punta es el head que se mergeó, así un
+    # commit local que no llegó al PR no se pierde.
+    if [ "$(git -C "$WS" rev-parse "refs/heads/$rama" 2>/dev/null)" = "$(jq -r '.headRefOid // ""' <<<"$pr_json")" ]; then
+      git -C "$WS" branch -q -D "$rama" 2>/dev/null && say "rama local $rama eliminada"
+    else
+      say "rama local $rama con commits que no están en el PR; no se borra"
+    fi
+  fi
+  flock -u 9
+fi
+exec 9>&-
+
+[ "$transicion" = 1 ] || exit 0
+
+# --- Épica y siguiente hija ------------------------------------------------
+padre=$(jq -r '.padre[0] // ""' <<<"$card")
+[ -n "$padre" ] || exit 0
+hijas=$("$NOTION" hijas "$padre") || { say "no pude leer las hijas de la Épica"; exit 1; }
+epica=$("$NOTION" pagina "$padre") || { say "no pude leer la Épica"; exit 1; }
+eclave=$(clave_de "$epica")
+
+if [ "$(jq '[.[] | select(.estado != "Hecha")] | length' <<<"$hijas")" -eq 0 ]; then
+  cerrar_epica "$padre" "$eclave"
+  exit $?
+fi
+
+# Siguiente hija libre, con las reglas de task-start: `Lista`, nivel Tarea,
+# todo `Depende de` en `Hecha`, orden por `Orden` y luego por `Prioridad`. Una
+# dependencia fuera de la Épica se consulta aparte.
+hechas=$(jq -c '[.[] | select(.estado == "Hecha") | .id]' <<<"$hijas")
+for dep in $(jq -r --argjson h "$hechas" \
+    '[.[] | select(.estado == "Lista") | .depende[]] | unique | map(select(. as $d | $h | index($d) | not)) | .[]' <<<"$hijas"); do
+  if [ "$(jq -r --arg d "$dep" '[.[] | select(.id == $d)] | length' <<<"$hijas")" -eq 0 ] \
+     && [ "$("$NOTION" pagina "$dep" 2>/dev/null | jq -r .estado)" = "Hecha" ]; then
+    hechas=$(jq -c --arg d "$dep" '. + [$d]' <<<"$hechas")
+  fi
+done
+siguiente=$(jq -r --argjson h "$hechas" --arg c "$codigo" '
+  def prio: {"alta": 0, "media": 1, "baja": 2}[. // ""] // 3;
+  [.[] | select(.estado == "Lista" and .nivel == "Tarea")
+       | select(all(.depende[]; . as $d | $h | index($d)))]
+  | sort_by([(.orden // 1e9), (.prioridad | prio)])
+  | first // empty | "\($c)-\(.numero)"' <<<"$hijas")
+
+if [ -n "$siguiente" ]; then
+  "$DEVKIT_RUN" task-start "$siguiente" >/dev/null 2>&1 \
+    && say "lanzada la siguiente hija: task-start $siguiente" \
+    || say "no pude lanzar task-start $siguiente"
+elif [ "$(jq '[.[] | select(.estado == "Lista")] | length' <<<"$hijas")" -gt 0 ]; then
+  esperan=$(jq -r --arg c "$codigo" '[.[] | select(.estado == "Lista") | "\($c)-\(.numero)"] | join(", ")' <<<"$hijas")
+  "$NOTION" comentar "$padre" "Tras cerrar $clave no hay hija libre: $esperan esperan dependencias que no están Hecha."
+  say "sin hija libre; $esperan esperan dependencias"
+else
+  say "sin hijas en Lista; la Épica sigue con hijas en curso"
+fi

@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Prueba de watch.sh sin tocar GitHub ni gastar cuota. Dos bloques: la tabla de
+# Prueba de watch.sh sin tocar GitHub ni gastar cuota. Bloques: la tabla de
 # decisión, donde cada caso es un PR sintético (head, reviews, comments) y la
-# acción que se espera de `watch.sh --decide`, y el relanzamiento por cuota
-# agotada, con logs falsos y un doble de `claude`. Sale con 1 si algún caso
+# acción que se espera de `watch.sh --decide`; el relanzamiento por cuota
+# agotada, con logs falsos y un doble de `claude`; las alarmas; y el ciclo
+# OK -> documentar -> merge -> cerrar con task-close.sh y task-block.sh reales
+# contra dobles de `gh` y de notion.sh (DEVKIT-55). Sale con 1 si algún caso
 # falla.
-# Uso: bash watch-test.sh
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WATCH="$HERE/watch.sh"
@@ -28,6 +29,7 @@ rev() { review humano COMMENTED "$1" "<!-- devkit-review sha=$2 verdict=$3 -->";
 fix() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->"; }
 block() { comment "$BOT" "$1" "<!-- devkit-block sha=$2 -->"; }
 closed() { comment "$BOT" "$1" "<!-- devkit-closed sha=$2 -->"; }
+doc() { comment "$BOT" "$1" "<!-- devkit-doc sha=$2 -->"; }
 join() { local IFS=,; printf '%s' "$*"; }
 
 # check <nombre> <acción esperada> <head> <reviews...> -- <comments...>
@@ -52,10 +54,17 @@ check "PR sin marcadores" revisar a1 --
 check "CAMBIOS para el head, sin respuesta" fix a1 "$(rev T01 a1 CAMBIOS)" --
 check "CAMBIOS respondido con head nuevo" revisar b2 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 b2 a1)"
 check "CAMBIOS respondido sin cambiar el head (DEVKIT-22)" revisar a1 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 a1 a1)"
-check "OK para el head" nada a1 "$(rev T01 a1 OK)" --
+check "OK para el head, sin documentar (DEVKIT-55)" documentar a1 "$(rev T01 a1 OK)" --
+check "OK para el head, ya documentado" nada a1 "$(rev T01 a1 OK)" -- "$(doc T02 a1)"
+check "OK para un head nuevo, documentado solo el anterior" documentar b2 \
+  "$(rev T01 a1 OK)" "$(rev T04 b2 OK)" -- "$(doc T02 a1)" "$(fix T03 b2 a1)"
+check "OK y comentario humano antes de documentar: primero corrige" fix-humano a1 \
+  "$(rev T01 a1 OK)" -- "$(comment humano T02 'cambia X')"
+check "CAMBIOS con documentación de un OK anterior: no documenta" fix b2 \
+  "$(rev T01 a1 OK)" "$(rev T03 b2 CAMBIOS)" -- "$(doc T02 a1)"
 check "OK y comentario humano posterior" fix-humano a1 "$(rev T01 a1 OK)" -- "$(comment humano T02 'falta la prueba X')"
-check "OK y approve humano con texto" nada a1 "$(rev T01 a1 OK)" "$(review humano APPROVED T02 'bien')" --
-check "comentario humano anterior al marcador" nada a1 "$(rev T02 a1 OK)" -- "$(comment humano T01 'antes')"
+check "OK y approve humano con texto" nada a1 "$(rev T01 a1 OK)" "$(review humano APPROVED T02 'bien')" -- "$(doc T03 a1)"
+check "comentario humano anterior al marcador" nada a1 "$(rev T02 a1 OK)" -- "$(comment humano T01 'antes')" "$(doc T03 a1)"
 check "tres CAMBIOS respondidos y head nuevo" bloquear d4 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" -- \
   "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 d4 c3)"
@@ -384,5 +393,166 @@ else
   printf 'FAIL %-58s rc=%s salida=%s\n' "agentes-vivos sin agentes: mensaje claro y rc 0" "$RC_VACIO" "$AGENTES_VACIO"
   fail=1
 fi
+
+# --- Cierre y bloqueo en bash, documentación al aprobar (DEVKIT-55) --------
+# Ciclo completo OK -> documentar -> merge -> cerrar, sin GitHub ni Notion:
+# un `gh` de mentira en PATH, un doble de notion.sh que responde desde
+# archivos y anota cada llamada, y un doble de devkit-run.sh que anota los
+# lanzamientos. task-close.sh y task-block.sh son los reales.
+CICLO="$TMP/ciclo"
+mkdir -p "$CICLO/bin" "$CICLO/notion" "$CICLO/gh" "$CICLO/ws/.devkit" "$CICLO/run"
+printf '[devkit]\nproject = "DEVKIT"\n' >"$CICLO/ws/.devkit/devkit.toml"
+
+cat >"$CICLO/notion.sh" <<'FIN'
+#!/usr/bin/env bash
+d=$FAKE_NOTION
+printf '%s\n' "$*" >>"$d/llamadas"
+case "$1" in
+  card) cat "$d/card-$2.json" 2>/dev/null || exit 1 ;;
+  pagina) cat "$d/pagina-$2.json" 2>/dev/null || exit 1 ;;
+  hijas) cat "$d/hijas-$2.json" 2>/dev/null || exit 1 ;;
+  documentacion) cat "$d/doc-$2.json" 2>/dev/null || exit 1 ;;
+  criterios) cat "$d/criterios-$2.txt" 2>/dev/null ;;
+  set|comentar) ;;
+  *) exit 64 ;;
+esac
+FIN
+cat >"$CICLO/devkit-run.sh" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_NOTION/lanzamientos"
+FIN
+# gh de mentira: `pr list` devuelve la línea ya formateada que produciría el
+# --jq de watch.sh; `pr view` distingue la consulta de watch.sh (solo
+# comentarios) de la de task-close.sh (estado y merge commit).
+cat >"$CICLO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+d=$FAKE_GH
+case "$1 $2" in
+  "pr list") cat "$d/mergeados" 2>/dev/null ;;
+  "pr view") case "$*" in *state*) cat "$d/pr.json" ;; *) jq '{comments}' "$d/pr.json" ;; esac ;;
+  "pr comment") printf '%s\n' "$*" >>"$d/comentarios" ;;
+  *) exit 1 ;;
+esac
+FIN
+chmod +x "$CICLO/notion.sh" "$CICLO/devkit-run.sh" "$CICLO/bin/gh"
+
+# tarea <id> <numero> <estado> <orden> <depende (ids separados por coma)>
+tarea() {
+  jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" --argjson o "$4" --arg dep "$5" \
+    '{id: $id, url: "https://notion.so/\($id)", numero: $n, clave: "DEVKIT-\($n)", estado: $e,
+      nivel: "Tarea", prioridad: "alta", orden: $o, pr: null,
+      rama: "https://github.com/o/r/tree/feat/DEVKIT-\($n)-algo",
+      padre: ["epica-1"], depende: ($dep | split(",") | map(select(. != ""))), documentacion: []}'
+}
+N="$CICLO/notion"
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+jq -nc '{id: "epica-1", numero: 1, clave: "DEVKIT-1", estado: "En progreso", nivel: "Épica", padre: []}' >"$N/pagina-epica-1.json"
+# Tras el cierre, DEVKIT-3 ya figura Hecha entre las hijas. DEVKIT-5 tiene
+# menor Orden pero depende de DEVKIT-6, que sigue en curso: la siguiente
+# libre es DEVKIT-4.
+printf '[%s,%s,%s,%s]' "$(tarea card-3 3 Hecha 1 "")" "$(tarea card-4 4 Lista 3 card-3)" \
+  "$(tarea card-5 5 Lista 2 card-6)" "$(tarea card-6 6 "En progreso" 2 "")" >"$N/hijas-epica-1.json"
+printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
+
+ciclo_env=(FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH"
+           DEVKIT_NOTION_BIN="$CICLO/notion.sh" DEVKIT_RUN_BIN="$CICLO/devkit-run.sh"
+           DEVKIT_WS="$CICLO/ws" DEVKIT_RUN_DIR="$CICLO/run" DEVKIT_HOY=2026-09-16)
+
+# 1. OK del revisor: el bucle decide documentar y task-document corre con el
+#    rol de implementación (segundo modelo de la frontera).
+check "ciclo: OK sin documentar" documentar a1 "$(rev T01 a1 OK)" --
+corre_documentar() {
+  local dir
+  dir=$(mktemp -d -p "$TMP")
+  OUT="$dir/watch.log"
+  DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS=0 \
+  DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+    bash "$WATCH" --run-skill "task-document-40-a1" "/task-document DEVKIT-3 40" "documentar:40:a1" >"$OUT" 2>&1
+}
+corre_documentar
+check_log "ciclo: task-document corre con el segundo modelo" 'task-document-40-a1 terminado: modelo=opus esfuerzo=high'
+# 2. task-document deja su marcador: ya no hay nada que hacer hasta el merge.
+check "ciclo: documentado, espera el merge" nada a1 "$(rev T01 a1 OK)" -- "$(doc T02 a1)"
+
+# 3. Merge: el bucle de mergeados cierra con task-close.sh.
+MERGED_AT=$(date -u -d '-5 seconds' +%FT%TZ)
+printf '40\thttps://github.com/o/r/pull/40\t%s\tDEVKIT-3 algo\n' "$MERGED_AT" >"$CICLO/gh/mergeados"
+jq -nc '{state: "MERGED", number: 40, url: "https://github.com/o/r/pull/40", headRefOid: "a1",
+         mergeCommit: {oid: "f1"}, comments: [{body: "<!-- devkit-doc sha=a1 -->"}]}' >"$CICLO/gh/pr.json"
+env "${ciclo_env[@]}" bash "$WATCH" --merged-once >"$CICLO/watch.log" 2>&1
+OUT="$CICLO/watch.log"
+check_log "ciclo: cerrado en bash con la medida desde el merge" 'task-close-40 terminado: bash, cerrado [0-9]+s después del merge'
+SEG=$(grep -oE 'cerrado [0-9]+s después' "$OUT" | grep -oE '[0-9]+')
+check_igual "ciclo: cerrado en menos de un minuto desde el merge" si "$([ "${SEG:-99}" -lt 60 ] && echo si || echo no)"
+check_igual "ciclo: card a Hecha con Cierre y PR" "set card-3 Estado=Hecha Cierre=2026-09-16 PR=https://github.com/o/r/pull/40" \
+  "$(grep '^set card-3' "$N/llamadas" | head -1)"
+check_igual "ciclo: comentario con el enlace a la Documentación" "comentar card-3 Cerrada. Documentación: https://notion.so/doc-3" \
+  "$(grep '^comentar card-3' "$N/llamadas" | head -1)"
+check_igual "ciclo: marcador devkit-closed con sha y enlace" 1 \
+  "$(grep -c 'pr comment 40 --body <!-- devkit-closed sha=f1 -->' "$CICLO/gh/comentarios" 2>/dev/null)"
+check_igual "ciclo: lanza la siguiente hija libre por Orden y dependencias" "task-start DEVKIT-4" \
+  "$(cat "$N/lanzamientos" 2>/dev/null)"
+# 4. Una segunda pasada no repite el cierre: `launched` lo recuerda.
+env "${ciclo_env[@]}" bash "$WATCH" --merged-once >>"$CICLO/watch.log" 2>&1
+check_igual "ciclo: una segunda pasada no vuelve a cerrar" 1 "$(grep -c 'task-close-40 terminado' "$OUT")"
+
+# task-close.sh idempotente: card ya Hecha y marcador publicado -> no toca nada.
+: >"$N/llamadas"; : >"$N/lanzamientos"; : >"$CICLO/gh/comentarios"
+tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
+jq '.comments += [{body: "<!-- devkit-closed sha=f1 -->"}]' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: card ya Hecha no cambia ni lanza nada" "0 0 0" \
+  "$(grep -cE '^(set|comentar)' "$N/llamadas") $(wc -l <"$N/lanzamientos" | tr -d ' ') $(wc -l <"$CICLO/gh/comentarios" | tr -d ' ')"
+
+# PR sin merge: no cierra.
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+jq '.state = "OPEN"' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$N/llamadas"
+check_igual "task-close: PR no mergeado no cierra" "task-close: PR no mergeado: 40" \
+  "$(env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 2>&1 | tail -1)"
+jq '.state = "MERGED" | .comments = []' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+
+# Sin entrada de Documentación (merge antes de que el bucle documentara): se
+# cierra igual y se lanza task-document.
+rm -f "$N/doc-card-3.json"; : >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: sin Documentación lanza task-document" "task-document DEVKIT-3" \
+  "$(head -1 "$N/lanzamientos")"
+
+# Última hija: la Épica se cierra si está En progreso y tiene criterios, y
+# task-document escribe la entrada consolidada.
+printf '[%s,%s]' "$(tarea card-3 3 Hecha 1 "")" "$(tarea card-4 4 Hecha 2 "")" >"$N/hijas-epica-1.json"
+printf 'uno\ndos\n' >"$N/criterios-epica-1.txt"
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: última hija cierra la Épica" "set epica-1 Estado=Hecha Cierre=2026-09-16" \
+  "$(grep '^set epica-1' "$N/llamadas")"
+check_igual "task-close: la Épica recibe su task-document" "task-document DEVKIT-1" \
+  "$(grep 'DEVKIT-1$' "$N/lanzamientos")"
+# Regla de DEVKIT-44: sin criterios no se cierra, se comenta.
+printf 'Pendientes de definir\n' >"$N/criterios-epica-1.txt"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: Épica sin criterios no se cierra" "0 1" \
+  "$(grep -c '^set epica-1' "$N/llamadas") $(grep -c '^comentar epica-1 Sus hijas terminaron' "$N/llamadas")"
+
+# Bloqueo por tres ciclos sin OK: marcador en el PR y task-block.sh real.
+tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"; : >"$CICLO/gh/comentarios"
+env "${ciclo_env[@]}" bash "$WATCH" --block-pr 41 DEVKIT-3 https://github.com/o/r/pull/41 d4 3 >"$CICLO/block.log" 2>&1
+OUT="$CICLO/block.log"
+check_log "bloqueo: línea de resumen en bash" 'task-block-41 terminado: bash :: task-block: DEVKIT-3 Bloqueada desde Revisión automática'
+check_igual "bloqueo: marcador devkit-block en el PR" 1 "$(grep -c 'devkit-block sha=d4' "$CICLO/gh/comentarios")"
+check_igual "bloqueo: card a Bloqueada" "set card-3 Estado=Bloqueada" "$(grep '^set' "$N/llamadas")"
+check_igual "bloqueo: comenta el estado anterior y el motivo" "comentar card-3 Bloqueada desde Revisión automática." \
+  "$(grep '^comentar' "$N/llamadas" | head -1)"
+tarea card-3 3 Bloqueada 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"
+env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez >/dev/null 2>&1
+check_igual "task-block: card ya Bloqueada no se toca" 0 "$(grep -cE '^(set|comentar)' "$N/llamadas")"
+check_igual "task-block: sin motivo sale con 64" 64 \
+  "$(env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 >/dev/null 2>&1; echo $?)"
 
 exit $fail

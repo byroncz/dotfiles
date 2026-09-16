@@ -6,12 +6,21 @@
 #   último marcador CAMBIOS para el head, sin respuesta     -> task-fix
 #   último marcador CAMBIOS para el head, respuesta sin push -> pr-review de nuevo
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
-#   3 ciclos revisor -> corrector sin OK                    -> task-block
-#   PR mergeado, sin marcador devkit-closed                 -> task-close
+#   último marcador OK para el head, sin devkit-doc del head -> task-document
+#   3 ciclos revisor -> corrector sin OK                    -> task-block.sh
+#   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
+#
+# task-block.sh y task-close.sh son bash contra la API de Notion (DEVKIT-55),
+# no skills: no gastan modelo ni esperan el candado de `claude -p`. Los PRs
+# mergeados los atiende un segundo bucle, cada DEVKIT_WATCH_MERGED_INTERVAL
+# segundos (30 por defecto), para que una card quede cerrada y la siguiente
+# hija lanzada en menos de un minuto desde el merge, en vez de esperar el
+# intervalo de 5 min y la skill que esté corriendo.
 #
 # El estado del ciclo vive en GitHub, en los marcadores de reviews y
 # comentarios del PR (<!-- devkit-review -->, <!-- devkit-fix -->,
-# <!-- devkit-block -->, <!-- devkit-closed -->): un rebuild no lo pierde.
+# <!-- devkit-doc -->, <!-- devkit-block -->, <!-- devkit-closed -->): un
+# rebuild no lo pierde.
 # /run/devkit/launched (tmpfs) solo evita relanzar lo mismo dentro de una vida
 # del contenedor; cada skill es idempotente, así que repetir tras un rebuild no
 # daña, pero cuesta dinero y tiempo: por eso el cierre también deja marcador.
@@ -66,6 +75,12 @@ QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
 SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
+# Cierre y bloqueo en bash (DEVKIT-55). MERGED_INTERVAL es el tick del bucle de
+# PRs mergeados: una consulta liviana a GitHub (una lista de PRs) cada 30 s
+# cabe de sobra en el límite de 5000 peticiones por hora del token.
+TASK_CLOSE="${DEVKIT_TASK_CLOSE_BIN:-$SCRIPTS_DIR/task-close.sh}"
+TASK_BLOCK="${DEVKIT_TASK_BLOCK_BIN:-$SCRIPTS_DIR/task-block.sh}"
+MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cuatro campos separados por tabulador (acción, head, referencia,
@@ -73,6 +88,7 @@ ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 #   revisar    <head> <sha del marcador anterior o el propio head> -
 #   fix        <head> <sha del marcador CAMBIOS>      -
 #   fix-humano <head> <fecha del último comentario>   <texto en base64>
+#   documentar <head> OK                              -
 #   bloquear   <head> <ciclos sin OK>                 -
 #   bloqueado  <head> <fecha del bloqueo>             -
 #   nada       <head> <veredicto vigente>             -
@@ -88,6 +104,12 @@ ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 # solo comentó, DEVKIT-22): la referencia es igual al head y le dice a
 # `pr-review` que ese sha ya tiene respuesta y debe juzgarla, no responder
 # "ya revisado" y salir. Sin esa respuesta, sigue siendo `fix` (pendiente).
+# `documentar` sale cuando el último informe es OK para el head vigente y no
+# hay marcador `devkit-doc` de ese mismo head (DEVKIT-55): la entrada de
+# Documentación se escribe al aprobar, no al cerrar. Si la card vuelve atrás
+# y un head nuevo recibe otro OK, falta el marcador de ese head y task-document
+# corre de nuevo sobre la misma entrada. Un comentario humano manda sobre
+# documentar: primero se corrige.
 DECIDE='
 def markers($re; $ts):
   [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
@@ -97,6 +119,7 @@ def markers($re; $ts):
    | sort_by(.at)) as $reviews
 | (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+) -->"; "createdAt")) as $fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
+| (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
 | ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
@@ -135,6 +158,8 @@ def markers($re; $ts):
     ["fix", $head, $last.sha, "-"]
   elif $fix_responded then
     ["revisar", $head, $last.sha, "-"]
+  elif $last.verdict == "OK" and ([$docs[] | select(.sha == $head)] | length) == 0 then
+    ["documentar", $head, "OK", "-"]
   else
     ["nada", $head, $last.verdict, "-"]
   end
@@ -406,14 +431,14 @@ run_skill() {
 }
 
 # Costo total del ciclo de un PR: suma "costo=" de todas sus líneas en
-# watch.log (pr-review-<n>-*, task-fix-<n>-*, task-block-<n>,
+# watch.log (pr-review-<n>-*, task-fix-<n>-*, task-document-<n>-*, task-block-<n>,
 # task-close-<n>), no solo el último task-close, porque el mismo PR pudo
 # pasar por varias rondas de revisión y corrección. Se imprime al cerrar.
 cycle_cost() {  # cycle_cost <num> [archivo de log, para la prueba]
   local num=$1 file=${2:-$WATCH_LOG_FILE}
   # `(-[0-9A-Za-z]+)*` en vez de `?`: task-fix-<n>-humano-<fecha> tiene dos
   # segmentos de sufijo, no uno.
-  grep -E " (pr-review|task-fix|task-block|task-close)-$num(-[0-9A-Za-z]+)* (terminado|falló)" "$file" 2>/dev/null \
+  grep -E " (pr-review|task-fix|task-document|task-block|task-close)-$num(-[0-9A-Za-z]+)* (terminado|falló)" "$file" 2>/dev/null \
     | grep -oE 'costo=[0-9.]+' | cut -d= -f2 \
     | awk '{s+=$1} END{printf "%.4f", s+0}'
 }
@@ -525,12 +550,89 @@ agentes_vivos() {
   return 0
 }
 
+# Código del proyecto. Se relee en cada vuelta: en un proyecto nuevo,
+# .devkit/devkit.toml arranca con `project = "PROJ"` y project-init lo corrige
+# después, sin reiniciar el contenedor.
+project_code() {
+  [ -f "$WS/.devkit/devkit.toml" ] || return 0
+  sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1
+}
+
+# Bloqueo por tres ciclos sin OK, en bash (DEVKIT-55). Primero el marcador en
+# el PR: es lo que detiene al bucle aunque falle Notion. Luego la card.
+block_pr() {  # block_pr <num> <Clave> <url> <head> <ciclos>
+  local num=$1 key=$2 url=$3 head=$4 ciclos=$5 out rc estado
+  log "PR #$num ($key) $ciclos ciclos sin OK: bloqueando con task-block.sh"
+  gh pr comment "$num" --body "<!-- devkit-block sha=$head -->
+Tres ciclos de revisión y corrección sin veredicto OK. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
+Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
+    || log "PR #$num: no se pudo publicar el marcador devkit-block"
+  out=$("$TASK_BLOCK" "$key" "Tres ciclos de revisión y corrección sin veredicto OK en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
+  rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/task-block-$num.log"
+  estado=terminado
+  [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
+  log "task-block-$num $estado: bash :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+  [ "$rc" -eq 0 ] || log "ALARMA: task-block-$num terminó con error (rc=$rc); ver $RUN_DIR/task-block-$num.log"
+}
+
+# Cierre de un PR mergeado, en bash (DEVKIT-55). La línea de resumen dice
+# cuántos segundos pasaron desde el merge hasta que la card quedó cerrada:
+# es la medida del criterio "menos de un minuto".
+close_pr() {  # close_pr <num> <Clave> <url> <mergedAt>
+  local num=$1 key=$2 url=$3 merged_at=$4 out rc estado desde
+  log "PR #$num mergeado ($key): cerrando con task-close.sh"
+  out=$("$TASK_CLOSE" "$key" "$url" 2>&1)
+  rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/task-close-$num.log"
+  desde=$(( $(date +%s) - $(date -d "$merged_at" +%s 2>/dev/null || date +%s) ))
+  estado=terminado
+  [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
+  log "task-close-$num $estado: bash, cerrado ${desde}s después del merge :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+  [ "$rc" -eq 0 ] || log "ALARMA: task-close-$num terminó con error (rc=$rc); ver $RUN_DIR/task-close-$num.log"
+  log "PR #$num ($key) costo total del ciclo: \$$(cycle_cost "$num") USD"
+}
+
+# Una pasada sobre los PRs mergeados en las últimas 48 h.
+check_merged_prs() {
+  local code
+  code=$(project_code)
+  gh pr list --state merged --limit 30 --json number,title,url,mergedAt \
+    --jq '[.[] | select(.mergedAt > (now - 172800 | todate))] | sort_by(.mergedAt)
+           | .[] | "\(.number)\t\(.url)\t\(.mergedAt)\t\(.title)"' 2>/dev/null \
+  | while IFS=$'\t' read -r num url merged_at title; do
+      key=$(key_of "$title" "$code") || continue
+      launched "cerrar:$num" && continue
+      IFS=$'\t' read -r action ref < <(
+        gh pr view "$num" --json comments 2>/dev/null | decide_merged
+      )
+      # Sin decisión, gh no respondió: no se registra nada y se reintenta en
+      # la vuelta siguiente. Registrarlo aquí perdería el cierre.
+      [ -n "${action:-}" ] || continue
+      if [ "$action" = "cerrada" ]; then
+        # Se registra igual: evita una consulta a GitHub cada vuelta.
+        mark "cerrar:$num"
+        log "PR #$num mergeado ($key) ya cerrado en ${ref:0:7}: se omite"
+        continue
+      fi
+      # Se registra antes de cerrar: si falla, el humano lo repite con
+      # `devkit-run task-close <Clave>`; task-close.sh es idempotente.
+      mark "cerrar:$num"
+      close_pr "$num" "$key" "$url" "$merged_at"
+    done
+}
+
 # Hooks de prueba, sin GitHub y sin gastar cuota:
 #   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
 #   --quota-reset           imprime el epoch de reinicio que lee de ese texto
 #   --run-skill <n> <p>     una ejecución de run_skill, esperando su relanzamiento
 #   --cycle-cost <n> <log>  el costo total del ciclo de un PR, desde un log dado
-# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR. Ver watch-test.sh.
+#   --merged-once           una pasada del bucle de PRs mergeados
+#   --block-pr <num> <Clave> <url> <head> <ciclos>
+#                           el bloqueo por tres ciclos sin OK
+# Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los dos
+# últimos, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN o
+# DEVKIT_TASK_BLOCK_BIN. Ver watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -559,22 +661,37 @@ case "${1:-}" in
     agentes_vivos
     exit 0
     ;;
+  --merged-once)
+    check_merged_prs
+    exit 0
+    ;;
+  --block-pr)
+    block_pr "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+    exit 0
+    ;;
 esac
 
-log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos)"
+log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos; PRs mergeados cada ${MERGED_INTERVAL}s)"
+
+# Bucle de PRs mergeados, aparte del principal (DEVKIT-55): el principal
+# queda esperando mientras corre una skill (pr-review, task-fix), que puede
+# tardar veinte minutos, y un merge en ese rato no se cerraría hasta que
+# terminara. Este no toma `skill.lock`: task-close.sh solo toca Notion y
+# GitHub, y su limpieza de git espera a tener el workspace libre.
+if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
+  ( while true; do check_merged_prs; sleep "$MERGED_INTERVAL"; done ) &
+  MERGED_PID=$!
+  trap 'kill "$MERGED_PID" 2>/dev/null' EXIT
+fi
 
 while true; do
-  # Se relee en cada vuelta: en un proyecto nuevo, .devkit/devkit.toml arranca con
-  # `project = "PROJ"` y project-init lo corrige después, sin reiniciar el
-  # contenedor.
-  CODE=""
-  [ -f "$WS/.devkit/devkit.toml" ] && CODE="$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1)"
+  CODE=$(project_code)
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     BOT="$(gh api user --jq .login 2>/dev/null)"
     log "consultando GitHub"
     check_orphan_branch
 
-    # --- PRs abiertos: revisar, corregir o bloquear ------------------------
+    # --- PRs abiertos: revisar, corregir, documentar o bloquear ------------
     gh pr list --state open --limit 30 --json number,title,url \
       --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null \
     | while IFS=$'\t' read -r num url title; do
@@ -617,48 +734,20 @@ while true; do
             # comentarios humanos y cada ejecución conserva su log.
             run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "fix-humano:$num:$ref"
             ;;
+          documentar)
+            launched "documentar:$num:$head" && continue
+            mark "documentar:$num:$head"
+            log "PR #$num ($key) OK en $short: lanzando task-document"
+            run_skill "task-document-$num-$short" "/task-document $key $num" "documentar:$num:$head"
+            ;;
           bloquear)
             launched "bloquear:$num:$head" && continue
             mark "bloquear:$num:$head"
-            log "PR #$num ($key) $ref ciclos sin OK: lanzando task-block"
-            # Primero el marcador en el PR: es lo que detiene al bucle aunque
-            # task-block falle. Luego la card.
-            gh pr comment "$num" --body "<!-- devkit-block sha=$head -->
-Tres ciclos de revisión y corrección sin veredicto OK. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
-Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
-              || log "PR #$num: no se pudo publicar el marcador devkit-block"
-            run_skill "task-block-$num" "/task-block $key Tres ciclos de revisión y corrección sin veredicto OK en el PR $url; el bucle no lo toca hasta que decidas" "bloquear:$num:$head"
+            block_pr "$num" "$key" "$url" "$head" "$ref"
             ;;
           bloqueado|nada) ;;
           *) log "PR #$num: decisión desconocida '$action'" ;;
         esac
-      done
-
-    # --- PRs mergeados en las últimas 48 h: cerrar --------------------------
-    gh pr list --state merged --limit 30 --json number,title,url,mergedAt \
-      --jq '[.[] | select(.mergedAt > (now - 172800 | todate))] | sort_by(.mergedAt)
-             | .[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null \
-    | while IFS=$'\t' read -r num url title; do
-        key=$(key_of "$title" "$CODE") || continue
-        launched "cerrar:$num" && continue
-        IFS=$'\t' read -r action ref < <(
-          gh pr view "$num" --json comments 2>/dev/null | decide_merged
-        )
-        # Sin decisión, gh no respondió: no se registra nada y se reintenta en
-        # la vuelta siguiente. Registrarlo aquí perdería el cierre.
-        [ -n "${action:-}" ] || continue
-        if [ "$action" = "cerrada" ]; then
-          # Se registra igual: evita una consulta a GitHub cada vuelta.
-          mark "cerrar:$num"
-          log "PR #$num mergeado ($key) ya cerrado en ${ref:0:7}: se omite"
-          continue
-        fi
-        # Se registra antes de lanzar: si falla, el humano o project-status lo
-        # repiten; task-close es idempotente.
-        mark "cerrar:$num"
-        log "PR #$num mergeado ($key): lanzando task-close"
-        run_skill "task-close-$num" "/task-close $key $url" "cerrar:$num"
-        log "PR #$num ($key) costo total del ciclo: \$$(cycle_cost "$num") USD"
       done
   fi
   sleep_or_poke "$INTERVAL"
