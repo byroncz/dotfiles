@@ -10,6 +10,29 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `devkit-run --estado`: qué hace cada agente, sin lanzar otro agente (DEVKIT-57)
+
+- `devkit-run --estado` muestra los últimos lanzamientos: skill, card, quién
+  lanzó (`humano`, `bucle`, `epic-plan`, `task-close`), hace cuánto y estado
+  (`en curso`, `terminó`, `error`, `bloqueada` con el motivo, `no arrancó`).
+  `--estado --seguir` la refresca cada 3 s.
+- Todo lanzamiento escribe antes en `watch.log` la línea
+  `<id> lanzando (origen=<quién>): "<prompt>" log=<log>`, y cuenta como
+  `en curso` desde ella. El resumen de `devkit-run` pasa a
+  `devkit-run "<prompt>" terminado [<id>]: ...`. `task-block.sh` deja
+  `task-block.sh <Clave> Bloqueada desde <estado>: <motivo>`.
+- `devkit-run <skill> <Clave>` espera `/run/devkit/ready` (sale con 69 si el
+  arranque no termina en 120 s) y confirma a los 5 s que el worker vive; si
+  murió sin terminar, imprime el log y sale con 70.
+- Quinta alarma de `watch.sh`: un `task-fix` que responde "nada que corregir"
+  o "informe desactualizado" con `CAMBIOS` vigente sobre el mismo head se
+  registra como `ALARMA:`, se relanza una vez con el siguiente modelo de
+  `frontera` (`devkit-run --siguiente-modelo`) y, si repite, bloquea la card.
+- `watch.sh --agentes-vivos` también ve lo que lanza el bucle (`--sync`).
+- Cambios requeridos: ninguno. El `watch.sh` que ya corre sigue sin las
+  líneas `lanzando` hasta el próximo `devkit recreate`: sus lanzamientos no
+  salen en `--estado` hasta entonces.
+
 ### La siguiente hija arranca al OK y la guarda de tres ciclos no bloquea por un head superado (DEVKIT-56)
 
 - Script nuevo `devkit/scripts/task-next.sh <Clave>`: lanza con `devkit-run
