@@ -119,6 +119,7 @@ es trabajo de `task-fix`.
 
    ```
    <!-- devkit-review sha=<headRefOid> verdict=<OK|CAMBIOS> -->
+   Revisado con <modelo>, esfuerzo <esfuerzo>
    ## Revisión independiente (commit <sha corto>)
 
    ### Criterios de aceptación
@@ -142,6 +143,13 @@ es trabajo de `task-fix`.
    H2 | baja | ruta/archivo:línea | qué falla | qué hacer
    <!-- /devkit-findings -->
    ```
+
+   La línea "Revisado con ..." va en cada informe, justo debajo del
+   marcador, y sale de las variables que `devkit-run` exporta al `claude -p`
+   (DEVKIT-58): `echo "Revisado con ${DEVKIT_MODEL:-?}, esfuerzo
+   ${DEVKIT_EFFORT:-?}"`. Cópiala tal cual, sin formato. Si vienen vacías
+   (sesión interactiva), escribe el alias del modelo que te ejecuta y
+   `esfuerzo sin registrar`; nunca inventes un esfuerzo.
 
    El bloque `devkit-findings` va solo si hay hallazgos. Es lo único que
    `task-fix` lee: una línea por hallazgo, cinco campos separados por ` | `,

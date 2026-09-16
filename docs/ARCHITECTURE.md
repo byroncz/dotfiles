@@ -371,7 +371,7 @@ modelo:
 
 | Script | Transición | Qué hace |
 |---|---|---|
-| `task-close.sh` | Lista para merge → Hecha | Verifica merge, `Hecha` y `Cierre`, comentario con enlace a la entrada de Documentación (o lanza `task-document` si falta), marcador `devkit-closed` en el PR, cierra la Épica con la regla de DEVKIT-44 o llama a `task-next.sh` |
+| `task-close.sh` | Lista para merge → Hecha | Verifica merge, `Hecha` y `Cierre`, comentario con enlace a la entrada de Documentación y las marcas de modelo del PR y del último informe (o lanza `task-document` si falta), marcador `devkit-closed` en el PR, cierra la Épica con la regla de DEVKIT-44 o llama a `task-next.sh` |
 | `task-next.sh` | Siguiente hija: Lista → (task-start) | Elige la hija libre por `Depende de`, `Orden` y `Prioridad`, y la lanza con `devkit-run` si ninguna hermana está en curso. Lo llaman `watch.sh` al `OK` y `task-close.sh` al merge |
 | `task-block.sh` | Cualquiera → Bloqueada | Comenta el estado anterior y qué necesita del humano; guarda `wip` si hay cambios sin commit |
 
@@ -394,7 +394,8 @@ cuatro procesos del lanzamiento en curso como si fueran ajenos (DEVKIT-54).
 Una skill invoca otro script por ruta,
 `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/<script>"`, y por eso
 `devkit-run` exporta `DEVKIT_SCRIPTS_DIR` (su propio directorio) y
-`DEVKIT_RUN_DIR` al `claude -p` que lanza, y `entrypoint.sh` exporta la
+`DEVKIT_RUN_DIR` al `claude -p` que lanza (y, desde DEVKIT-58,
+`DEVKIT_MODEL` y `DEVKIT_EFFORT`: ver 6.3), y `entrypoint.sh` exporta la
 variable antes de arrancar `watch.sh` (DEVKIT-55). Sin eso, la variable solo
 existía en `/run/devkit/env`, que carga la shell del humano; el respaldo
 `/opt/devkit/scripts` es la copia de la imagen, que en modo dev queda atrás
@@ -640,6 +641,21 @@ Rama:    feat/DATA-42-carga-incremental
 Commit:  feat(DATA-42): agregar carga incremental por fecha
 PR:      DATA-42 Carga incremental por fecha
 ```
+
+Cada artefacto dice además con qué modelo y esfuerzo se produjo (DEVKIT-58):
+el cuerpo del PR (`Implementado con <modelo>, esfuerzo <x>`, de
+`task-submit`), cada informe `devkit-review` (`Revisado con ...`, debajo del
+marcador), la entrada de Documentación (sección "Modelos", con las anteriores
+y `Documentado con ...`) y el comentario de cierre de la card, donde
+`task-close.sh` copia la de implementación y la del último informe. Los
+valores salen de `DEVKIT_MODEL` y `DEVKIT_EFFORT`, que `devkit-run` exporta al
+`claude -p` con lo que lanzó de verdad; `roles.toml` no sirve de fuente
+porque dice qué se pretendía lanzar, no qué corrió tras la caída en
+`frontera` o una anulación manual. `watch.log` ya tenía el dato, pero vive en
+tmpfs y se pierde en cada `devkit recreate`: la marca en el PR y en Notion es
+la que queda para decidir si un modelo más barato alcanza para un papel del
+flujo. `task-close.sh` es bash y no tiene marca propia: copia las ajenas y
+dice "sin marca" cuando faltan, en vez de deducirlas.
 
 ## 7. Modelo de datos en Notion
 

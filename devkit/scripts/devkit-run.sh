@@ -314,8 +314,17 @@ model_effort_of() {  # model_effort_of <prompt>
 # DEVKIT_ORIGEN y DEVKIT_MODELO_FORZADO van vacías: describen este lanzamiento,
 # no los que la skill haga después (DEVKIT-57). Un epic-plan que lanza
 # task-start debe verse como origen `epic-plan`, no heredar el de su lanzador.
+#
+# DEVKIT_MODEL y DEVKIT_EFFORT son el modelo y el esfuerzo que recibe este
+# `claude -p`, ya resueltos: rol, caída en `frontera`, `--modelo`/`--esfuerzo`
+# o DEVKIT_MODELO_FORZADO (DEVKIT-58). Las skills los copian en la línea
+# "<Verbo> con <modelo>, esfuerzo <x>" del PR, del informe de revisión y de
+# la entrada de Documentación, para decidir con evidencia qué modelo alcanza
+# para cada papel. Se leen de aquí y no de roles.toml porque solo este punto
+# sabe qué se lanzó de verdad.
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
   DEVKIT_ORIGEN="" DEVKIT_MODELO_FORZADO="" \
+  DEVKIT_MODEL="$2" DEVKIT_EFFORT="$3" \
   DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_RUN_DIR="$RUN_DIR" \
   "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
@@ -1118,6 +1127,29 @@ FIN
     bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-candado.log" modelo-x high 40 >/dev/null 2>&1
   check "worker exporta DEVKIT_LOCK_HELD=1 al claude -p" "candado=1" \
     "$(jq -r .result "$tmp/run/espejo-candado.log" 2>/dev/null)"
+
+  # DEVKIT_MODEL y DEVKIT_EFFORT llegan al `claude -p` con lo que se lanzó de
+  # verdad (DEVKIT-58), no con lo que traiga el entorno del lanzador: un
+  # task-document lanzado desde un task-start en opus no hereda su modelo.
+  local espejo_modelo
+  espejo_modelo="$tmp/claude-espejo-modelo"
+  cat >"$espejo_modelo" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"%s %s","total_cost_usd":0,"num_turns":1}\n' "${DEVKIT_MODEL:-vacío}" "${DEVKIT_EFFORT:-vacío}"
+FIN
+  chmod +x "$espejo_modelo"
+  DEVKIT_MODEL=heredado DEVKIT_EFFORT=heredado DEVKIT_CLAUDE_BIN="$espejo_modelo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-modelo.log" modelo-x max 40 >/dev/null 2>&1
+  check "worker exporta DEVKIT_MODEL y DEVKIT_EFFORT resueltos" "modelo-x max" \
+    "$(jq -r .result "$tmp/run/espejo-modelo.log" 2>/dev/null)"
+  check "--sync exporta DEVKIT_MODEL y DEVKIT_EFFORT del rol" '{"result":"modelo-barato low","total_cost_usd":0,"num_turns":1}' \
+    "$(env -u DEVKIT_MODELO_FORZADO DEVKIT_MODEL=heredado DEVKIT_CLAUDE_BIN="$espejo_modelo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-modelo" \
+       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
+  check "--sync con modelo forzado exporta el forzado" '{"result":"modelo-forzado low","total_cost_usd":0,"num_turns":1}' \
+    "$(DEVKIT_MODELO_FORZADO=modelo-forzado DEVKIT_CLAUDE_BIN="$espejo_modelo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-modelo" \
+       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
 
   # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
   # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin

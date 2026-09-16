@@ -535,7 +535,10 @@ check "ciclo: documentado, espera el merge" nada a1 "$(rev T01 a1 OK)" -- "$(doc
 MERGED_AT=$(date -u -d '-5 seconds' +%FT%TZ)
 printf '40\thttps://github.com/o/r/pull/40\t%s\tDEVKIT-3 algo\n' "$MERGED_AT" >"$CICLO/gh/mergeados"
 jq -nc '{state: "MERGED", number: 40, url: "https://github.com/o/r/pull/40", headRefOid: "a1",
-         mergeCommit: {oid: "f1"}, comments: [{body: "<!-- devkit-doc sha=a1 -->"}]}' >"$CICLO/gh/pr.json"
+         mergeCommit: {oid: "f1"}, comments: [{body: "<!-- devkit-doc sha=a1 -->"}],
+         body: "## Card\nhttps://notion.so/card-3\n\nImplementado con opus, esfuerzo high\r\n",
+         reviews: [{submittedAt: "T02", body: "<!-- devkit-review sha=a1 verdict=OK -->\nRevisado con fable, esfuerzo high\n## Revisión"},
+                   {submittedAt: "T01", body: "<!-- devkit-review sha=a0 verdict=CAMBIOS -->\nRevisado con sonnet, esfuerzo low\n## Revisión"}]}' >"$CICLO/gh/pr.json"
 env "${ciclo_env[@]}" bash "$WATCH" --merged-once >"$CICLO/watch.log" 2>&1
 OUT="$CICLO/watch.log"
 check_log "ciclo: cerrado en bash con la medida desde el merge" 'task-close-40 terminado: bash, cerrado [0-9]+s después del merge'
@@ -543,7 +546,9 @@ SEG=$(grep -oE 'cerrado [0-9]+s después' "$OUT" | grep -oE '[0-9]+')
 check_igual "ciclo: cerrado en menos de un minuto desde el merge" si "$([ "${SEG:-99}" -lt 60 ] && echo si || echo no)"
 check_igual "ciclo: card a Hecha con Cierre y PR" "set card-3 Estado=Hecha Cierre=2026-09-16 PR=https://github.com/o/r/pull/40" \
   "$(grep '^set card-3' "$N/llamadas" | head -1)"
-check_igual "ciclo: comentario con el enlace a la Documentación" "comentar card-3 Cerrada. Documentación: https://notion.so/doc-3" \
+# Las marcas de modelo (DEVKIT-58) salen del cuerpo del PR y del último
+# informe por submittedAt, no del primero de la lista.
+check_igual "ciclo: comentario con Documentación y marcas de modelo" "comentar card-3 Cerrada. Documentación: https://notion.so/doc-3. Implementado con opus, esfuerzo high. Revisado con fable, esfuerzo high. Cierre sin modelo (task-close.sh)." \
   "$(grep '^comentar card-3' "$N/llamadas" | head -1)"
 check_igual "ciclo: marcador devkit-closed con sha y enlace" 1 \
   "$(grep -c 'pr comment 40 --body <!-- devkit-closed sha=f1 -->' "$CICLO/gh/comentarios" 2>/dev/null)"
@@ -585,8 +590,20 @@ chmod +x "$CICLO/ps-documentando"
 tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
 : >"$N/llamadas"; : >"$N/lanzamientos"
 env "${ciclo_env[@]}" DEVKIT_PS_BIN="$CICLO/ps-documentando" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
-check_igual "task-close: con task-document en curso no lo relanza" "0 comentar card-3 Cerrada. La entrada de Documentación la está escribiendo task-document." \
+check_igual "task-close: con task-document en curso no lo relanza" "0 comentar card-3 Cerrada. La entrada de Documentación la está escribiendo task-document. Implementado con opus, esfuerzo high. Revisado con fable, esfuerzo high. Cierre sin modelo (task-close.sh)." \
   "$(grep -c '^task-document' "$N/lanzamientos") $(grep '^comentar card-3' "$N/llamadas" | head -1)"
+
+# PR sin marcas (anterior a DEVKIT-58, o una sesión interactiva que no las
+# escribió): el comentario lo dice, no inventa un modelo.
+cp "$CICLO/gh/pr.json" "$CICLO/gh/pr-con-marcas.json"
+jq '.body = "sin marca" | .reviews = []' "$CICLO/gh/pr-con-marcas.json" >"$CICLO/gh/pr.json"
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: sin marcas lo dice en el comentario" "comentar card-3 Cerrada. Documentación: https://notion.so/doc-3. Implementado: sin marca en el PR. Revisado: sin marca en el último informe. Cierre sin modelo (task-close.sh)." \
+  "$(grep '^comentar card-3' "$N/llamadas" | head -1)"
+mv "$CICLO/gh/pr-con-marcas.json" "$CICLO/gh/pr.json"
 
 # Última hija: la Épica se cierra si está En progreso y tiene criterios, y
 # task-document escribe la entrada consolidada.

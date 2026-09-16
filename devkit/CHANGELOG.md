@@ -10,6 +10,19 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Modelo y esfuerzo visibles en el PR, la revisión, la Documentación y el cierre (DEVKIT-58)
+
+- `devkit-run` exporta `DEVKIT_MODEL` y `DEVKIT_EFFORT` al `claude -p` que
+  lanza, con el modelo y el esfuerzo que usó de verdad.
+- `task-submit` escribe en el cuerpo del PR `Implementado con <modelo>,
+  esfuerzo <x>`; `pr-review`, `Revisado con ...` debajo del marcador de cada
+  informe; `task-document`, una sección "Modelos" con esas marcas y
+  `Documentado con ...`.
+- `task-close.sh` copia al comentario de cierre la marca del PR y la del
+  último informe, o "sin marca" si faltan.
+- Cambios requeridos: ninguno. Los PRs abiertos antes de este cambio cierran
+  con "sin marca".
+
 ### `devkit-run --estado`: qué hace cada agente, sin lanzar otro agente (DEVKIT-57)
 
 - `devkit-run --estado` muestra los últimos lanzamientos: skill, card, quién

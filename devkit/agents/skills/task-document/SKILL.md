@@ -19,7 +19,7 @@ skill no cambia el `Estado` de la card ni toca código.
    en la card que falta el PR y termina. Lee el estado y el head:
 
    ```sh
-   gh pr view <N> --json number,url,state,headRefOid,headRefName,mergeCommit,body
+   gh pr view <N> --json number,url,state,headRefOid,headRefName,mergeCommit,body,reviews
    ```
 
 3. Reúne el material, sin inventar nada que no esté en él: la card completa
@@ -59,7 +59,22 @@ skill no cambia el `Estado` de la card ni toca código.
 
    ## Enlaces
    Card, rama, PR y, si ya está mergeado, commit de merge.
+
+   ## Modelos
+   Implementado con <modelo>, esfuerzo <esfuerzo>
+   Revisado con <modelo>, esfuerzo <esfuerzo> (commit <sha corto>, <OK|CAMBIOS>)
+   Documentado con <modelo>, esfuerzo <esfuerzo>
    ```
+
+   La sección "Modelos" (DEVKIT-58) copia las marcas, no las deduce: la
+   línea "Implementado con ..." del cuerpo del PR, la línea "Revisado con
+   ..." de cada informe `devkit-review` en orden (una por informe, con su
+   `sha` y veredicto) y, al final, la tuya, que sale de las variables que
+   `devkit-run` exporta al `claude -p`: `echo "Documentado con
+   ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"`. Si una marca falta en
+   el PR o en un informe, escribe "sin marca" en su lugar. Si tus variables
+   vienen vacías (sesión interactiva), escribe el alias del modelo que te
+   ejecuta y `esfuerzo sin registrar`.
 
 6. Marcador en el PR, solo si el PR sigue abierto. Es lo que le dice a
    `watch.sh` que ese head ya está documentado; sin él, el bucle relanza
@@ -83,7 +98,9 @@ skill no cambia el `Estado` de la card ni toca código.
    una línea por hija con enlace a su entrada (`notion.sh documentacion`
    con el id de cada hija) y la sección "Cambios requeridos" unificada. Una
    hija sin entrada se nombra como tal, sin inventar su contenido. No hay PR
-   ni marcador.
+   ni marcador. La sección "Modelos" de la Épica lleva solo la línea
+   "Documentado con ..." de esta ejecución: las marcas de cada hija están en
+   su propia entrada.
 
 ## Modo headless
 
