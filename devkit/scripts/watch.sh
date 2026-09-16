@@ -401,7 +401,9 @@ run_skill() {
     flock 9
   fi
   read -r modelo esfuerzo presupuesto < <("$DEVKIT_RUN" --rol "$prompt")
-  "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
+  # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
+  # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
+  DEVKIT_LOCK_HELD=1 "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!

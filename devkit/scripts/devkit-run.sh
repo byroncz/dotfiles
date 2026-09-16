@@ -791,6 +791,19 @@ FIN
     bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-2.log" modelo-x high 40 >/dev/null 2>&1
   check "worker con la copia de la imagen en el entorno usa la suya" "$HERE $tmp/run" \
     "$(jq -r .result "$tmp/run/espejo-2.log" 2>/dev/null)"
+  # --worker corre el `claude -p` con el candado tomado: debe avisarlo con
+  # DEVKIT_LOCK_HELD=1, o task-block.sh no guarda el wip (DEVKIT-55, H2).
+  local espejo_candado
+  espejo_candado="$tmp/claude-espejo-candado"
+  cat >"$espejo_candado" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"candado=%s","total_cost_usd":0,"num_turns":1}\n' "${DEVKIT_LOCK_HELD:-no}"
+FIN
+  chmod +x "$espejo_candado"
+  env -u DEVKIT_LOCK_HELD DEVKIT_CLAUDE_BIN="$espejo_candado" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-candado.log" modelo-x high 40 >/dev/null 2>&1
+  check "worker exporta DEVKIT_LOCK_HELD=1 al claude -p" "candado=1" \
+    "$(jq -r .result "$tmp/run/espejo-candado.log" 2>/dev/null)"
 
   # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
   # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
@@ -883,7 +896,9 @@ case "${1:-}" in
       printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
       flock 9
     fi
-    run_claude "$prompt" "$modelo" "$esfuerzo" >"$logf" 2>&1 &
+    # El candado queda tomado durante todo el `claude -p`: task-block.sh lo
+    # sabe por DEVKIT_LOCK_HELD y guarda el wip sin volver a pedirlo.
+    DEVKIT_LOCK_HELD=1 run_claude "$prompt" "$modelo" "$esfuerzo" >"$logf" 2>&1 &
     skill_pid=$!
     watch_long_running "$prompt" "$skill_pid" &
     watcher_pid=$!
