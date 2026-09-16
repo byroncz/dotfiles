@@ -27,6 +27,7 @@ DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
+PS_BIN="${DEVKIT_PS_BIN:-ps}"
 
 say() { printf 'task-close: %s\n' "$*"; }
 
@@ -44,6 +45,15 @@ estado=$(jq -r '.estado // ""' <<<"$card")
 nivel=$(jq -r '.nivel // ""' <<<"$card")
 
 clave_de() { jq -r --arg c "$codigo" '"\($c)-\(.numero)"' <<<"$1"; }
+
+# ¿Hay un task-document vivo para la Clave? El bucle lo lanza con
+# `devkit-run.sh --sync` y un lanzamiento manual con `--worker`; en ambos la
+# línea del proceso trae "/task-document <Clave>". Sin esta guarda, un merge
+# aprobado mientras task-document escribe la entrada lanzaba un segundo
+# `claude -p` y comentaba en la card que faltaba la entrada (DEVKIT-55, H3).
+documentando() {  # documentando <Clave>
+  "$PS_BIN" -eo args= 2>/dev/null | grep -qE -- "(--sync|--worker|claude -p) /task-document $1( |$)"
+}
 
 # --- Épica -----------------------------------------------------------------
 # Regla de DEVKIT-44: solo se cierra si todas sus hijas están Hecha, la Épica
@@ -113,6 +123,9 @@ if [ "$estado" != "Hecha" ]; then
   if doc=$("$NOTION" documentacion "$id"); then
     doc_url=$(jq -r .url <<<"$doc")
     "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url"
+  elif documentando "$clave"; then
+    "$NOTION" comentar "$id" "Cerrada. La entrada de Documentación la está escribiendo task-document."
+    say "$clave sin entrada de Documentación todavía; task-document ya corre, no se relanza"
   else
     "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: se lanza task-document para escribirla."
     "$DEVKIT_RUN" task-document "$clave" >/dev/null 2>&1 \

@@ -36,7 +36,8 @@ versión que usa un proyecto y la destino.
   cuando `pr-review` da OK: `watch.sh` decide `documentar` si el último
   informe OK del head no tiene marcador `<!-- devkit-doc sha=<head> -->`. Si
   la card vuelve atrás y un head nuevo recibe OK, corre otra vez y actualiza
-  la misma entrada. `task-close.sh` la lanza si al cerrar no existe.
+  la misma entrada. `task-close.sh` la lanza si al cerrar no existe y no
+  hay ya un `task-document` corriendo para esa Clave.
 - El rol `contabilidad` desaparece de `roles.toml` y de `devkit-run.sh`.
 - `devkit-run` exporta `DEVKIT_SCRIPTS_DIR` y `DEVKIT_RUN_DIR` al `claude -p`
   que lanza, y `entrypoint.sh` exporta `DEVKIT_SCRIPTS_DIR` antes de arrancar

@@ -519,6 +519,18 @@ rm -f "$N/doc-card-3.json"; : >"$N/llamadas"; : >"$N/lanzamientos"
 env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
 check_igual "task-close: sin Documentación lanza task-document" "task-document DEVKIT-3" \
   "$(head -1 "$N/lanzamientos")"
+# Con task-document ya corriendo para la Clave (merge aprobado mientras escribe
+# la entrada): no se relanza y el comentario no dice que falta.
+cat >"$CICLO/ps-documentando" <<'FIN'
+#!/usr/bin/env bash
+echo "bash /workspace/devkit/scripts/devkit-run.sh --sync /task-document DEVKIT-3 40"
+FIN
+chmod +x "$CICLO/ps-documentando"
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+env "${ciclo_env[@]}" DEVKIT_PS_BIN="$CICLO/ps-documentando" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: con task-document en curso no lo relanza" "0 comentar card-3 Cerrada. La entrada de Documentación la está escribiendo task-document." \
+  "$(grep -c '^task-document' "$N/lanzamientos") $(grep '^comentar card-3' "$N/llamadas" | head -1)"
 
 # Última hija: la Épica se cierra si está En progreso y tiene criterios, y
 # task-document escribe la entrada consolidada.
