@@ -39,7 +39,7 @@ es trabajo de `task-fix`.
 
    ```sh
    gh pr view <N> --json comments --jq \
-     '[.comments[] | select(.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=<sha> -->")) | select(.createdAt > "<submittedAt del marcador>")] | length'
+     '[.comments[] | select(.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=<sha>( manual=1)? -->")) | select(.createdAt > "<submittedAt del marcador>")] | length'
    ```
 
    Sin ese comentario, el corrector no respondió todavía: responde "ya
@@ -66,8 +66,9 @@ es trabajo de `task-fix`.
      `devkit-fixes` con el que `task-fix` respondió. Esa respuesta es un
      comentario del PR, no una review: el último de la cuenta máquina
      (`gh api user --jq .login`) cuyo marcador
-     `<!-- devkit-fix sha=<head> review=<sha> -->` tenga `review=` igual al
-     `sha` de tu marcador anterior:
+     `<!-- devkit-fix sha=<head> review=<sha> -->` (con ` manual=1` al final
+     si lo lanzó un humano) tenga `review=` igual al `sha` de tu marcador
+     anterior:
 
      ```sh
      gh pr view <N> --json comments | jq -r \

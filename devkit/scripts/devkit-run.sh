@@ -1007,7 +1007,10 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 # turno real: el rol resuelto ya no aplica.
 [ -z "$manual" ] || presupuesto="-"
 
-nohup "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
+# Sin DEVKIT_LANZADOR: la pone `watch.sh` solo a lo que lanza su bucle, y un
+# `claude -p` lanzado por el bucle que a su vez llama a devkit-run no debe
+# heredarla. Un task-fix lanzado así es manual y marca `manual=1` (DEVKIT-56).
+nohup env -u DEVKIT_LANZADOR "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
   >/dev/null 2>&1 &
 disown
 echo "lanzado: $prompt"
