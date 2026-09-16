@@ -20,6 +20,13 @@ fail=0
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export DEVKIT_RUN_DIR="$TMP/run" DEVKIT_WS="$TMP"
+# devkit-run.sh lee la ronda de task-fix y task-document desde la card en
+# Notion (DEVKIT-61). Por defecto, un notion.sh que falla: ninguna prueba toca
+# la card real, y la ronda cae a 1. Los bloques que necesitan otra cosa lo
+# sobrescriben.
+printf '#!/usr/bin/env bash\nexit 1\n' >"$TMP/notion-caido"
+chmod +x "$TMP/notion-caido"
+export DEVKIT_NOTION_BIN="$TMP/notion-caido"
 
 # Constructores de JSON. Las fechas son etiquetas T01..T10: solo importa el orden
 # y se comparan como texto, por eso llevan dos dígitos.
@@ -515,7 +522,8 @@ ciclo_env=(FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH"
            DEVKIT_WS="$CICLO/ws" DEVKIT_RUN_DIR="$CICLO/run" DEVKIT_HOY=2026-09-16)
 
 # 1. OK del revisor: el bucle decide documentar y task-document corre con el
-#    rol de implementación (segundo modelo de la frontera).
+#    rol de implementación: sin PR legible es la ronda 1 de la escalera del
+#    template, `sonnet:high` (DEVKIT-61).
 check "ciclo: OK sin documentar" documentar a1 "$(rev T01 a1 OK)" --
 corre_documentar() {
   local dir
@@ -527,7 +535,7 @@ corre_documentar() {
     bash "$WATCH" --run-skill "task-document-40-a1" "/task-document DEVKIT-3 40" "documentar:40:a1" >"$OUT" 2>&1
 }
 corre_documentar
-check_log "ciclo: task-document corre con el segundo modelo" 'task-document-40-a1 terminado: modelo=opus esfuerzo=high'
+check_log "ciclo: task-document corre con la ronda 1" 'task-document-40-a1 terminado: modelo=sonnet esfuerzo=high ronda=1'
 # 2. task-document deja su marcador: ya no hay nada que hacer hasta el merge.
 check "ciclo: documentado, espera el merge" nada a1 "$(rev T01 a1 OK)" -- "$(doc T02 a1)"
 
@@ -696,15 +704,17 @@ check_igual "task-block: motivo en watch.log" \
 # El caso `fix` completo por el hook --fix: devkit-run.sh real, un doble de
 # `claude` que anota el modelo con que lo llaman y responde lo que diga cada
 # caso, un `gh` que devuelve el último informe CAMBIOS sobre FIX_HEAD y un
-# doble de task-block.sh. Con roles.toml del template, task-fix corre en
-# `opus` (implementación) y el siguiente de la frontera es `sonnet`.
+# doble de task-block.sh. Con roles.toml del template y un PR sin devkit-fix,
+# task-fix va por la ronda 1, `sonnet` (DEVKIT-61), y el siguiente de la
+# frontera tras `sonnet`, el último, es `fable`. La card en Notion (doble)
+# trae la URL del PR; gh devuelve los comentarios de FIX_COMENTARIOS.
 FIX="$TMP/fix"
 mkdir -p "$FIX/bin"
 cat >"$FIX/bin/gh" <<'FIN'
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view")
-    printf '{"headRefOid":"%s","reviews":[{"author":{"login":"otro"},"state":"COMMENTED","submittedAt":"T01","body":"<!-- devkit-review sha=a1b2c3d verdict=CAMBIOS -->"}],"comments":[]}' "$FIX_HEAD" ;;
+    printf '{"headRefOid":"%s","reviews":[{"author":{"login":"otro"},"state":"COMMENTED","submittedAt":"T01","body":"<!-- devkit-review sha=a1b2c3d verdict=CAMBIOS -->"}],"comments":[%s]}' "$FIX_HEAD" "${FIX_COMENTARIOS:-}" ;;
   "pr comment") printf '%s\n' "$*" >>"$FIX_DIR/comentarios" ;;
   *) exit 1 ;;
 esac
@@ -723,7 +733,11 @@ cat >"$FIX/task-block" <<'FIN'
 #!/usr/bin/env bash
 printf '%s|' "$@" >"$FIX_DIR/bloqueo"
 FIN
-chmod +x "$FIX/bin/gh" "$FIX/claude" "$FIX/task-block"
+cat >"$FIX/notion.sh" <<'FIN'
+#!/usr/bin/env bash
+[ "$1" = card ] && printf '{"clave":"%s","pr":"https://github.com/o/r/pull/45"}\n' "$2"
+FIN
+chmod +x "$FIX/bin/gh" "$FIX/claude" "$FIX/task-block" "$FIX/notion.sh"
 
 corre_fix() {  # corre_fix <resultado 1> <resultado 2> [head que ve gh]
   local dir
@@ -733,14 +747,15 @@ corre_fix() {  # corre_fix <resultado 1> <resultado 2> [head que ve gh]
   FIX_DIR="$dir" FIX_R1="$1" FIX_R2="$2" FIX_HEAD="${3:-a1b2c3d}" PATH="$FIX/bin:$PATH" \
   DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
   DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
     bash "$WATCH" --fix 45 DEVKIT-9 https://github.com/o/r/pull/45 a1b2c3d a1b2c3d >"$OUT" 2>&1
 }
 
-# Dos veces "nada que corregir": alarma, relanzamiento con sonnet y bloqueo.
+# Dos veces "nada que corregir": alarma, relanzamiento con fable y bloqueo.
 corre_fix "nada que corregir" "nada que corregir"
 check_log "fix vacío: ALARMA con la frase y el modelo siguiente" \
-  'ALARMA: task-fix-45-a1b2c3d terminó con "nada que corregir" con CAMBIOS vigente sobre a1b2c3d; relanzo task-fix con sonnet \(antes opus\)'
-check_igual "fix vacío: relanza una vez, con el siguiente modelo" "opus sonnet" \
+  'ALARMA: task-fix-45-a1b2c3d terminó con "nada que corregir" con CAMBIOS vigente sobre a1b2c3d; relanzo task-fix con fable \(antes sonnet\)'
+check_igual "fix vacío: relanza una vez, con el siguiente modelo" "sonnet fable" \
   "$(tr '\n' ' ' <"$FIX_DIR_ACTUAL/modelos" | sed 's/ $//')"
 check_log "fix vacío: el reintento repite y se registra" 'ALARMA: task-fix-45-a1b2c3d-reintento también terminó con "nada que corregir"'
 check_igual "fix vacío: bloquea la card con task-block.sh" "DEVKIT-9" \
@@ -760,5 +775,18 @@ check_igual "fix vacío: si el reintento corrige, no bloquea" "2 no" \
 corre_fix "informe desactualizado, esperando a pr-review" "no debe correr" b2c3d4e
 check_igual "fix vacío: con el head ya cambiado no hay alarma" "0 1" \
   "$(grep -c 'ALARMA' "$OUT") $(cat "$FIX_DIR_ACTUAL/llamadas")"
+
+# --- Escalera de modelos por ronda (DEVKIT-61) -------------------------------
+# El PR ya tiene dos devkit-fix: el task-fix que lanza el bucle es la ronda 3,
+# que en el roles.toml del template es `opus:high`.
+FIX_COMENTARIOS='{"author":{"login":"bot"},"createdAt":"T02","body":"<!-- devkit-fix sha=b2 review=a1 -->"},{"author":{"login":"bot"},"createdAt":"T04","body":"<!-- devkit-fix sha=c3 review=b2 -->"}' \
+  corre_fix "H1 | atendido | 1234abc" "no debe correr"
+check_igual "rondas: el task-fix de la tercera ronda corre con opus" "opus" \
+  "$(tr '\n' ' ' <"$FIX_DIR_ACTUAL/modelos" | sed 's/ $//')"
+check_log "rondas: watch.log dice ronda=3 con modelo y esfuerzo" \
+  'task-fix-45-a1b2c3d terminado: modelo=opus esfuerzo=high ronda=3 '
+# La línea con ronda= sigue sumando en el costo del ciclo.
+check_igual "rondas: cycle_cost suma la línea con ronda=" "0.0100" \
+  "$(bash "$WATCH" --cycle-cost 45 "$OUT")"
 
 exit $fail

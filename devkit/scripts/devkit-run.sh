@@ -30,9 +30,9 @@
 #     La línea de resumen en watch.log marca "(anulación manual)".
 #
 # Modos que usa `watch.sh` (no para uso manual):
-#   devkit-run --rol "<prompt>"                     imprime "modelo esfuerzo presupuesto"
+#   devkit-run --rol "<prompt>"                     imprime "modelo esfuerzo presupuesto ronda"
 #   devkit-run --sync "<prompt>"                    corre en primer plano, JSON por stdout
-#   devkit-run --resumen <log> <modelo> <esfuerzo> <presupuesto>
+#   devkit-run --resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
 #                                                    imprime la línea de costo/tokens/turnos
 #   devkit-run --otros-agentes                      lista los `claude -p` ajenos
 #                                                    sobre este workspace; sale 0
@@ -44,14 +44,17 @@
 #   devkit-run --test                               autoprueba
 #
 # `--sync` usa DEVKIT_MODELO_FORZADO en vez del modelo del rol cuando viene no
-# vacía: así relanza watch.sh un task-fix con otro modelo (DEVKIT-57).
+# vacía: así relanza watch.sh un task-fix con otro modelo (DEVKIT-57). Usa
+# DEVKIT_RONDA, si viene, en vez de volver a leer el PR (DEVKIT-61).
 #
 # La tabla rol -> modelo/esfuerzo/turnos vive en devkit/agents/roles.toml.
 # Desde DEVKIT-54, el modelo no se elige por Tipo de la card sino por el papel
 # de la skill en el flujo: `roles.toml` declara una lista `frontera` ordenada
 # de alias de modelo y cada rol un `model_index` (posición 1-based desde la
 # que empieza a buscar). El Tipo sigue eligiendo prefijo de rama y sección
-# del CHANGELOG, pero ya no modelo.
+# del CHANGELOG, pero ya no modelo. Desde DEVKIT-61, `implementacion.rondas`
+# cambia modelo y esfuerzo según cuántas veces se corrigió el PR (ver
+# `model_effort_of`).
 # Los permisos (qué puede correr una skill sin pedir permiso) siguen en
 # `devkit/agents/settings.json`: este script no los toca ni los reemplaza.
 # `docs/ARCHITECTURE.md` 8.2 documenta que la lista `allow` de ese archivo no
@@ -111,6 +114,10 @@ SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 # Se pueden sustituir por un doble en la autoprueba, para no tocar Notion.
 TASK_BLOCK_BIN="${DEVKIT_TASK_BLOCK_BIN:-$HERE/task-block.sh}"
 TASK_CLOSE_BIN="${DEVKIT_TASK_CLOSE_BIN:-$HERE/task-close.sh}"
+# Para leer la ronda de un lanzamiento (DEVKIT-61): la card en Notion trae la
+# URL del PR, y gh cuenta sus comentarios devkit-fix. Sustituibles por dobles.
+NOTION_BIN="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
+GH_BIN="${DEVKIT_GH_BIN:-gh}"
 # Arranque y estado de los lanzamientos (DEVKIT-57). READY lo escribe
 # entrypoint.sh como último paso del arranque; `devkit shell` y `devkit code`
 # ya lo esperan desde el host, y ahora también `devkit-run`.
@@ -144,10 +151,17 @@ role_field() {  # role_field <clave> <campo>
 # línea de salida, en el orden declarado. Es un array, no un escalar, así que
 # no usa role_field.
 frontera_list() {
-  grep -E '^frontera[[:space:]]*=' "$ROLES_FILE" 2>/dev/null | tail -1 \
+  toml_lista frontera
+}
+
+# Cualquier lista `<clave> = ["a", "b"]` de roles.toml, un elemento por línea.
+# La usan `frontera` y `<rol>.rondas` (DEVKIT-61).
+toml_lista() {  # toml_lista <clave>
+  local clave=${1//./\\.}
+  grep -E "^${clave}[[:space:]]*=" "$ROLES_FILE" 2>/dev/null | tail -1 \
     | sed -E 's/[[:space:]]*#.*$//' \
-    | sed -E 's/^frontera[[:space:]]*=[[:space:]]*\[(.*)\][[:space:]]*$/\1/' \
-    | tr ',' '\n' | sed -E 's/^[[:space:]"]+//; s/[[:space:]"]+$//'
+    | sed -E "s/^${clave}[[:space:]]*=[[:space:]]*\[(.*)\][[:space:]]*\$/\1/" \
+    | tr ',' '\n' | sed -E 's/^[[:space:]"]+//; s/[[:space:]"]+$//' | grep -v '^$'
 }
 
 # Rol de una skill a partir del primer token del prompt ("/pr-review 31" ->
@@ -279,23 +293,116 @@ siguiente_modelo() {  # siguiente_modelo <alias>
   resolver_modelo "$((pos + 1))"
 }
 
-# "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt. El esfuerzo
-# admite una anulación por skill (por ejemplo `epic-plan.effort`) por encima
-# del que trae su rol; el modelo sale siempre de `resolver_modelo` con el
-# `model_index` del rol.
-model_effort_of() {  # model_effort_of <prompt>
-  local role skill idx modelo esfuerzo turnos
+# --- Escalera de modelos por ronda (DEVKIT-61) ------------------------------
+# La ronda de un lanzamiento de implementación es cuántas veces se corrigió ya
+# su PR, más uno: task-start y task-submit son siempre la 1 (todavía no hay
+# PR); task-fix y task-document cuentan los comentarios `<!-- devkit-fix` del
+# PR de la card. `implementacion.rondas` en roles.toml dice qué modelo y
+# esfuerzo toca en cada ronda. Revisión no tiene ronda: imprime "-".
+
+ronda_aviso() {  # ronda_aviso <prompt> <texto>
+  printf '%s devkit-run ronda de "%s": %s\n' "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$2" \
+    >> "$WATCH_LOG" 2>/dev/null
+}
+
+# PR de una card: la URL que guarda Notion; si falta, el PR de su rama. La
+# rama sale de la card o, sin Notion, de las ramas locales y remotas cuyo
+# nombre trae la Clave seguida de un guion (así DEVKIT-6 no toma DEVKIT-61).
+pr_de_clave() {  # pr_de_clave <Clave>
+  local clave=$1 card pr rama
+  card=$("$NOTION_BIN" card "$clave" 2>/dev/null)
+  pr=$(jq -r '.pr // empty' <<<"$card" 2>/dev/null)
+  if [ -n "$pr" ]; then printf '%s' "$pr"; return 0; fi
+  rama=$(jq -r '.rama // empty' <<<"$card" 2>/dev/null | sed -E 's#^.*/tree/##')
+  [ -n "$rama" ] || rama=$(git -C "$WS" for-each-ref --format='%(refname:short)' refs/heads refs/remotes 2>/dev/null \
+    | sed -E 's#^origin/##' | grep -E "^[a-z]+/$clave-" | head -1)
+  [ -n "$rama" ] || return 1
+  pr=$("$GH_BIN" pr list --head "$rama" --state all --limit 1 --json number 2>/dev/null \
+    | jq -r '.[0].number // empty' 2>/dev/null)
+  [ -n "$pr" ] || return 1
+  printf '%s' "$pr"
+}
+
+ronda_de() {  # ronda_de <prompt>
+  local prompt=$1 skill clave pr n
+  skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  case "$skill" in
+    pr-review|epic-plan) printf -- '-'; return 0 ;;
+    task-fix|task-document) ;;
+    *) printf '1'; return 0 ;;
+  esac
+  clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  if [ -z "$clave" ]; then
+    ronda_aviso "$prompt" "sin Clave en el prompt; uso la ronda 1"
+    printf '1'; return 0
+  fi
+  if ! pr=$(pr_de_clave "$clave"); then
+    ronda_aviso "$prompt" "no encuentro el PR de $clave (ni en Notion ni por su rama); uso la ronda 1"
+    printf '1'; return 0
+  fi
+  n=$("$GH_BIN" pr view "$pr" --json comments 2>/dev/null \
+    | jq '[.comments[]? | select((.body // "") | contains("<!-- devkit-fix"))] | length' 2>/dev/null)
+  case "$n" in
+    ''|*[!0-9]*)
+      ronda_aviso "$prompt" "no pude leer los comentarios del PR $pr de $clave; uso la ronda 1"
+      printf '1' ;;
+    *) printf '%s' "$((n + 1))" ;;
+  esac
+}
+
+# "<modelo> <esfuerzo> <presupuesto de turnos> <ronda>" para un prompt.
+#
+# Modelo y esfuerzo: si el rol declara `rondas`, el elemento de la ronda
+# (`<alias>:<esfuerzo>`, el último si la ronda pasa del largo de la lista),
+# con su alias por la misma sonda de `frontera`; si el alias no responde, el
+# modelo de `model_index` y una línea en watch.log. Sin `rondas`,
+# `model_index` y `effort` del rol, como antes de DEVKIT-61. `revision` no
+# escala: su `rondas` se ignora con aviso. El esfuerzo admite además una
+# anulación por skill (por ejemplo `epic-plan.effort`), que manda sobre todo.
+#
+# [ronda] viene cuando quien llama ya la resolvió (watch.sh la pasa de `--rol`
+# a `--sync` en DEVKIT_RONDA): no se vuelve a consultar el PR ni se repiten
+# los avisos en watch.log.
+model_effort_of() {  # model_effort_of <prompt> [ronda]
+  local role skill idx modelo esfuerzo turnos ronda avisar=1 elem alias esf i
+  local -a rondas=()
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   role=$(role_of "$1")
+  if [ -n "${2:-}" ]; then ronda=$2; avisar=""; else ronda=$(ronda_de "$1"); fi
   idx=$(role_field "$role" model_index)
-  modelo=$(resolver_modelo "$idx")
-  esfuerzo=$(role_field "$skill" effort)
-  [ -n "$esfuerzo" ] || esfuerzo=$(role_field "$role" effort)
+  esfuerzo=$(role_field "$role" effort)
+  while IFS= read -r elem; do rondas+=("$elem"); done < <(toml_lista "$role.rondas")
+  if [ "$role" = revision ]; then
+    if [ "${#rondas[@]}" -gt 0 ] && [ -n "$avisar" ]; then
+      printf '%s devkit-run "%s": revision.rondas se ignora; el revisor no escala (DEVKIT-61)\n' \
+        "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" >> "$WATCH_LOG" 2>/dev/null
+    fi
+    ronda="-"
+    modelo=$(resolver_modelo "$idx")
+  elif [ "${#rondas[@]}" -gt 0 ] && [[ "$ronda" =~ ^[0-9]+$ ]] && [ "$ronda" -ge 1 ]; then
+    i=$ronda
+    [ "$i" -le "${#rondas[@]}" ] || i=${#rondas[@]}
+    elem=${rondas[$((i - 1))]}
+    alias=${elem%%:*}
+    esf=""
+    case "$elem" in *:*) esf=${elem#*:} ;; esac
+    [ -z "$esf" ] || esfuerzo=$esf
+    if [ -n "$alias" ] && modelo_disponible "$alias"; then
+      modelo=$alias
+    else
+      modelo=$(resolver_modelo "$idx")
+      [ -z "$avisar" ] || ronda_aviso "$1" "ronda $ronda pide ${alias:-un alias vacío}, que no responde; uso $modelo (model_index del rol)"
+    fi
+  else
+    modelo=$(resolver_modelo "$idx")
+  fi
+  esf=$(role_field "$skill" effort)
+  [ -z "$esf" ] || esfuerzo=$esf
   turnos=$(role_field "$role" max_turns)
   # Campos vacíos como "-": `read` parte por espacios y se salta los campos
   # vacíos, así que un modelo vacío se leía como si fuera el esfuerzo
   # (DEVKIT-55).
-  printf '%s %s %s' "${modelo:--}" "${esfuerzo:--}" "${turnos:--}"
+  printf '%s %s %s %s' "${modelo:--}" "${esfuerzo:--}" "${turnos:--}" "${ronda:--}"
 }
 
 # Ejecuta la skill en primer plano; deja el JSON de `claude -p` en stdout.
@@ -323,7 +430,7 @@ model_effort_of() {  # model_effort_of <prompt>
 # para cada papel. Se leen de aquí y no de roles.toml porque solo este punto
 # sabe qué se lanzó de verdad.
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
-  DEVKIT_ORIGEN="" DEVKIT_MODELO_FORZADO="" \
+  DEVKIT_ORIGEN="" DEVKIT_MODELO_FORZADO="" DEVKIT_RONDA="" \
   DEVKIT_MODEL="$2" DEVKIT_EFFORT="$3" \
   DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_RUN_DIR="$RUN_DIR" \
   "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
@@ -333,9 +440,11 @@ run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
 
 # Línea de costo/tokens/turnos/modelo/esfuerzo de un log ya terminado. La
 # comparten `run_skill` (watch.sh) y el modo `--worker` de este script, para
-# no repetir el `jq` en dos archivos.
-resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto>
-  local logf=$1 modelo=$2 esfuerzo=$3 presupuesto=$4 linea turnos excedido=""
+# no repetir el `jq` en dos archivos. `ronda=` va justo después de `esfuerzo=`
+# (DEVKIT-61): `cycle_cost` suma `costo=` y `--estado` lee el encabezado de la
+# línea, así que ninguno de los dos depende de lo que hay entre medio.
+resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
+  local logf=$1 modelo=$2 esfuerzo=$3 presupuesto=$4 ronda=${5:--} linea turnos excedido=""
   linea=$(tail -1 "$logf" 2>/dev/null | jq -r '
     "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
   [ -n "$linea" ] || linea="$(tail -1 "$logf" 2>/dev/null | cut -c1-160)"
@@ -344,7 +453,7 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto>
      && [ "$turnos" -gt "$presupuesto" ] 2>/dev/null; then
     excedido=" (excede el presupuesto de $presupuesto turnos de roles.toml)"
   fi
-  printf 'modelo=%s esfuerzo=%s %s%s' "$modelo" "$esfuerzo" "$linea" "$excedido"
+  printf 'modelo=%s esfuerzo=%s ronda=%s %s%s' "$modelo" "$esfuerzo" "$ronda" "$linea" "$excedido"
 }
 
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
@@ -742,6 +851,30 @@ run_tests() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
 
+  # Dobles de notion.sh y gh para la ronda (DEVKIT-61). Responden desde
+  # $RONDA_DIR: `card-<Clave>.json`, `pr-view.json` (comentarios del PR) y
+  # `pr-list.json`; sin archivo, fallan como un servicio caído. Se exportan
+  # para que ningún lanzamiento de esta prueba (task-fix, task-document)
+  # consulte la card real en Notion ni el PR real en GitHub.
+  export RONDA_DIR="$tmp/ronda"
+  mkdir -p "$RONDA_DIR"
+  cat >"$tmp/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+[ "$1" = card ] && cat "$RONDA_DIR/card-$2.json" 2>/dev/null
+FIN
+  cat >"$tmp/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$RONDA_DIR/gh-llamadas"
+case "$1 $2" in
+  "pr view") cat "$RONDA_DIR/pr-view.json" 2>/dev/null ;;
+  "pr list") cat "$RONDA_DIR/pr-list.json" 2>/dev/null ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$tmp/notion-doble" "$tmp/gh-doble"
+  export DEVKIT_NOTION_BIN="$tmp/notion-doble" DEVKIT_GH_BIN="$tmp/gh-doble"
+  NOTION_BIN="$tmp/notion-doble" GH_BIN="$tmp/gh-doble"
+
   # Un doble de `claude` que no gasta cuota: responde bien a cualquier
   # `--model`, así sirve tanto para las comprobaciones de disponibilidad como
   # para los lanzamientos de punta a punta de más abajo.
@@ -792,7 +925,7 @@ b" "$(ROLES_FILE="$tmp/roles-comentarios.toml" frontera_list)"
   # al respaldo en vez de a un archivo que no existe (DEVKIT-50, H1).
   mkdir -p "$tmp/nested/scripts"
   cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
-  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-fuerte high 50" \
+  check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-fuerte high 50 -" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" \
        DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-fallback" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" \
        bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
@@ -908,12 +1041,132 @@ FIN
   check "un fallo transitorio no persiste tras el plazo" "si" \
     "$(CLAUDE_BIN="$doble" FRONTERA_CACHE_DIR="$tmp/frontera-transitorio" WATCH_LOG="$tmp/sonda-watch.log" MODEL_RETRY=0 modelo_disponible modelo-bueno; cat "$tmp/frontera-transitorio/modelo-bueno")"
 
-  check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50" \
+  check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50 -" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
-  check "modelo/esfuerzo de epic-plan (esfuerzo máximo por skill)" "modelo-fuerte max 50" \
+  check "modelo/esfuerzo de epic-plan (esfuerzo máximo por skill)" "modelo-fuerte max 50 -" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
-  check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-barato low 15" \
+  check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-barato low 15 1" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
+  # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
+  # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.
+  cat >"$tmp/roles-rondas.toml" <<'FIN'
+frontera = ["modelo-fuerte", "modelo-medio", "modelo-barato"]
+implementacion.model_index = 2
+implementacion.effort = "low"
+implementacion.max_turns = 40
+implementacion.rondas = ["modelo-barato:low", "modelo-medio:medium", "modelo-fuerte:high"]  # experimento
+revision.model_index = 1
+revision.effort = "high"
+revision.max_turns = 50
+revision.rondas = ["modelo-barato:low"]
+FIN
+  # prs_con <n>: el PR de la card trae n comentarios devkit-fix y uno ajeno.
+  prs_con() {
+    local i c='{"body":"<!-- devkit-review sha=a1 verdict=CAMBIOS -->"}'
+    for ((i = 0; i < $1; i++)); do c="$c,{\"body\":\"<!-- devkit-fix sha=b$i review=a$i -->\\nH1 | atendido\"}"; done
+    printf '{"comments":[%s]}' "$c" >"$RONDA_DIR/pr-view.json"
+  }
+  ronda_env() {  # ronda_env <función> <args...>, con la tabla de rondas
+    CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-rondas.toml" FRONTERA_CACHE_DIR="$tmp/frontera-rondas" \
+      WATCH_LOG="$tmp/rondas-watch.log" "$@"
+  }
+  printf '{"pr":"https://github.com/o/r/pull/7","rama":"https://github.com/o/r/tree/feat/DEVKIT-7-algo"}' \
+    >"$RONDA_DIR/card-DEVKIT-7.json"
+  : >"$tmp/rondas-watch.log"
+  prs_con 0
+  check "ronda 1: task-fix sin devkit-fix previos" "modelo-barato low 40 1" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
+  prs_con 1
+  check "ronda 2: un devkit-fix previo" "modelo-medio medium 40 2" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
+  prs_con 2
+  check "ronda 3: dos devkit-fix previos" "modelo-fuerte high 40 3" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
+  prs_con 3
+  check "ronda 4 repite el último elemento de la lista" "modelo-fuerte high 40 4" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
+  check "task-document también cuenta la ronda" "modelo-fuerte high 40 4" \
+    "$(ronda_env model_effort_of '/task-document DEVKIT-7 7')"
+  : >"$RONDA_DIR/gh-llamadas"
+  check "task-start es ronda 1 sin consultar el PR" "modelo-barato low 40 1 0" \
+    "$(ronda_env model_effort_of '/task-start DEVKIT-7') $(wc -l <"$RONDA_DIR/gh-llamadas" | tr -d ' ')"
+  check "task-submit es ronda 1" "modelo-barato low 40 1" \
+    "$(ronda_env model_effort_of '/task-submit DEVKIT-7')"
+  check "ronda ya resuelta: no consulta el PR" "modelo-medio medium 40 2 0" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7' 2) $(wc -l <"$RONDA_DIR/gh-llamadas" | tr -d ' ')"
+  # Sin URL del PR en Notion: gh pr list --head <rama de la card>.
+  printf '{"pr":null,"rama":"https://github.com/o/r/tree/feat/DEVKIT-8-otra"}' >"$RONDA_DIR/card-DEVKIT-8.json"
+  printf '[{"number":8}]' >"$RONDA_DIR/pr-list.json"
+  prs_con 1
+  check "sin PR en Notion lo busca por la rama" "modelo-medio medium 40 2" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-8')"
+  check "gh pr list recibe la rama de la card" "pr list --head feat/DEVKIT-8-otra --state all --limit 1 --json number" \
+    "$(grep '^pr list' "$RONDA_DIR/gh-llamadas" | tail -1)"
+  # PR ilegible: ronda 1 y la línea en watch.log.
+  rm -f "$RONDA_DIR/pr-view.json"
+  check "PR ilegible: ronda 1" "modelo-barato low 40 1" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
+  check "PR ilegible: lo dice en watch.log" "no pude leer los comentarios del PR https://github.com/o/r/pull/7 de DEVKIT-7; uso la ronda 1" \
+    "$(grep -oE 'no pude leer los comentarios del PR .*' "$tmp/rondas-watch.log" | tail -1)"
+  check "card sin PR ni rama: ronda 1 con aviso" "modelo-barato low 40 1 1" \
+    "$(ronda_env model_effort_of '/task-fix DEVKIT-99') $(grep -c 'no encuentro el PR de DEVKIT-99' "$tmp/rondas-watch.log")"
+  # El alias de la ronda pasa por la sonda: si no responde, model_index.
+  mkdir -p "$tmp/frontera-rondas-caida"
+  printf 'si' >"$tmp/frontera-rondas-caida/modelo-medio"
+  printf 'no' >"$tmp/frontera-rondas-caida/modelo-fuerte"
+  prs_con 2
+  check "alias de la ronda caído: usa el de model_index" "modelo-medio high 40 3" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-rondas.toml" FRONTERA_CACHE_DIR="$tmp/frontera-rondas-caida" \
+       WATCH_LOG="$tmp/rondas-watch.log" MODEL_RETRY=600 model_effort_of '/task-fix DEVKIT-7')"
+  check "alias de la ronda caído: lo dice en watch.log" "ronda 3 pide modelo-fuerte, que no responde; uso modelo-medio (model_index del rol)" \
+    "$(grep -oE 'ronda 3 pide modelo-fuerte.*' "$tmp/rondas-watch.log" | tail -1)"
+  # El revisor no escala: revision.rondas se ignora con una línea.
+  : >"$tmp/rondas-watch.log"
+  check "revisión ignora sus rondas" "modelo-fuerte high 50 -" \
+    "$(ronda_env model_effort_of '/pr-review 7')"
+  printf 'epic-plan.effort = "max"\n' >>"$tmp/roles-rondas.toml"
+  check "epic-plan ignora las rondas y sube a max" "modelo-fuerte max 50 -" \
+    "$(ronda_env model_effort_of '/epic-plan DEVKIT-1')"
+  check "revision.rondas ignorada queda en watch.log" 2 \
+    "$(grep -c 'revision.rondas se ignora; el revisor no escala' "$tmp/rondas-watch.log")"
+  # Sin rondas, model_index y effort del rol, como antes (tabla de arriba),
+  # aunque el PR vaya por la ronda 3: la ronda solo queda anotada.
+  check "sin rondas manda model_index" "modelo-barato low 15 3" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-7')"
+  printf '{"result":"x","total_cost_usd":0.5,"num_turns":1}\n' >"$tmp/resumen-ronda.log"
+  check "la línea de resumen lleva ronda= junto a modelo= y esfuerzo=" "modelo=modelo-fuerte esfuerzo=high ronda=3 costo=0.5" \
+    "$(resumen "$tmp/resumen-ronda.log" modelo-fuerte high 99 3 | grep -oE '^modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=[0-9.]+')"
+  check "--resumen por línea de comandos pasa la ronda (lo usa watch.sh)" "modelo=m esfuerzo=e ronda=2" \
+    "$(bash "$HERE/devkit-run.sh" --resumen "$tmp/resumen-ronda.log" m e 99 2 | grep -oE '^modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+')"
+  check "resumen sin ronda (watch.sh viejo) escribe ronda=-" "modelo=m esfuerzo=e ronda=-" \
+    "$(resumen "$tmp/resumen-ronda.log" m e 99 | grep -oE '^modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+')"
+  # --modelo y --esfuerzo mandan sobre la ronda, de punta a punta.
+  mkdir -p "$tmp/run-rondas"
+  : >"$tmp/run-rondas/ready"
+  DEVKIT_ARRANQUE_ESPERA=1 DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run-rondas" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles-rondas.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-rondas" \
+    bash "$HERE/devkit-run.sh" --modelo modelo-a-mano --esfuerzo max task-fix DEVKIT-7 >/dev/null 2>&1
+  espera_linea() {  # espera_linea <archivo> <patrón>
+    local e=0
+    while ! grep -qE "$2" "$1" 2>/dev/null && [ "$e" -lt 50 ]; do sleep 0.1; e=$((e + 1)); done
+  }
+  espera_linea "$tmp/run-rondas/watch.log" 'terminado \['
+  check "--modelo/--esfuerzo mandan sobre la ronda" "modelo=modelo-a-mano esfuerzo=max ronda=3" \
+    "$(grep -oE 'modelo=modelo-a-mano esfuerzo=max ronda=[0-9-]+' "$tmp/run-rondas/watch.log" | head -1)"
+  # DEVKIT_MODELO_FORZADO pisa el modelo de la ronda; el esfuerzo de la ronda
+  # se mantiene.
+  cat >"$tmp/claude-espejo-ronda" <<'FIN'
+#!/usr/bin/env bash
+case "$*" in *"-p ok"*) printf '{"result":"ok"}\n'; exit 0 ;; esac
+printf '{"result":"%s %s","total_cost_usd":0,"num_turns":1}\n' "$DEVKIT_MODEL" "$DEVKIT_EFFORT"
+FIN
+  chmod +x "$tmp/claude-espejo-ronda"
+  check "DEVKIT_MODELO_FORZADO manda sobre la ronda" '{"result":"modelo-forzado high","total_cost_usd":0,"num_turns":1}' \
+    "$(DEVKIT_MODELO_FORZADO=modelo-forzado DEVKIT_CLAUDE_BIN="$tmp/claude-espejo-ronda" DEVKIT_RUN_DIR="$tmp/run-rondas" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles-rondas.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-rondas" \
+       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-7' 2>/dev/null | tail -1)"
 
   # --worker de punta a punta, con el mismo doble de arriba.
   mkdir -p "$tmp/run"
@@ -1183,9 +1436,9 @@ implementacion.model_index = 1
 implementacion.effort = "high"
 implementacion.max_turns = 99
 FIN
-  check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99" \
+  check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99 -" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-1" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
-  check "ROLES_FILE desde .devkit/roles.toml (task-fix)" "anulacion-proyecto high 99" \
+  check "ROLES_FILE desde .devkit/roles.toml (task-fix)" "anulacion-proyecto high 99 1" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/task-fix DEVKIT-2')"
 
   # --- DEVKIT-57: quién lanzó, arranque y --estado ---------------------------
@@ -1248,9 +1501,9 @@ FIN
 2026-09-16T11:08:00Z task-start-5 lanzando (origen=humano): "/task-start DEVKIT-5" log=$est/task-start-5.log
 2026-09-16T11:10:00Z task-start-1 lanzando (origen=task-close): "/task-start DEVKIT-57" log=$est/task-start-1.log
 2026-09-16T11:12:00Z task-block.sh DEVKIT-5 Bloqueada desde En progreso: motivo de la cinco.
-2026-09-16T11:12:05Z devkit-run "/task-start DEVKIT-5" terminado [task-start-5]: modelo=opus esfuerzo=high :: bloqueada
+2026-09-16T11:12:05Z devkit-run "/task-start DEVKIT-5" terminado [task-start-5]: modelo=opus esfuerzo=high ronda=1 :: bloqueada
 2026-09-16T11:20:00Z task-fix-1 lanzando (origen=humano): "/task-fix DEVKIT-58" log=$est/task-fix-1.log
-2026-09-16T11:21:00Z devkit-run "/task-fix DEVKIT-58" falló (rc=1) [task-fix-1]: modelo=opus esfuerzo=high :: error
+2026-09-16T11:21:00Z devkit-run "/task-fix DEVKIT-58" falló (rc=1) [task-fix-1]: modelo=opus esfuerzo=high ronda=2 :: error
 2026-09-16T11:30:00Z task-start-3 lanzando (origen=epic-plan): "/task-start DEVKIT-59" log=$est/task-start-3.log
 2026-09-16T11:31:00Z task-block.sh DEVKIT-59 Bloqueada desde En progreso: Qué intenté: X. Qué necesito: el token de Y.
 2026-09-16T11:31:05Z devkit-run "/task-start DEVKIT-59" terminado [task-start-3]: modelo=opus esfuerzo=high :: bloqueada
@@ -1323,18 +1576,18 @@ case "${1:-}" in
         exit $?
         ;;
     esac
-    read -r modelo esfuerzo _ < <(model_effort_of "${2:-}")
+    read -r modelo esfuerzo _ _ < <(model_effort_of "${2:-}" "${DEVKIT_RONDA:-}")
     [ -z "${DEVKIT_MODELO_FORZADO:-}" ] || modelo=$DEVKIT_MODELO_FORZADO
     modelo_valido "${modelo:-}" "${2:-}" || exit 65
     run_claude "${2:-}" "$modelo" "$esfuerzo"
     exit $?
     ;;
   --resumen)
-    resumen "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    resumen "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
   --worker)
-    # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto> [manual]: ya
+    # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto> [manual] [ronda]: ya
     # corre dentro de un proceso desacoplado (nohup); toma el mismo candado
     # que `run_skill` antes de tocar /workspace, ejecuta y al terminar deja
     # el resumen en watch.log, igual que el bucle. `manual` (cualquier valor
@@ -1345,7 +1598,7 @@ case "${1:-}" in
     # aquí en vez de perderlas.
     cd "$WS" 2>/dev/null || exit 1
     mkdir -p "$RUN_DIR"
-    prompt=${2:-} logf=${3:-} modelo=${4:-} esfuerzo=${5:-} presupuesto=${6:-} manual=${7:-}
+    prompt=${2:-} logf=${3:-} modelo=${4:-} esfuerzo=${5:-} presupuesto=${6:-} manual=${7:-} ronda=${8:--}
     modelo_valido "$modelo" "$prompt" || exit 65
     exec 9>"$LOCK"
     if ! flock -n 9; then
@@ -1365,7 +1618,7 @@ case "${1:-}" in
     exec 9>&-
     estado=terminado
     [ $rc -eq 0 ] || estado="falló (rc=$rc)"
-    resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto")"
+    resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$ronda")"
     [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
     # `[<id>]` une el resumen con su línea "lanzando" para `--estado`: dos
     # lanzamientos del mismo prompt solo se distinguen por el log.
@@ -1472,7 +1725,7 @@ mkdir -p "$RUN_DIR"
 n=1
 while [ -e "$RUN_DIR/$skill-$n.log" ]; do n=$((n + 1)); done
 logf="$RUN_DIR/$skill-$n.log"
-read -r modelo esfuerzo presupuesto < <(model_effort_of "$prompt")
+read -r modelo esfuerzo presupuesto ronda < <(model_effort_of "$prompt")
 manual=""
 if [ -n "$modelo_manual" ]; then modelo="$modelo_manual"; manual=1; fi
 if [ -n "$esfuerzo_manual" ]; then esfuerzo="$esfuerzo_manual"; manual=1; fi
@@ -1488,11 +1741,11 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 # La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
 # para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
 linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" >> "$WATCH_LOG" 2>/dev/null
-nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO \
-  "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" \
+nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
+  "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
   >/dev/null 2>&1 &
 worker=$!
 disown
 echo "lanzado: $prompt"
-echo "modelo=$modelo esfuerzo=$esfuerzo log=$logf pid=$worker"
+echo "modelo=$modelo esfuerzo=$esfuerzo ronda=$ronda log=$logf pid=$worker"
 confirmar_arranque "$worker" "$prompt" "$logf" || exit 70

@@ -38,6 +38,20 @@ implementacion.model_index = 2
 implementacion.effort = "high"
 implementacion.max_turns = 40
 
+# Escalera por ronda (DEVKIT-61), un experimento: empezar con el modelo barato
+# y subir solo si el PR no pasa la revisión. Cada elemento es
+# `<alias de claude --model>:<esfuerzo>` y su posición es la ronda. La ronda es
+# 1 para task-start y task-submit, y para task-fix y task-document es 1 más el
+# número de comentarios `<!-- devkit-fix` del PR de la card. Una ronda mayor
+# que la lista usa el último elemento. Si el alias no responde, se usa el
+# modelo de `model_index` y watch.log lo dice. Para desactivarla, quita la
+# línea: `model_index` y `effort` vuelven a mandar.
+implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
+
+# `revision.rondas` no existe a propósito: el revisor es la compuerta de
+# calidad y un modelo más débil da OK falsos que nadie detecta. Si alguien la
+# declara, devkit-run la ignora y lo escribe en watch.log.
+
 # No hay rol para cerrar ni bloquear una card (DEVKIT-55): `task-close.sh` y
 # `task-block.sh` son bash contra la API de Notion y no lanzan modelo. El rol
 # `contabilidad` que los agrupaba se retiró con ellos.
