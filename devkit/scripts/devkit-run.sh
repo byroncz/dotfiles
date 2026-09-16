@@ -98,6 +98,7 @@ SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 # ni tipos, solo esa forma fija.
 role_field() {  # role_field <clave> <campo>
   grep -E "^${1}\.${2}[[:space:]]*=" "$ROLES_FILE" 2>/dev/null | tail -1 \
+    | sed -E 's/[[:space:]]*#.*$//' \
     | sed -E 's/^[^=]+=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/'
 }
 
@@ -106,6 +107,7 @@ role_field() {  # role_field <clave> <campo>
 # no usa role_field.
 frontera_list() {
   grep -E '^frontera[[:space:]]*=' "$ROLES_FILE" 2>/dev/null | tail -1 \
+    | sed -E 's/[[:space:]]*#.*$//' \
     | sed -E 's/^frontera[[:space:]]*=[[:space:]]*\[(.*)\][[:space:]]*$/\1/' \
     | tr ',' '\n' | sed -E 's/^[[:space:]"]+//; s/[[:space:]"]+$//'
 }
@@ -421,6 +423,19 @@ FIN
   check "lista de frontera, una por línea" "modelo-barato
 modelo-medio
 modelo-fuerte" "$(ROLES_FILE="$tmp/roles.toml" frontera_list)"
+  # Un comentario al final de la línea es TOML válido y `.devkit/roles.toml`
+  # se edita a mano: no puede colarse en el valor (DEVKIT-54, H3).
+  cat >"$tmp/roles-comentarios.toml" <<'FIN'
+frontera = ["a", "b"]  # del más fuerte al más barato
+revision.model_index = 1 # primero de la lista
+revision.effort = "high"  # "max" solo en epic-plan
+FIN
+  check "frontera_list ignora un comentario en línea" "a
+b" "$(ROLES_FILE="$tmp/roles-comentarios.toml" frontera_list)"
+  check "role_field ignora un comentario en línea (número)" "1" \
+    "$(ROLES_FILE="$tmp/roles-comentarios.toml" role_field revision model_index)"
+  check "role_field ignora un comentario en línea (cadena)" "high" \
+    "$(ROLES_FILE="$tmp/roles-comentarios.toml" role_field revision effort)"
 
   # Sin DEVKIT_ROLES_FILE y sin hermano ../agents (la forma en que corre
   # desde /opt/devkit/scripts en la imagen), el valor por defecto debe caer
