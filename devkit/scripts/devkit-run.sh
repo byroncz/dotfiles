@@ -143,15 +143,29 @@ modelo_disponible() {  # modelo_disponible <alias>
   fi
   local resultado=no vacio
   vacio=$(mktemp -d)
+  # `</dev/null` no es decorativo: `claude -p` lee stdin, y esta función se
+  # llama desde el bucle de `resolver_modelo`. Sin esto, la primera sonda se
+  # comía el resto de la lista de modelos y la resolución terminaba en el
+  # último recurso en vez de en el siguiente modelo (DEVKIT-54).
   if (cd "$vacio" && timeout "$MODEL_CHECK_TIMEOUT" "$CLAUDE_BIN" -p "ok" \
         --model "$modelo_id" --output-format json \
         --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
         --disallowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
-        >/dev/null 2>&1); then
+        </dev/null >/dev/null 2>&1); then
     resultado=si
   fi
   rm -rf "$vacio"
   printf '%s' "$resultado" > "$cache" 2>/dev/null
+  # Solo se registra la sonda que de verdad corrió, no las lecturas de caché:
+  # así queda una línea por modelo y por arranque, y la caída al siguiente es
+  # visible en watch.log sin tener que reproducirla (DEVKIT-54).
+  if [ "$resultado" = "si" ]; then
+    printf '%s devkit-run sonda de modelo: %s responde\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" >> "$WATCH_LOG" 2>/dev/null
+  else
+    printf '%s devkit-run sonda de modelo: %s no responde en %ss; cae al siguiente de la lista\n' \
+      "$(date -u +%FT%TZ)" "$modelo_id" "$MODEL_CHECK_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+  fi
   [ "$resultado" = "si" ]
 }
 
@@ -159,22 +173,28 @@ modelo_disponible() {  # modelo_disponible <alias>
 # <indice_inicial> (1-based) hacia el final de la lista. Si ninguno responde,
 # devuelve el último de la lista completa como último recurso: lanzar con el
 # modelo más débil vale más que no lanzar nada.
+#
+# La lista se carga entera en un array antes de sondear nada. Recorrerla con
+# `while read` desde un heredoc parecía equivalente y no lo es: la sonda es un
+# proceso que también lee stdin, así que se llevaba por delante los modelos que
+# faltaban por probar.
 resolver_modelo() {  # resolver_modelo <indice_inicial>
-  local idx=${1:-1} modelos modelo i=0
-  modelos=$(frontera_list)
-  [ -n "$idx" ] || idx=1
+  local idx=${1:-1} modelo i=0
+  local -a modelos=()
   while IFS= read -r modelo; do
+    [ -n "$modelo" ] && modelos+=("$modelo")
+  done < <(frontera_list)
+  [ "${#modelos[@]}" -gt 0 ] || return 1
+  [ -n "$idx" ] || idx=1
+  for modelo in "${modelos[@]}"; do
     i=$((i + 1))
-    [ -n "$modelo" ] || continue
     [ "$i" -ge "$idx" ] || continue
     if modelo_disponible "$modelo"; then
       printf '%s' "$modelo"
       return 0
     fi
-  done <<EOF
-$modelos
-EOF
-  printf '%s' "$modelos" | tail -1
+  done
+  printf '%s' "${modelos[$(( ${#modelos[@]} - 1 ))]}"
 }
 
 # "<modelo> <esfuerzo> <presupuesto de turnos>" para un prompt. El esfuerzo
@@ -387,16 +407,16 @@ modelo-fuerte" "$(ROLES_FILE="$tmp/roles.toml" frontera_list)"
   cp "$HERE/devkit-run.sh" "$tmp/nested/scripts/devkit-run.sh"
   check "ROLES_FILE por defecto cae al respaldo sin ../agents" "modelo-fuerte high 50" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_ROLES_FILE_FALLBACK="$tmp/roles.toml" DEVKIT_WS="$tmp" \
-       DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-fallback" \
+       DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-fallback" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" \
        bash "$tmp/nested/scripts/devkit-run.sh" --rol '/pr-review 9')"
 
   # Resolución normal de la lista (DEVKIT-54): con todos los modelos
   # disponibles, resolver_modelo devuelve el que toca por model_index, sin
   # caer al siguiente.
   check "resolución normal: primer modelo de la lista" "modelo-barato" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-1" resolver_modelo 1)"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-1" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
   check "resolución normal: tercer modelo de la lista" "modelo-fuerte" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-3" resolver_modelo 3)"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-normal-3" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 3)"
 
   # Caída al siguiente modelo (DEVKIT-54): un doble que rechaza un alias
   # puntual simula un modelo que no existe o no responde; resolver_modelo
@@ -420,25 +440,72 @@ fi
 printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
 FIN
   chmod +x "$caido"
+  # Tres modelos a propósito, no dos: con dos, "el siguiente de la lista" y
+  # "el último recurso" son el mismo valor y la prueba pasa aunque la
+  # resolución esté rota. Así se escapó que la sonda se comía el stdin del
+  # bucle y cortaba la lista tras el primer modelo (DEVKIT-54).
   cat >"$tmp/roles-caida.toml" <<'FIN'
-frontera = ["modelo-inexistente", "modelo-bueno"]
+frontera = ["modelo-inexistente", "modelo-bueno", "modelo-ultimo"]
 implementacion.model_index = 1
 implementacion.effort = "high"
 implementacion.max_turns = 10
 FIN
   check "caída al siguiente modelo cuando el primero no responde" "modelo-bueno" \
-    "$(CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-caida" resolver_modelo 1)"
+    "$(CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-caida" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
   check "el modelo caído queda cacheado como no disponible" "no" \
     "$(cat "$tmp/frontera-caida/modelo-inexistente" 2>/dev/null)"
+  check "el modelo elegido tras la caída queda cacheado como disponible" "si" \
+    "$(cat "$tmp/frontera-caida/modelo-bueno" 2>/dev/null)"
+  # Una sonda que lee stdin no debe truncar la lista: con un doble que se
+  # come la entrada, la resolución tiene que seguir llegando al segundo
+  # modelo y no saltar al último.
+  local traga
+  traga="$tmp/claude-traga"
+  cat >"$traga" <<'FIN'
+#!/usr/bin/env bash
+modelo=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --model) modelo=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cat >/dev/null            # se come todo el stdin, como hace claude -p
+[ "$modelo" != "modelo-inexistente" ] || exit 1
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$traga"
+  check "una sonda que lee stdin no trunca la lista de frontera" "modelo-bueno" \
+    "$(CLAUDE_BIN="$traga" ROLES_FILE="$tmp/roles-caida.toml" FRONTERA_CACHE_DIR="$tmp/frontera-traga" WATCH_LOG="$tmp/sonda-watch.log" resolver_modelo 1)"
+  # La caída tiene que quedar en watch.log: es la forma de verla sin
+  # reproducirla a mano (criterio de aceptación de DEVKIT-54).
+  : >"$tmp/sonda-watch.log"
+  CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" \
+    FRONTERA_CACHE_DIR="$tmp/frontera-log" WATCH_LOG="$tmp/sonda-watch.log" \
+    resolver_modelo 1 >/dev/null
+  check "la caída al siguiente modelo queda registrada en watch.log" \
+    'sonda de modelo: modelo-inexistente no responde' \
+    "$(grep -oE 'sonda de modelo: modelo-inexistente no responde' "$tmp/sonda-watch.log" | head -1)"
+  check "el modelo que sí responde también deja su línea" \
+    'sonda de modelo: modelo-bueno responde' \
+    "$(grep -oE 'sonda de modelo: modelo-bueno responde' "$tmp/sonda-watch.log" | head -1)"
+  # Una segunda resolución con la caché ya escrita no vuelve a sondear ni a
+  # registrar: "una vez por arranque".
+  : >"$tmp/sonda-watch.log"
+  CLAUDE_BIN="$caido" ROLES_FILE="$tmp/roles-caida.toml" \
+    FRONTERA_CACHE_DIR="$tmp/frontera-log" WATCH_LOG="$tmp/sonda-watch.log" \
+    resolver_modelo 1 >/dev/null
+  check "con la caché escrita no vuelve a sondear" "0" \
+    "$(grep -c 'sonda de modelo' "$tmp/sonda-watch.log" | tr -d ' ')"
 
   check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" model_effort_of '/pr-review 9')"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
   check "modelo/esfuerzo de epic-plan (esfuerzo máximo por skill)" "modelo-fuerte max 50" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" model_effort_of '/epic-plan DEVKIT-1')"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
   check "modelo/esfuerzo de task-close" "modelo-barato low 15" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-close" model_effort_of '/task-close DEVKIT-2 url')"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-close" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-close DEVKIT-2 url')"
   check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-fuerte medium 40" \
-    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" model_effort_of '/task-fix DEVKIT-2')"
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
 
   # --worker de punta a punta, con el mismo doble de arriba.
   mkdir -p "$tmp/run"
@@ -610,9 +677,9 @@ implementacion.effort = "high"
 implementacion.max_turns = 99
 FIN
   check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-1" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-1" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
   check "ROLES_FILE desde .devkit/roles.toml (task-close)" "anulacion-proyecto high 99" \
-    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion-2" DEVKIT_WATCH_LOG="$tmp/sonda-watch.log" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
 
   return $fail
 }
