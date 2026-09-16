@@ -105,8 +105,8 @@ Argumento: Clave. Opcional: URL del PR.
      <Clave>`. Por ruta, no por el alias `devkit-run`: el alias solo existe
      en `zshrc`, y esta skill corre en el Bash no interactivo de `claude -p`,
      que no lo carga (DEVKIT-54). No la trabajes en esta misma ejecución:
-     correría con el rol de contabilidad de `task-close` (modelo barato,
-     esfuerzo bajo) en vez del rol `implementación` que le toca, que es lo
+     correría con el rol de contabilidad de `task-close` (tercer modelo de la
+     lista, esfuerzo alto) en vez del rol `implementación` que le toca, que es lo
      que resuelve `devkit-run` (DEVKIT-50). El script no es bloqueante:
      vuelve enseguida y el lanzamiento sigue en segundo plano aunque esta
      ejecución termine y suelte `skill.lock`, candado que el lanzamiento
