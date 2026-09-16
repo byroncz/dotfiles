@@ -16,8 +16,8 @@ es trabajo de `task-fix`.
    del revisor viven en `reviews`; las respuestas del corrector, en
    `comments`: necesitas ambos.
 2. Deduce la Clave del prefijo del título (`DEVKIT-12 ...` → código `DEVKIT`,
-   ID `12`). Si el código no coincide con `project` de `.devkit/devkit.toml` o el ID
-   es `0`, responde "sin card que revisar" y termina. Localiza la card en
+   ID `12`). Si el código no coincide con `project` de `.devkit/devkit.toml` o
+   el ID es `0`, responde "sin card que revisar" y termina. Localiza la card en
    Tareas filtrando por `ID` y `Proyecto`. Si su `Estado` no es
    `Revisión automática`, responde el estado y termina: la card ya salió del
    ciclo o todavía no entró.

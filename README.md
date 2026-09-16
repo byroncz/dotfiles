@@ -424,7 +424,11 @@ Sin `reviewer`, `pr-review` usa el dueño del repo si es un usuario; en una
 organización hay que declararlo.
 
 En el Mac, `~/.devkit/<proyecto>/devkit.env` guarda solo lo personal: URL del
-repo, identidad git y remoto de Dropbox.
+repo, identidad git y remoto de Dropbox. **Importante**: cuando actualices a una
+versión que mueva `devkit.toml` a `.devkit/` (DEVKIT-53 en adelante),
+reinstala el comando local con `new-project.sh <proyecto> --ref <etiqueta>` para
+que lea la nueva ruta. Sin esto, `devkit update` falla cuando el comando viejo
+intenta abrir el archivo en la ubicación antigua.
 
 ## Mantener este documento
 

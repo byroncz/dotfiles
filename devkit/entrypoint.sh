@@ -160,13 +160,19 @@ if [ -d "$TEMPLATE_DIR/agents" ]; then
   ln -sfn "$TEMPLATE_DIR/agents/skills" "$WS/.claude/skills"
   ln -sfn "$TEMPLATE_DIR/agents/notion.json" "$WS/.claude/devkit-notion.json"
   if [ ! -f "$WS/.devkit/devkit.toml" ]; then
-    # Proyecto nuevo sin .devkit/devkit.toml aún: se crea con placeholders. project-init
-    # corrige `project`; template-update corrige `template` en el primer bump.
-    {
-      echo "[devkit]"
-      printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
-      echo 'project  = "PROJ"'
-    } > "$WS/.devkit/devkit.toml"
+    # Migración: si existe el archivo viejo en raíz y el nuevo no, moverlo.
+    if [ -f "$WS/devkit.toml" ]; then
+      mv "$WS/devkit.toml" "$WS/.devkit/devkit.toml"
+      log "migración: devkit.toml movido de raíz a .devkit/"
+    else
+      # Proyecto nuevo sin .devkit/devkit.toml aún: se crea con placeholders. project-init
+      # corrige `project`; template-update corrige `template` en el primer bump.
+      {
+        echo "[devkit]"
+        printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
+        echo 'project  = "PROJ"'
+      } > "$WS/.devkit/devkit.toml"
+    fi
   fi
   [ -f "$WS/AGENTS.md" ] || sed "s/{{PROJECT}}/${DEVKIT_PROJECT:-proyecto}/g" "$TEMPLATE_DIR/agents/AGENTS.template.md" > "$WS/AGENTS.md"
   if [ -f "$WS/CLAUDE.md" ]; then

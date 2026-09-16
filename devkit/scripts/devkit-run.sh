@@ -44,6 +44,10 @@ ROLES_FILE="${DEVKIT_ROLES_FILE:-}"
 if [ -z "$ROLES_FILE" ]; then
   if [ -f "$HERE/../agents/roles.toml" ]; then
     ROLES_FILE="$HERE/../agents/roles.toml"
+  elif [ -f "$WS/.devkit/roles.toml" ]; then
+    # Anulación por proyecto: $WS/.devkit/roles.toml sobrescribe la tabla del
+    # template (DEVKIT-53, H3 de pr-review).
+    ROLES_FILE="$WS/.devkit/roles.toml"
   else
     # $HERE es /opt/devkit/scripts cuando corre desde el alias de la imagen
     # (o SCRIPTS_DIR fuera de dev): el Dockerfile solo copia scripts/, así
@@ -383,6 +387,25 @@ FIN
   check "--modelo sin valor no cuelga" 64 "$rc"
   timeout 5 bash "$HERE/devkit-run.sh" --esfuerzo >/dev/null 2>&1; rc=$?
   check "--esfuerzo sin valor no cuelga" 64 "$rc"
+
+  # .devkit/roles.toml anula la tabla del template (DEVKIT-53, H3): se prioriza
+  # sobre la de ../agents y la del template fallback.
+  mkdir -p "$tmp/.devkit"
+  cat >"$tmp/.devkit/roles.toml" <<'FIN'
+contabilidad.model = "anulacion-proyecto"
+contabilidad.effort = "high"
+contabilidad.max_turns = 99
+revision.model = "anulacion-proyecto"
+revision.effort = "high"
+revision.max_turns = 99
+implementacion.chore.model = "anulacion-proyecto"
+implementacion.chore.effort = "high"
+implementacion.chore.max_turns = 99
+FIN
+  check "ROLES_FILE desde .devkit/roles.toml (pr-review)" "anulacion-proyecto high 99" \
+    "$(WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/pr-review 9')"
+  check "ROLES_FILE desde .devkit/roles.toml (task-close en chore)" "anulacion-proyecto high 99" \
+    "$(WS="$tmp" bash "$HERE/devkit-run.sh" --rol '/task-close DEVKIT-2')"
 
   return $fail
 }

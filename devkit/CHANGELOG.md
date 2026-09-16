@@ -23,7 +23,10 @@ versión que usa un proyecto y la destino.
   `template-propagate` apuntan a `.devkit/devkit.toml`.
 - Cambios requeridos: `template-update` mueve `devkit.toml` de la raíz a
   `.devkit/` la primera vez que un proyecto sube a esta versión, y lo dice en
-  su comentario. Ningún paso manual en el Mac.
+  su comentario. **En el Mac**: reinstala el comando con
+  `new-project.sh <proyecto> --ref <etiqueta>` para que lea la ruta nueva; sin
+  esto, `devkit update` falla cuando `~/.devkit/bin/devkit` intenta abrir el
+  archivo viejo.
 
 ### El token del editor deja de filtrarse por logs y terminal (DEVKIT-51)
 
