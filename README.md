@@ -185,7 +185,9 @@ modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
 CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
 arranque del contenedor y el resultado queda cacheado en
 `/run/devkit/frontera/<alias>` (tmpfs: se vuelve a comprobar en cada `devkit
-recreate`); si el modelo que le toca a un rol no responde, `devkit-run` cae al
+recreate`). Un `si` vale todo el arranque; un `no` caduca a los 600 s
+(`DEVKIT_MODEL_RETRY`) y se vuelve a sondear, porque la sonda no distingue un
+modelo inexistente de una cuota agotada o un corte de red. Si el modelo que le toca a un rol no responde, `devkit-run` cae al
 siguiente de la lista y lo deja escrito en `watch.log`:
 
 ```

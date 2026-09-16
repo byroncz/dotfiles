@@ -74,6 +74,12 @@ WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 # comprobar entonces.
 FRONTERA_CACHE_DIR="${DEVKIT_FRONTERA_CACHE_DIR:-$RUN_DIR/frontera}"
 MODEL_CHECK_TIMEOUT="${DEVKIT_MODEL_CHECK_TIMEOUT:-30}"
+# Segundos que vale un `no` en la caché antes de volver a sondear. Un `si` vale
+# todo el arranque; un `no` no, porque la sonda no distingue un modelo que no
+# existe de una cuota agotada o un corte de red, y la cuota vuelve (DEVKIT-27).
+# Cachear el `no` para siempre dejaba `fable` y `opus` fuera hasta el próximo
+# `devkit recreate` (DEVKIT-54, H1 de pr-review).
+MODEL_RETRY="${DEVKIT_MODEL_RETRY:-600}"
 # Mismo candado que `run_skill` en watch.sh: un solo `claude -p` a la vez
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
@@ -138,8 +144,10 @@ modelo_disponible() {  # modelo_disponible <alias>
   cache="$FRONTERA_CACHE_DIR/$modelo_id"
   mkdir -p "$FRONTERA_CACHE_DIR" 2>/dev/null
   if [ -f "$cache" ]; then
-    [ "$(cat "$cache" 2>/dev/null)" = "si" ]
-    return
+    [ "$(cat "$cache" 2>/dev/null)" = "si" ] && return 0
+    local edad
+    edad=$(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || echo 0) ))
+    [ "$edad" -ge "$MODEL_RETRY" ] || return 1
   fi
   local resultado=no vacio
   vacio=$(mktemp -d)
@@ -497,6 +505,15 @@ FIN
     resolver_modelo 1 >/dev/null
   check "con la caché escrita no vuelve a sondear" "0" \
     "$(grep -c 'sonda de modelo' "$tmp/sonda-watch.log" | tr -d ' ')"
+  # Un `no` caduca: un fallo transitorio (cuota, red) no puede dejar el modelo
+  # fuera todo el arranque. Dentro del plazo se respeta sin sondear; con
+  # MODEL_RETRY=0 ya venció, la sonda vuelve a correr y el modelo queda en `si`.
+  mkdir -p "$tmp/frontera-transitorio"
+  printf 'no' >"$tmp/frontera-transitorio/modelo-bueno"
+  check "un no dentro del plazo no vuelve a sondear" "no" \
+    "$(CLAUDE_BIN="$doble" FRONTERA_CACHE_DIR="$tmp/frontera-transitorio" WATCH_LOG="$tmp/sonda-watch.log" MODEL_RETRY=600 modelo_disponible modelo-bueno; cat "$tmp/frontera-transitorio/modelo-bueno")"
+  check "un fallo transitorio no persiste tras el plazo" "si" \
+    "$(CLAUDE_BIN="$doble" FRONTERA_CACHE_DIR="$tmp/frontera-transitorio" WATCH_LOG="$tmp/sonda-watch.log" MODEL_RETRY=0 modelo_disponible modelo-bueno; cat "$tmp/frontera-transitorio/modelo-bueno")"
 
   check "modelo/esfuerzo de pr-review" "modelo-fuerte high 50" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-pr" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"

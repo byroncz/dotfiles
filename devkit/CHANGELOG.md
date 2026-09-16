@@ -24,7 +24,9 @@ versión que usa un proyecto y la destino.
   `epic-plan`, que sube a `max`.
 - La disponibilidad de cada modelo se comprueba una sola vez por arranque,
   con el resultado cacheado en `/run/devkit/frontera/<alias>` (tmpfs: se
-  repite en cada `devkit recreate`). Si el modelo que le toca a un rol no
+  repite en cada `devkit recreate`). Un `no` caduca a los 600 s
+  (`DEVKIT_MODEL_RETRY`): la sonda no distingue un modelo inexistente de una
+  cuota agotada, y la cuota vuelve. Si el modelo que le toca a un rol no
   responde, `devkit-run` cae al siguiente de la lista y lo escribe en
   `watch.log` (`sonda de modelo: <alias> no responde ...`).
 - La sonda corre aislada: directorio vacío, `--strict-mcp-config` con una
