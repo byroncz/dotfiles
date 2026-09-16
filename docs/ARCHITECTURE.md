@@ -365,12 +365,14 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `template-update` | Mantenimiento | Sube `template` en `.devkit/devkit.toml`, funde `AGENTS.md` con la plantilla destino y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
-Cerrar y bloquear no son skills sino scripts bash (DEVKIT-55), porque no
-toman ninguna decisión que necesite un modelo:
+Cerrar, bloquear y encadenar la siguiente hija no son skills sino scripts
+bash (DEVKIT-55, DEVKIT-56), porque no toman ninguna decisión que necesite un
+modelo:
 
 | Script | Transición | Qué hace |
 |---|---|---|
-| `task-close.sh` | Lista para merge → Hecha | Verifica merge, `Hecha` y `Cierre`, comentario con enlace a la entrada de Documentación (o lanza `task-document` si falta), marcador `devkit-closed` en el PR, cierra la Épica con la regla de DEVKIT-44 o lanza la siguiente hija con `devkit-run` |
+| `task-close.sh` | Lista para merge → Hecha | Verifica merge, `Hecha` y `Cierre`, comentario con enlace a la entrada de Documentación (o lanza `task-document` si falta), marcador `devkit-closed` en el PR, cierra la Épica con la regla de DEVKIT-44 o llama a `task-next.sh` |
+| `task-next.sh` | Siguiente hija: Lista → (task-start) | Elige la hija libre por `Depende de`, `Orden` y `Prioridad`, y la lanza con `devkit-run` si ninguna hermana está en curso. Lo llaman `watch.sh` al `OK` y `task-close.sh` al merge |
 | `task-block.sh` | Cualquiera → Bloqueada | Comenta el estado anterior y qué necesita del humano; guarda `wip` si hay cambios sin commit |
 
 `watch.sh` lanza cada skill de la tabla a través de `devkit-run.sh`, que
@@ -429,10 +431,11 @@ revisión.
 | `watch.sh`: `CAMBIOS` para el head, respuesta `devkit-fix` sin push (DEVKIT-22) | Máquina | Lanza `pr-review` de nuevo sobre el mismo head: juzga la respuesta con diff vacío. `OK` u otro `CAMBIOS`, igual que la fila anterior |
 | Comentario en un PR en `Lista para merge` | Humano | `watch.sh` lanza `task-fix` con ese texto; la card vuelve a `Revisión automática` |
 | `watch.sh`: `OK` para el head, sin marcador `devkit-doc` de ese head | Máquina | Lanza `task-document` headless: escribe o actualiza la entrada de Documentación antes del approve. Si un head nuevo recibe otro `OK`, corre de nuevo sobre la misma entrada |
-| Tres informes `CAMBIOS` sin `OK` | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y corre `task-block.sh`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
+| `watch.sh`: `OK` para el head | Máquina | Tras documentar, corre `task-next.sh`, que lanza `task-start` de la siguiente hija libre mientras el PR espera el approve (DEVKIT-56) |
+| Tres ciclos respondidos sin `OK` y otro `CAMBIOS` sobre el head vigente | Máquina | `watch.sh` publica el marcador `devkit-block` en el PR y corre `task-block.sh`. No toca el PR hasta que el humano mueva la card a `Revisión automática` y comente |
 | `watch.sh`: una skill muere por cuota agotada | Máquina | Anota la pausa en `watch.log` y relanza la misma skill al reiniciarse la ventana. La card no cambia de Estado: solo falta tiempo |
 | Approve del PR | Humano | GitHub mergea con squash: un commit por card en `main` |
-| `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Bucle aparte, cada 30 s: corre `task-close.sh`, que cierra la hija en bash, deja el marcador `devkit-closed` en el PR y arranca la siguiente. `watch.log` registra los segundos desde el merge |
+| `watch.sh`: PR mergeado sin marcador `devkit-closed` | Máquina | Bucle aparte, cada 30 s: corre `task-close.sh`, que cierra la hija en bash, deja el marcador `devkit-closed` en el PR y llama a `task-next.sh` para las hijas que esperaban este merge. `watch.log` registra los segundos desde el merge |
 | Todas las hijas en Hecha | Automático | `task-close.sh` pasa la Épica a Hecha (regla de DEVKIT-44) y `task-document` escribe la entrada consolidada |
 
 El bucle no guarda estado propio: decide con lo que hay en el PR. Cada
@@ -445,9 +448,12 @@ por su texto, no por su autor, para que valgan aunque el informe lo haya
 publicado el humano desde otra sesión. Un comentario humano es cualquier
 comentario o review sin marcador, de una cuenta distinta a la máquina y
 posterior al último marcador; los approve no cuentan porque los consume el
-auto-merge. La guardia cuenta los `CAMBIOS` posteriores al último `OK` o al
-último bloqueo, lo que sea más reciente: un rebuild no pierde nada y el humano
-reinicia el conteo con solo retomar. `/run/devkit/launched` (tmpfs) solo evita
+auto-merge. La guardia cuenta ciclos, es decir, informes `CAMBIOS` que el
+corrector ya respondió con su `devkit-fix`, posteriores al último `OK`, al
+último bloqueo o al último `devkit-fix` con `manual=1`, lo que sea más
+reciente: un rebuild no pierde nada y el humano reinicia el conteo con solo
+retomar. Bloquea con tres ciclos solo si el último informe es `CAMBIOS` sobre
+el head vigente (ver "Guarda de tres ciclos" más abajo). `/run/devkit/launched` (tmpfs) solo evita
 relanzar la misma skill para la misma entrada dentro de una vida del
 contenedor; como cada skill es idempotente, perderlo no daña la corrección de
 lo que hay en Notion.
@@ -517,6 +523,48 @@ GitHub; su limpieza de git sí lo intenta sin esperar y, si el workspace está
 ocupado, la omite. Se descartó mantener el cierre en un agente con un modelo
 más barato: seguía pagando el arranque de Claude Code y el candado, y no hay
 ninguna decisión de alcance que tomar al cerrar.
+
+**Encadenar la siguiente hija al OK, no al merge (DEVKIT-56).** Tras
+DEVKIT-55 el cierre tardaba segundos, pero la Épica seguía detenida las horas
+que tarda el approve humano: la siguiente hija solo arrancaba al merge. Ahora
+`watch.sh` llama a `task-next.sh` en cuanto el último informe del head es
+`OK`, y `task-close.sh` lo vuelve a llamar al merge. Qué hija puede arrancar
+lo decide `Depende de`, que `epic-plan` llena con una regla mecánica: si dos
+hijas tocan los mismos archivos, dependen. Una hija que depende espera a
+`Hecha`, porque partir de un `main` sin el código de la otra la llevaría a un
+conflicto de merge o a reescribir lo mismo; una que no depende arranca con la
+anterior en `Lista para merge`.
+
+No hay paralelismo ni worktrees, y no hacen falta: el papel lo cumple
+`skill.lock`. Un solo `claude -p` trabaja el workspace a la vez; quien llega
+segundo espera en fila. `task-start` parte de `main` actualizado y
+`task-fix` hace checkout de la rama de su card, así que ninguno depende de la
+rama en la que dejó el workspace el anterior. El costo aceptado: si el humano
+comenta en el PR de A mientras B implementa, el `task-fix` de A espera a que
+B termine. Para que la fila no crezca sin control, `task-next.sh` lanza una
+sola hija a la vez: no lanza si una hermana está `En progreso` o `Revisión
+automática`, ni si ya hay un `task-start` vivo para una hermana en `Lista`
+(lanzado al OK, esperando el candado, cuando llega el merge). Se descartó
+lanzar todas las hijas libres de golpe: varias ramas abiertas a la vez
+multiplican los rebases y dejan al humano con varios PRs que aprobar sin
+orden.
+
+**Guarda de tres ciclos (DEVKIT-56).** Hasta DEVKIT-55 el bucle bloqueaba en
+cuanto contaba tres `CAMBIOS` con respuesta, aunque el último fix hubiera
+empujado un head que nadie había revisado. En el PR 38 (2026-09-16 06:23) el
+humano relanzó `task-fix` a mano con Opus, ese fix subió un head nuevo y el
+bucle bloqueó la card sin revisarlo; la única salida era reanudar, que cuesta
+otro `task-fix` antes de la revisión. Ahora un ciclo es un `CAMBIOS`
+respondido, y `bloquear` exige además que el último informe sea `CAMBIOS`
+sobre el head vigente: un informe sobre un head superado no dice nada del
+código actual. Un `task-fix` que no lanzó el bucle firma su `devkit-fix` con
+`manual=1` y el conteo vuelve a cero, igual que con un `OK` o un bloqueo:
+que el humano intervenga es una decisión explícita de darle otra vuelta. La
+marca sale de `DEVKIT_LANZADOR=watch`, que `run_skill` pasa solo a lo que
+lanza el bucle; `devkit-run` la borra al lanzar en segundo plano, para que
+un `claude -p` del bucle que lanza otra skill no la herede. Se descartó leer
+la marca `anulación manual` de `watch.log`: vive en tmpfs, se pierde en un
+rebuild y la decisión del bucle sale solo de los marcadores del PR.
 
 `/run/devkit/poke` es el otro archivo del bucle en tmpfs, y tampoco guarda
 estado (DEVKIT-26): `task-submit` y `task-fix` lo tocan al terminar, `watch.sh`
@@ -855,7 +903,7 @@ Documentación, y los demás textos enlazan a ella.
 |---|---|
 | Trabajo no committeado fuera de `sandbox.local` se pierde con `down` o rebuild | Commit y push antes de cualquier rebuild; los agentes lo hacen por diseño |
 | Un `sync` prematuro borraría Dropbox | Restaurar antes de sincronizar; archivo marcador; `--backup-dir` |
-| Latencia de hasta cinco minutos entre approve y arranque de la siguiente hija | Comando manual para arrancar sin esperar el bucle |
+| Un `task-fix` de una card en `Lista para merge` espera a que la hija siguiente termine su turno de `claude -p` | Aceptado (DEVKIT-56): `skill.lock` pone en fila; la alternativa, worktrees en paralelo, multiplica conflictos |
 | Rebuild descarga Python y paquetes | Imagen preconstruida por etiqueta, fuera del mínimo viable |
 | Exfiltración por túnel DNS | Riesgo residual; ningún enfoque casero lo cierra |
 | Tokens que caducan | Fallo claro al arrancar; fechas en Bitwarden |

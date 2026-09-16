@@ -10,6 +10,28 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### La siguiente hija arranca al OK y la guarda de tres ciclos no bloquea por un head superado (DEVKIT-56)
+
+- Script nuevo `devkit/scripts/task-next.sh <Clave>`: lanza con `devkit-run
+  task-start` la siguiente hija libre de la Épica (`Lista`, `Depende de` en
+  `Hecha`, por `Orden` y `Prioridad`). `watch.sh` lo llama en cuanto el
+  último informe del head es `OK`, una vez por head, y `task-close.sh` al
+  merge. No lanza si una hermana está `En progreso` o `Revisión automática`,
+  ni si ya hay un `task-start` vivo para una hermana. `watch.log` registra
+  `task-next-<N> terminado: bash, <Clave> en Lista para merge :: ...`.
+- `epic-plan` llena `Depende de` con una regla: si dos hijas tocan los
+  mismos archivos, dependen y la segunda espera a `Hecha`; si no, arranca con
+  la anterior en `Lista para merge`.
+- La guarda de tres ciclos de `watch.sh` cuenta `CAMBIOS` respondidos y solo
+  decide `bloquear` si el último informe es `CAMBIOS` sobre el head vigente.
+  Antes bloqueaba tras el tercer fix sin revisar su head; ahora ese head se
+  revisa y bloquea si vuelve a recibir `CAMBIOS`.
+- `task-fix` firma `<!-- devkit-fix ... manual=1 -->` cuando no lo lanzó el
+  bucle (`DEVKIT_LANZADOR` distinto de `watch`), y ese marcador reinicia el
+  conteo. `pr-review` acepta la marca al buscar la respuesta del corrector.
+- Cambios requeridos: ninguno. El `watch.sh` que ya corre sigue con la regla
+  anterior hasta el próximo `devkit recreate`.
+
 ### Notion por token: `task-close` y `task-block` en bash, `task-document` nueva (DEVKIT-55)
 
 - Secreto nuevo `notion_token` en Bitwarden: conexión interna de Notion,
