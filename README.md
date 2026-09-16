@@ -32,8 +32,8 @@ ti.
 |---|---|---|
 | ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) | **Docker + Compose** | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa a internet) y `proxy` (única salida, con lista blanca). |
 | ![Debian](https://img.shields.io/badge/Debian_trixie--slim-A81D33?logo=debian&logoColor=white) | **Debian trixie-slim** | Imagen base sin lenguaje preinstalado. Usuario `dev` sin `sudo`. |
-| ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
-| ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
+| ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `.devkit/devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
+| ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `.devkit/devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
 | ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Único editor del devkit: `devkit code <proyecto>` abre la URL con token, ya en `/workspace`. Con la extensión Claude Code instalada desde Open VSX. Su terminal integrada abre ahí mismo y sostiene la sesión: si cierras la pestaña, se reconecta hasta tres horas después. Las skills solo funcionan desde `/workspace` (regla de `AGENTS.md`), así que la terminal integrada ya arranca en el lugar correcto. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt. El prompt muestra rama, estado de git y que estás dentro del contenedor. `devkit shell` abre una shell suelta, sin la persistencia del editor. |
@@ -65,7 +65,7 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
 | `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. En modo dev, también rearma el contexto de build. |
-| `devkit update <proyecto>` | Sube a la versión de template que pide `devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
+| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit ls` | Proyectos instanciados. |
@@ -126,7 +126,7 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): ese archivo es el token del editor en crudo y no se pega en un chat ni en una card (DEVKIT-51). Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
-| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (`devkit/agents/roles.toml`) y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca por su propio `Tipo`. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
+| `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, con el modelo y el esfuerzo que le tocan por rol (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. `--modelo`/`--esfuerzo` anulan el rol resuelto para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, relanza `task-block` una vez con un motivo forzado (salvo que el que preguntó ya fuera `task-block` o `task-close`). `task-close` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte en vez de trabajarla en su propia ejecución, así corre con el rol que le toca por su propio `Tipo`. `watch.sh` lo usa también (ver más abajo). `--test` corre su autoprueba. |
 | `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
@@ -407,7 +407,9 @@ observable de la card, nunca a la espera. Dos skills lo hacen explícito:
 
 ## Qué declara cada proyecto
 
-Un solo archivo en la raíz, `devkit.toml`:
+Un archivo obligatorio, versionado en `.devkit/devkit.toml`, y opcionalmente
+un segundo archivo de anulación de roles, `.devkit/roles.toml` (la raíz del
+proyecto queda libre para sus propios `AGENTS.md`, `CLAUDE.md` y `README.md`):
 
 ```toml
 [devkit]
@@ -422,8 +424,17 @@ reviewer = "usuario"   # opcional: usuario de GitHub al que pr-review pide el re
 Sin `reviewer`, `pr-review` usa el dueño del repo si es un usuario; en una
 organización hay que declararlo.
 
+Opcionalmente, `.devkit/roles.toml` anula la tabla de roles del template y
+controla qué modelo y esfuerzo recibe cada skill en este proyecto. Si existe,
+`devkit-run.sh` lo resuelve primero; sin él, todos los proyectos usan la tabla
+que viene en `devkit/agents/roles.toml` del template.
+
 En el Mac, `~/.devkit/<proyecto>/devkit.env` guarda solo lo personal: URL del
-repo, identidad git y remoto de Dropbox.
+repo, identidad git y remoto de Dropbox. **Importante**: cuando actualices a una
+versión que mueva `devkit.toml` a `.devkit/` (DEVKIT-53 en adelante),
+reinstala el comando local con `new-project.sh <proyecto> --version <X.Y.Z>`
+para que lea la nueva ruta. Sin esto, `devkit update` falla cuando el comando
+viejo intenta abrir el archivo en la ubicación antigua.
 
 ## Mantener este documento
 

@@ -7,7 +7,7 @@
 #    2. Identidad git  -> antes de clonar.
 #    3. Template       -> las skills y AGENTS.md salen de aquí.
 #    4. Workspace      -> clonar el proyecto si no existe.
-#    5. Python         -> lo que declare devkit.toml (clave `python`).
+#    5. Python         -> lo que declare .devkit/devkit.toml (clave `python`).
 #    6. Sandbox        -> restaurar desde Dropbox ANTES de sincronizar hacia
 #                         Dropbox. Un sync desde un directorio vacío borraría
 #                         el respaldo. El marcador .restored lo impide.
@@ -21,12 +21,12 @@
 #    DEVKIT_VERSION        etiqueta de imagen que trajo compose (ej. 0.1.0).
 #                          "dev" = usar el workspace como template (solo para
 #                          DEVKIT). El repo declara su propio destino en
-#                          devkit.toml (clave `template`); si difieren, se
+#                          .devkit/devkit.toml (clave `template`); si difieren, se
 #                          avisa para correr `devkit update`.
 #    GIT_USER_NAME / GIT_USER_EMAIL
 #    DEVKIT_SANDBOX_REMOTE ruta en Dropbox (ej. dropbox:devkit/sandbox.local)
 #
-#  devkit.toml (en el repo del proyecto, no en devkit.env): declara
+#  .devkit/devkit.toml (en el repo del proyecto, no en devkit.env): declara
 #  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`,
 #  `domains` y `reviewer` (usuario de GitHub que aprueba los PRs; lo lee la
 #  skill pr-review). Es la única fuente de esos valores; ver
@@ -156,26 +156,36 @@ fi
 
 # Enlaces del template hacia el workspace (solo si el template existe).
 if [ -d "$TEMPLATE_DIR/agents" ]; then
-  mkdir -p "$WS/.claude"
+  mkdir -p "$WS/.claude" "$WS/.devkit"
   ln -sfn "$TEMPLATE_DIR/agents/skills" "$WS/.claude/skills"
   ln -sfn "$TEMPLATE_DIR/agents/notion.json" "$WS/.claude/devkit-notion.json"
-  if [ ! -f "$WS/devkit.toml" ]; then
-    # Proyecto nuevo sin devkit.toml aún: se crea con placeholders. project-init
-    # corrige `project`; template-update corrige `template` en el primer bump.
-    {
-      echo "[devkit]"
-      printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
-      echo 'project  = "PROJ"'
-    } > "$WS/devkit.toml"
+  if [ ! -f "$WS/.devkit/devkit.toml" ]; then
+    # Migración: si existe el archivo viejo en raíz y el nuevo no, moverlo.
+    if [ -f "$WS/devkit.toml" ]; then
+      mv "$WS/devkit.toml" "$WS/.devkit/devkit.toml"
+      log "migración: devkit.toml movido de raíz a .devkit/"
+    else
+      # Proyecto nuevo sin .devkit/devkit.toml: se crea con placeholders.
+      # project-init corrige `project`; template-update corrige `template`.
+      {
+        echo "[devkit]"
+        printf 'template = "%s"\n' "${DEVKIT_VERSION:-dev}"
+        echo 'project  = "PROJ"'
+      } > "$WS/.devkit/devkit.toml"
+    fi
   fi
   [ -f "$WS/AGENTS.md" ] || sed "s/{{PROJECT}}/${DEVKIT_PROJECT:-proyecto}/g" "$TEMPLATE_DIR/agents/AGENTS.template.md" > "$WS/AGENTS.md"
-  [ -f "$WS/CLAUDE.md" ] || printf '@AGENTS.md\n' > "$WS/CLAUDE.md"
+  if [ -f "$WS/CLAUDE.md" ]; then
+    grep -qx '@AGENTS.md' "$WS/CLAUDE.md" || warn "$WS/CLAUDE.md existe sin la línea @AGENTS.md"
+  else
+    printf '@AGENTS.md\n' > "$WS/CLAUDE.md"
+  fi
 fi
 
 # --- 5. Python -----------------------------------------------------------------
 # devkit.toml es plano (una tabla [devkit], valores de una línea): se lee con
 # expresiones regulares, no con un parser de TOML.
-TOML="$WS/devkit.toml"
+TOML="$WS/.devkit/devkit.toml"
 if [ -f "$TOML" ]; then
   toml_python="$(sed -n 's/^python[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOML" | head -1)"
   toml_template="$(sed -n 's/^template[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$TOML" | head -1)"
@@ -186,9 +196,9 @@ if [ -f "$TOML" ]; then
     export UV_PYTHON="$toml_python"
     log "python $toml_python vía uv"
     uv python install --quiet || warn "uv python install falló (¿sin red?)"
-    [ -f "$WS/.python-version" ] && warn "sobra $WS/.python-version; manda 'python' de devkit.toml, bórralo"
+    [ -f "$WS/.python-version" ] && warn "sobra $WS/.python-version; manda 'python' de .devkit/devkit.toml, bórralo"
   elif [ -f "$WS/.python-version" ]; then
-    warn "$WS/.python-version ya no se lee; declara 'python' en devkit.toml y bórralo"
+    warn "$WS/.python-version ya no se lee; declara 'python' en .devkit/devkit.toml y bórralo"
   fi
 fi
 

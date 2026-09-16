@@ -13,9 +13,9 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
 
 ## Cómo se trabaja aquí
 
-- Código del proyecto en Notion: el valor `project` de `devkit.toml`, en la
-  raíz del repo. Cada tarea es una card con Clave `<CÓDIGO>-<n>`. Las skills
-  en `.claude/skills/` definen cada paso.
+- Código del proyecto en Notion: el valor `project` de `.devkit/devkit.toml`.
+  Cada tarea es una card con Clave `<CÓDIGO>-<n>`. Las skills en
+  `.claude/skills/` definen cada paso.
 - Una card activa por sesión. Rama `<tipo>/<CÓDIGO>-<n>-slug` desde `main`
   (`feat/`, `fix/` o `chore/` según el Tipo de la card), PR a `main` con
   auto-merge. Nunca push directo a `main`. Nunca force push.
@@ -29,13 +29,14 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
 - `sandbox.local/` es un espacio de pruebas respaldado en Dropbox y fuera de
   git. Cualquier otro directorio `*.local` no se respalda y muere en el
   rebuild: no guardes ahí nada que importe.
-- Python lo gestiona `uv`. Versión en `devkit.toml` (clave `python`).
+- Python lo gestiona `uv`. Versión en `.devkit/devkit.toml` (clave `python`).
   Dependencias con `uv add`, entorno con `uv sync`, ejecutar con `uv run`.
-- Sin `sudo`. Si falta un paquete de sistema, se declara en `devkit.toml`
-  (`apt`) y se reconstruye la imagen con `devkit rebuild`.
+- Sin `sudo`. Si falta un paquete de sistema, se declara en
+  `.devkit/devkit.toml` (`apt`) y se reconstruye la imagen con
+  `devkit rebuild`.
 - Si una conexión falla con "connection refused", el dominio no está en la
   lista blanca del proxy. Ejecuta `devkit-net-denied`, añádelo a `domains`
-  en `devkit.toml` y aplica con `devkit recreate`.
+  en `.devkit/devkit.toml` y aplica con `devkit recreate`.
 
 ## Notion y skills
 

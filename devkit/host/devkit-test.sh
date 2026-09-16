@@ -44,7 +44,7 @@ case "${1:-}" in
     fi
     case "$*" in
       "test -d /workspace/devkit") [ -d "$DEVKIT_TEST_WS/devkit" ]; exit $? ;;
-      "cat /workspace/devkit.toml") cat "$DEVKIT_TEST_WS/devkit.toml" 2>/dev/null; exit $? ;;
+      "cat /workspace/.devkit/devkit.toml") cat "$DEVKIT_TEST_WS/.devkit/devkit.toml" 2>/dev/null; exit $? ;;
       "cat /run/devkit/vscode-token") printf '%s' "${DEVKIT_TEST_TOKEN:-}"; exit 0 ;;
       *) exit 0 ;;   # test -f ready, zsh, ...
     esac ;;
@@ -71,7 +71,8 @@ escenario() {
   cp "$DEVKIT" "$TMP/ws/devkit/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/p/template/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/bin/devkit"
-  printf '[devkit]\ntemplate = "%s"\nproject  = "TEST"\n' "$1" > "$TMP/ws/devkit.toml"
+  mkdir -p "$TMP/ws/.devkit"
+  printf '[devkit]\ntemplate = "%s"\nproject  = "TEST"\n' "$1" > "$TMP/ws/.devkit/devkit.toml"
   printf 'DEVKIT_PROJECT=p\nDEVKIT_VERSION=%s\n' "$1" > "$TMP/root/p/.env"
 }
 

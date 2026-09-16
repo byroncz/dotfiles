@@ -93,7 +93,7 @@ borraría Dropbox. Un archivo marcador impide ese orden.
 
 - Base `debian:trixie-slim`. Sin lenguaje preinstalado.
 - `uv` copiado como binario desde la imagen oficial de Astral.
-- La versión de Python la declara cada proyecto en `devkit.toml` (clave
+- La versión de Python la declara cada proyecto en `.devkit/devkit.toml` (clave
   `python`), fijando la serie menor, por ejemplo `3.14`. `uv python install`
   la instala al primer arranque. Subir de serie es un commit consciente.
 - Paquetes apt adicionales por parámetro de build, vacío por defecto.
@@ -291,12 +291,20 @@ docs/ARCHITECTURE.md
 ### 5.2 Repo de un proyecto
 
 ```
-devkit.toml               # única fuente: template, project, python, apt, domains
-AGENTS.md                 # instrucciones del proyecto; importa la guía del template
-CLAUDE.md                 # una línea: @AGENTS.md
+.devkit/
+  devkit.toml              # única fuente: template, project, python, apt, domains
+  roles.toml               # opcional: anula la tabla de roles del template para este proyecto
+AGENTS.md                  # instrucciones del proyecto; Codex lo lee directo, sin importación
+CLAUDE.md                  # una línea: @AGENTS.md
 .claude/skills -> enlace al template clonado en el contenedor
-sandbox.local/            # ignorado por git, respaldado en Dropbox
+sandbox.local/             # ignorado por git, respaldado en Dropbox
 ```
+
+La raíz queda libre de archivos del entorno salvo los que las herramientas
+obligan a tener ahí: `AGENTS.md` porque Codex lo lee sin mecanismo de
+importación, `CLAUDE.md` porque Claude Code no permite reubicarlo, y
+`.claude/` porque tampoco admite moverse (DEVKIT-53). Todo lo demás que el
+devkit necesita vive en `.devkit/`, versionado junto con el resto del repo.
 
 `devkit.toml` es plano: una sola tabla `[devkit]`, valores string o lista de
 strings en una línea. Se lee con expresiones regulares, no con un parser de
@@ -325,8 +333,8 @@ un usuario y no una organización. En `~/.devkit/<proyecto>/`:
 - `.env`: variables de interpolación de Compose (`DEVKIT_PROJECT`,
   `DEVKIT_VERSION`, y `DEVKIT_EXTRA_APT`/`DEVKIT_ALLOW_DOMAINS` copiados de
   `devkit.toml`). Es una copia derivada: `devkit.sh` la reescribe leyendo
-  `devkit.toml` del contenedor antes de `recreate`, `rebuild` o `update`; no
-  se edita a mano.
+  `.devkit/devkit.toml` del contenedor antes de `recreate`, `rebuild` o
+  `update`; no se edita a mano.
 
 Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el
 template a Python). Antes de `devkit.toml`, `DEVKIT_VERSION` y
@@ -348,7 +356,7 @@ datos que un proyecto declara una sola vez (DEVKIT-6).
 | `task-close` | Lista para merge → Hecha | Verifica merge, fecha de cierre, entrada de Documentación, marcador `devkit-closed` en el PR, arranca la siguiente hija |
 | `task-block` | Cualquiera → Bloqueada | Comenta qué necesita del humano |
 | `project-status` | En cualquier momento | Reconcilia cards con PRs mergeados, reporta cards huérfanas o inactivas |
-| `template-update` | Mantenimiento | Sube `template` en `devkit.toml`, funde `AGENTS.md` con la plantilla destino y actualiza Notion |
+| `template-update` | Mantenimiento | Sube `template` en `.devkit/devkit.toml`, funde `AGENTS.md` con la plantilla destino y actualiza Notion |
 | `template-propagate` | Desde `DEVKIT` | Abre un PR de actualización en cada proyecto registrado |
 
 ## 6. Flujo de trabajo
@@ -584,7 +592,7 @@ vencimiento en la nota de cada secreto.
 
 ## 9. Versionado y propagación
 
-- El proyecto declara la versión que quiere en `devkit.toml` (clave
+- El proyecto declara la versión que quiere en `.devkit/devkit.toml` (clave
   `template`), dentro del repo. `.env` en el Mac guarda la versión de imagen
   con la que Compose arrancó hoy (`DEVKIT_VERSION`): son dos cosas distintas
   a propósito, porque `.env` tiene que existir antes de que el repo se
@@ -593,20 +601,20 @@ vencimiento en la nota de cada secreto.
   de sí mismo y crea enlaces simbólicos hacia el workspace. Se reconstruye en
   cada arranque y nunca se edita.
 - El bootstrap descarga el tarball de esa etiqueta para construir la imagen.
-- Al arrancar, `entrypoint.sh` compara `template` de `devkit.toml` contra
+- Al arrancar, `entrypoint.sh` compara `template` de `.devkit/devkit.toml` contra
   `DEVKIT_VERSION` de `.env` y avisa si difieren: el repo pide una versión
   que la imagen todavía no tiene.
 - `devkit update <proyecto>`, desde el Mac, lee `template` del contenedor
-  (`docker exec ... cat /workspace/devkit.toml`), descarga esa versión,
+  (`docker exec ... cat /workspace/.devkit/devkit.toml`), descarga esa versión,
   actualiza `.env` y reconstruye. Así `.env` se pone al día con lo que el
   repo ya declaraba.
 - `template-propagate`, desde `DEVKIT`, abre un PR en cada proyecto
-  registrado en Notion que cambia `template` en su `devkit.toml`. El humano
-  aprueba, el auto-merge hace el resto; `devkit update` en cada proyecto
-  aplica el cambio en el Mac.
+  registrado en Notion que cambia `template` en su `.devkit/devkit.toml`. El
+  humano aprueba, el auto-merge hace el resto; `devkit update` en cada
+  proyecto aplica el cambio en el Mac.
 - Para `DEVKIT`, el clon de `dotfiles` es su workspace: ahí los cambios se
   prueban en vivo antes de etiquetar, con `template = "dev"` en su propio
-  `devkit.toml`.
+  `.devkit/devkit.toml`.
 - `template-update` y `template-propagate` también funden `AGENTS.md` con la
   plantilla destino, con `devkit/scripts/agents-sync.sh` (DEVKIT-28).
   `AGENTS.template.md` declara
@@ -806,6 +814,7 @@ Lo que la práctica cambió respecto al diseño, con su causa:
 | `settings.json` niega todo `gh pr merge` | `task-submit` necesita `gh pr merge --auto` para activar el auto-merge | Se permite solo `--auto`; se niegan `--admin` y los merges inmediatos. La barrera real es el ruleset de `main`: GitHub no mergea sin approve humano |
 | `settings.json` niega `gh pr review` entero | `pr-review` necesita `gh pr review --comment` para publicar su informe (DEVKIT-12) | Se permite `--comment` y se niega solo `--approve`/`-a`. Las reglas de `settings.json` son prefijos: no ven `gh pr review <N> --approve` ni una review publicada con `gh api`, así que solas no pueden impedir aprobar. El hook `pr-guard.sh` (DEVKIT-20, 8.2) reduce ese hueco inspeccionando el comando completo, no solo el prefijo, pero sigue siendo texto: no ve una variable de shell, un alias de `gh` ni una API que no conozca. La compuerta real sigue siendo GitHub: la cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige una aprobación humana; el hook solo achica la ventana de un PR abierto por el humano, que la cuenta máquina sí podría aprobar si nadie se lo impidiera |
 | `DEVKIT_VERSION`, `.python-version` y `{{CODE}}` en `AGENTS.md` como fuentes sueltas | Tres archivos/placeholders para configuración que un proyecto declara una sola vez; tres skills asumían un `DEVKIT_VERSION` que ni siquiera existía como archivo (DEVKIT-2) | `devkit.toml` único en la raíz del repo, plano y leído con expresiones regulares. Regla de reparto: al repo lo que hace falta para reconstruir el proyecto igual (`template`, `project`, `python`, `apt`, `domains`); al Mac solo lo personal e irreproducible (`devkit.env`: repo, identidad git, remoto de Dropbox). Se descartó un archivo por parámetro (desorden) y `pyproject.toml` (ataría el template a Python). `new-project.sh` no puede crear `devkit.toml` porque nunca toca el repo del proyecto: lo crea `entrypoint.sh` con placeholders en el primer arranque (DEVKIT-6) |
+| `devkit.toml` en la raíz del repo del proyecto | Cuando el proyecto tiene sus propios `CLAUDE.md`, `AGENTS.md` y `README.md`, se mezclan con los del entorno y el mantenimiento se complica | `devkit.toml` se muda a `.devkit/devkit.toml`, versionado. `AGENTS.md`, `CLAUDE.md` y `.claude/` se quedan en la raíz porque las herramientas (Codex, Claude Code) obligan a tenerlos ahí; todo lo demás del devkit vive en `.devkit/`. `template-update` migra el archivo viejo una sola vez (DEVKIT-53) |
 
 ## 13. Referencias
 
