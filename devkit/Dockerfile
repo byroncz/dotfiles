@@ -123,9 +123,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
 # (redirección de descarga) van en `domains` de .devkit/devkit.toml.
 # --retry reintenta un 5xx de Open VSX (un 404 del paquete de plataforma no
-# es un error transitorio, así que cae al universal sin reintentar);
-# --retry-all-errors cubre además un corte de conexión a mitad de descarga
-# (DEVKIT-73: un 503 intermitente de Open VSX tumbó un build a medias).
+# es un error transitorio, así que cae al universal sin reintentar).
+# --retry-all-errors va solo en el paquete universal: ahí un corte de
+# conexión a mitad de descarga sí debe reintentarse porque no hay más
+# alternativas (DEVKIT-73: un 503 intermitente de Open VSX tumbó un build a
+# medias); en el paquete de plataforma dejaría al 404 esperado
+# reintentando en vano antes de caer al universal.
 # ARG EXTENSIONS se declara aquí, no arriba con los demás: Docker mete todo
 # ARG en el entorno de cada RUN posterior a su declaración, así que si
 # viviera arriba, cada versión nueva de una extensión invalidaría la caché
@@ -140,7 +143,7 @@ RUN set -eux; \
     for entry in ${EXTENSIONS}; do \
       id="${entry%%=*}"; version="${entry#*=}"; \
       ns="${id%%.*}"; ext="${id#*.}"; \
-      curl --retry 5 --retry-delay 3 --retry-all-errors -fsSLo /tmp/ext.vsix \
+      curl --retry 5 --retry-delay 3 -fsSLo /tmp/ext.vsix \
         "https://open-vsx.org/api/${ns}/${ext}/${ovx_platform}/${version}/file/${ns}.${ext}-${version}@${ovx_platform}.vsix" \
       || curl --retry 5 --retry-delay 3 --retry-all-errors -fsSLo /tmp/ext.vsix \
         "https://open-vsx.org/api/${ns}/${ext}/${version}/file/${ns}.${ext}-${version}.vsix"; \

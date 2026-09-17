@@ -916,11 +916,15 @@ la reemplaza como fuente: una línea por extensión, con versión fija o
 - El `Dockerfile` prueba primero el paquete de la plataforma del build
   (`linux-x64` o `linux-arm64`, que Open VSX no publica para todas las
   extensiones) y si no existe instala el universal, en un solo paso para
-  todas las extensiones del argumento; ambas descargas usan `curl --retry 5
-  --retry-delay 3 --retry-all-errors -f`, así que un 404 del paquete de
-  plataforma (esperado, no lo publican todas) cae al universal sin
-  reintentar, y un 5xx sí reintenta antes de rendirse (DEVKIT-73: un 503
-  intermitente de Open VSX tumbó un build a medias).
+  todas las extensiones del argumento. Solo el `curl` del paquete universal
+  suma `--retry-all-errors` a `--retry 5 --retry-delay 3 -f`: ahí un corte de
+  conexión a mitad de descarga debe reintentarse porque no hay más
+  alternativas (DEVKIT-73: un 503 intermitente de Open VSX tumbó un build a
+  medias). El `curl` del paquete de plataforma se queda solo con `--retry 5
+  --retry-delay 3 -f`, así que un 404 (esperado, no lo publican todas) cae al
+  universal sin reintentar y un 5xx sí reintenta antes de rendirse; con
+  `--retry-all-errors` ahí también, el 404 esperado se habría reintentado en
+  vano.
 - La lista de extensiones y versiones del README y de la entrada "Stack y
   comandos del devkit" en Notion sale de `extensions.toml` con
   `devkit/scripts/gen-stack.sh`, que también verifica el README (`--check`):
