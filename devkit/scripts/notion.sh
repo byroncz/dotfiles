@@ -300,7 +300,11 @@ cmd_bloqueos() {  # cmd_bloqueos <código>
 # del proyecto y sus Tareas que no están Hecha- porque `estado_filas` no
 # sabe de antemano cuáles Épicas están activas, y acotar el Estado evita
 # traer las cards ya cerradas en cada refresco. El cruce Tarea → Padre →
-# Épica se hace en jq, mismo patrón que `bloqueos` con "Depende de".
+# Épica se hace en jq, mismo patrón que `bloqueos` con "Depende de". Cada
+# Épica En progreso también sale como entrada de sí misma (epica ==
+# epica_titulo de su propia Clave): un lanzamiento sobre la Épica (por
+# ejemplo `epic-plan`) se agrupa bajo su propio encabezado, no en
+# "(sin Épica)".
 cmd_epicas() {  # cmd_epicas <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
@@ -319,8 +323,9 @@ cmd_epicas() {  # cmd_epicas <código>
           padre: ((.properties.Padre.relation // [])[0].id)})) as $todas
     | (reduce ($todas[] | select(.nivel == "Épica" and .estado == "En progreso")) as $e
         ({}; . + {($e.id): {clave: clave($e.numero), titulo: $e.titulo}})) as $epicas
-    | [ $todas[] | select(.nivel == "Tarea" and .padre != null and ($epicas[.padre] // null) != null)
+    | ([ $todas[] | select(.nivel == "Tarea" and .padre != null and ($epicas[.padre] // null) != null)
         | {clave: clave(.numero), epica: $epicas[.padre].clave, epica_titulo: $epicas[.padre].titulo} ]
+      + [ $epicas[] | {clave: .clave, epica: .clave, epica_titulo: .titulo} ])
   ' <<<"$filas"
 }
 
@@ -518,6 +523,8 @@ $(tarea card-99 99 "Lista para merge" "")],\"has_more\":false}"
   # epicas: DEVKIT-57 y DEVKIT-58 son hijas de la Épica DEVKIT-50, En
   # progreso: salen con su Clave y título. DEVKIT-59 es hija de DEVKIT-51,
   # que no está En progreso: no sale. DEVKIT-60 no tiene Padre: no sale.
+  # DEVKIT-50 también sale como entrada de sí misma (H4 de pr-review sobre
+  # el PR #57): un lanzamiento sobre la Épica se agrupa bajo su encabezado.
   epica() {  # epica <id> <numero> <estado>
     jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" \
       '{id: $id, properties: {ID: {unique_id: {number: $n}}, Nivel: {select: {name: "Épica"}},
@@ -533,8 +540,8 @@ $(tarea card-99 99 "Lista para merge" "")],\"has_more\":false}"
   resp POST__databases_dbtareas_query "{\"results\":[$(epica epica-50 50 "En progreso"),\
 $(epica epica-51 51 Lista),$(hija card-57 57 epica-50),$(hija card-58 58 epica-50),\
 $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
-  check "epicas: Tareas de una Épica En progreso, con Clave y título" \
-    '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Épica 50"}]' \
+  check "epicas: Tareas de una Épica En progreso, con Clave y título, y la Épica misma" \
+    '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-50","epica":"DEVKIT-50","epica_titulo":"Épica 50"}]' \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas DEVKIT)"
 
   # El uso (sed -n '9,30p') debe llegar hasta la línea de --test: si el
