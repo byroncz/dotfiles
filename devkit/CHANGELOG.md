@@ -14,6 +14,28 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### ps -ww en todo lanzamiento, lanzamiento duplicado rechazado y confirmar_arranque elige al descendiente correcto (DEVKIT-79)
+
+- Todo `ps` que lee argumentos en `devkit-run.sh` y `watch.sh` pide ancho
+  ilimitado con `-ww`: sin ella, una terminal integrada (la del editor)
+  exporta `COLUMNS`/`LINES` y `ps` corta cada línea a ese ancho aunque la
+  salida vaya a una tubería, dejando la ruta del log fuera de la línea.
+- `devkit-run <skill> <Clave>` no lanza si ya hay un worker o un `claude -p`
+  de ese mismo prompt vivo o esperando el candado: imprime
+  `ya hay un lanzamiento de "<prompt>" en curso (pid <n>); síguelo con
+  devkit-run --estado` y sale con 68. `devkit-run --forzar <skill> <Clave>`
+  salta la comprobación.
+- `confirmar_arranque` identifica el `claude -p` del worker recién lanzado
+  por descendencia (hijo, nieto, ...) de su PID, no por el primer proceso
+  del sistema cuyo prompt coincida: con dos lanzamientos vivos del mismo
+  prompt, ese primero podía ser el de un lanzamiento anterior.
+- Motivo: el 2026-09-17, tres lanzamientos distintos mostraron `--estado`
+  "no arrancó" con el agente en realidad vivo. La causa era `ps` recortando
+  la línea a `COLUMNS` (60-100 en la terminal integrada del editor) antes de
+  llegar a la ruta del log; el humano relanzó la card sin saber que la
+  anterior seguía corriendo, y la reanudación quedó esperando el candado
+  detrás de la primera.
+
 ### task-start no confunde su propio claude -p con otro agente, y la barrera de pregunta abierta detecta preguntas con opciones (DEVKIT-77)
 
 - `devkit-run --otros-agentes` imprime, antes de la lista de ajenos, una
