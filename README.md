@@ -496,7 +496,34 @@ devkit-run --estado            # o --estado --seguir, que refresca cada 3 s
 # pr-review      DEVKIT-56   bucle       1h00m   terminó     -
 # task-start     DEVKIT-59   epic-plan   30m     bloqueada   Qué intenté: X. Qué necesito: ...
 # task-start     DEVKIT-60   humano      20m     no arrancó  sin proceso, log ni resumen tras 20m
+#
+# Consumo (cuota oficial, leída 16:12:24)
+#   sesión: 30% usada, reinicia Sep 17, 5:10pm (UTC)
+#   semana: 13% usada, reinicia Sep 22, 11pm (UTC)
 ```
+
+El bloque `Consumo` (DEVKIT-62) es el porcentaje de cuota del plan en vivo,
+sesión y semana, con la hora de la lectura: la misma cifra que `/usage` en una
+sesión interactiva, no una estimación desde `watch.log`. La compuerta de la
+card probó, con la CLI instalada, que `claude -p "/usage" --output-format
+json` sí expone ese texto como comando local (no gasta turnos ni cuota:
+`duration_api_ms=0`); `--estado` lo extrae del campo `result` con una
+expresión regular, porque no hay un campo numérico estructurado. Corre
+aislado (directorio vacío, sin MCP) con `--no-session-persistence` (no deja
+sesión propia en `~/.claude/projects/`), igual que la sonda de modelos, con
+`DEVKIT_CUOTA_TIMEOUT` (20 s) de margen; si la CLI no responde o cambia ese
+texto, el bloque dice `Consumo: no se pudo leer la cuota oficial con \`claude
+-p "/usage"\` ahora` en vez de romper el resto de `--estado`.
+
+Esa lectura tarda ~1.3 s, así que `--estado` nunca la espera en línea: lee la
+última de `$RUN_DIR/cuota.cache` y, si pasó `DEVKIT_CUOTA_TTL` (60 s) o no hay
+ninguna todavía, la refresca en segundo plano (sin bloquear) y sigue
+respondiendo bajo un segundo. La primera vez, sin caché, dice `Consumo:
+todavía no hay una lectura de la cuota oficial, refrescando en segundo
+plano`. El refresco cierra su entrada y salida (`</dev/null >/dev/null 2>&1`)
+para no heredar las del llamador: sin eso, leer `--estado` por un pipe o
+`$(...)` quedaba atado a que el refresco terminara, contradiciendo el propio
+"nunca la espera" (H3 de pr-review en DEVKIT-62).
 
 `--estado` parte de las líneas `lanzando` de `watch.log`, no de los procesos:
 el 2026-09-16, `--agentes-vivos` respondió "sin agentes vivos" dos segundos

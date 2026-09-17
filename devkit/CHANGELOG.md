@@ -14,6 +14,32 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### `devkit-run --estado` muestra la cuota del plan en vivo (DEVKIT-62)
+
+- Compuerta antes de programar: con la CLI instalada (`claude --version`
+  2.1.274), `claude -p "/usage" --output-format json` sí trae, en el campo
+  `result`, el mismo texto que `/usage` en una sesión interactiva —
+  porcentaje de sesión y de semana—, como comando local que no gasta turnos
+  ni cuota (`duration_api_ms=0`). No hay campo numérico estructurado.
+- `devkit-run --estado` (y `--estado --seguir`) agrega un bloque `Consumo`
+  con el porcentaje de sesión y de semana, la hora en que reinician y la hora
+  de la lectura: cifra oficial, no una estimación desde `watch.log`. Se lee
+  aislado (directorio vacío, sin MCP), con `--no-session-persistence` (no
+  deja sesión propia en `~/.claude/projects/`) y con timeout
+  (`DEVKIT_CUOTA_TIMEOUT`, 20 s); si la CLI no responde o cambia ese texto,
+  el bloque lo dice en vez de romper el resto de `--estado`.
+- La lectura tarda ~1.3 s, y `--estado` nunca la espera en línea: la cachea en
+  `$RUN_DIR/cuota.cache` con su hora y la refresca en segundo plano cuando
+  vence `DEVKIT_CUOTA_TTL` (60 s) o no hay ninguna todavía (revisión de
+  pr-review: la primera versión sí esperaba, y `--estado` pasaba de 0.2 s a
+  1.4–2.2 s con un `watch.log` de mil líneas).
+- El refresco en segundo plano cierra su entrada y salida
+  (`</dev/null >/dev/null 2>&1`): la primera versión las heredaba del
+  llamador, así que leer `--estado` por un pipe o `$(...)` seguía atado a la
+  lectura, hasta `DEVKIT_CUOTA_TIMEOUT` (revisión de pr-review, segundo
+  ciclo).
+- Cambios requeridos: ninguno, `devkit recreate` alcanza.
+
 ### `resolve_extensions` comprueba el motor del editor antes de construir (DEVKIT-73)
 
 - Cada extensión de `devkit/vscode/extensions.toml` (fija o `"latest"`) se
