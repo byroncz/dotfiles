@@ -27,6 +27,15 @@ export DEVKIT_RUN_DIR="$TMP/run" DEVKIT_WS="$TMP"
 printf '#!/usr/bin/env bash\nexit 1\n' >"$TMP/notion-caido"
 chmod +x "$TMP/notion-caido"
 export DEVKIT_NOTION_BIN="$TMP/notion-caido"
+# devkit-run.sh prueba con `claude mcp list` que Notion está conectada antes
+# de lanzar, y arranca el `claude -p` con el entorno reducido a una lista
+# blanca (DEVKIT-65). Los dobles de `claude` de este archivo no entienden
+# `mcp list` y varios simulan su propio estado con variables sueltas (`FIX_DIR`,
+# el contador de llamadas de la cuota agotada, ...) fuera de esa lista blanca.
+# Las dos comprobaciones son de devkit-run.sh y ya tienen su propia autoprueba;
+# aquí se apagan para no acoplar los dos archivos.
+export DEVKIT_NOTION_CHECK=0
+export DEVKIT_ENV_LIMPIO=0
 
 # Constructores de JSON. Las fechas son etiquetas T01..T10: solo importa el orden
 # y se comparan como texto, por eso llevan dos dígitos.
