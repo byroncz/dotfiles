@@ -22,7 +22,10 @@
 #   devkit-run --estado [--seguir]
 #     Tabla de los últimos lanzamientos: skill, card, quién lanzó, hace
 #     cuánto y estado (en curso, terminó, error, bloqueada, no arrancó).
-#     `--seguir` la refresca cada 3 s hasta Ctrl-C.
+#     Debajo, un bloque `Consumo` con el porcentaje de cuota del plan en vivo
+#     (sesión y semana), leído con `claude -p "/usage"` (DEVKIT-62): es la
+#     misma cifra oficial de una sesión interactiva, no una estimación desde
+#     watch.log. `--seguir` refresca todo cada 3 s hasta Ctrl-C.
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
@@ -134,6 +137,10 @@ ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
+# Timeout de `leer_cuota` (DEVKIT-62): `claude -p "/usage"` es un comando
+# local que no llama al modelo (mide bajo 1.5 s aislado), pero un margen
+# generoso evita que --estado se cuelgue si la CLI no responde.
+CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -545,6 +552,48 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   printf 'modelo=%s esfuerzo=%s ronda=%s %s%s' "$modelo" "$esfuerzo" "$ronda" "$linea" "$excedido"
 }
 
+# Cuota del plan, leída en vivo con `claude -p "/usage"` (DEVKIT-62). La
+# compuerta de la card probó que sí existe una fuente oficial legible por
+# script: la CLI responde con el mismo texto que `/usage` en una sesión
+# interactiva, como comando local que no gasta turnos ni cuota
+# (`duration_api_ms=0`, `total_cost_usd=0`). No hay campo numérico
+# estructurado para el porcentaje, así que se extrae del texto con una
+# expresión regular sobre sus dos líneas fijas. Aislada igual que
+# `modelo_disponible` (directorio vacío, sin MCP): --estado no necesita
+# heredar el contexto de /workspace para esta lectura.
+leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"
+  local vacio salida texto linea_sesion linea_semana sesion_pct sesion_reset semana_pct semana_reset
+  vacio=$(mktemp -d)
+  salida=$(cd "$vacio" && timeout "$CUOTA_TIMEOUT" "$CLAUDE_BIN" -p "/usage" --output-format json \
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' </dev/null 2>/dev/null)
+  rm -rf "$vacio"
+  texto=$(printf '%s' "$salida" | jq -r '.result // empty' 2>/dev/null)
+  [ -n "$texto" ] || return 1
+  linea_sesion=$(printf '%s\n' "$texto" | grep -E '^Current session: [0-9]+% used')
+  linea_semana=$(printf '%s\n' "$texto" | grep -E '^Current week \(all models\): [0-9]+% used')
+  [ -n "$linea_sesion" ] && [ -n "$linea_semana" ] || return 1
+  sesion_pct=$(printf '%s' "$linea_sesion" | grep -oE '[0-9]+' | head -1)
+  sesion_reset=$(printf '%s' "$linea_sesion" | sed -E 's/^Current session: [0-9]+% used · resets //')
+  semana_pct=$(printf '%s' "$linea_semana" | grep -oE '[0-9]+' | head -1)
+  semana_reset=$(printf '%s' "$linea_semana" | sed -E 's/^Current week \(all models\): [0-9]+% used · resets //')
+  printf '%s\t%s\t%s\t%s' "$sesion_pct" "$sesion_reset" "$semana_pct" "$semana_reset"
+}
+
+# Bloque `Consumo` de `--estado`: porcentaje de cuota en vivo, con la hora de
+# la lectura (DEVKIT-62). Si `leer_cuota` no puede leerlo (CLI vieja, sin red,
+# fallo transitorio), lo dice en vez de romper el resto de `--estado`.
+mostrar_consumo() {
+  local cuota sesion_pct sesion_reset semana_pct semana_reset
+  if ! cuota=$(leer_cuota); then
+    printf '\nConsumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora\n'
+    return 0
+  fi
+  IFS=$'\t' read -r sesion_pct sesion_reset semana_pct semana_reset <<<"$cuota"
+  printf '\nConsumo (cuota oficial, leída %s)\n' "$(date +%T)"
+  printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
+  printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
+}
+
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
 # watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
 # proceso con el bucle, así que no puede reusar su función.
@@ -897,14 +946,15 @@ mostrar_estado() {
   filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
-    return 0
+  else
+    printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
+      "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+    while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+      printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
+        "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
+    done <<<"$filas"
   fi
-  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
-  while IFS=$'\t' read -r skill clave origen edad estado detalle; do
-    printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-      "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
-  done <<<"$filas"
+  mostrar_consumo
 }
 
 seguir_estado() {
@@ -1865,8 +1915,54 @@ FIN
   check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
+  # El doble genérico no trae "Current session"/"Current week": mostrar_estado
+  # no se cae por eso, solo agrega el bloque Consumo con el aviso de falta de
+  # fuente. `head -1` porque, desde DEVKIT-62, mostrar_estado siempre agrega
+  # ese bloque al final, con o sin lanzamientos.
   check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
-    "$(WATCH_LOG="$est/vacio.log" mostrar_estado)"
+    "$(CLAUDE_BIN="$doble" WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
+
+  # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
+  # La compuerta de la card probó que el campo `result` de
+  # `claude -p "/usage" --output-format json` trae el mismo texto que la
+  # sesión interactiva. Un doble que lo imita, para probar la extracción sin
+  # gastar cuota ni depender de una sesión real.
+  local doble_cuota resultado_cuota
+  doble_cuota="$tmp/claude-usage"
+  cat >"$doble_cuota" <<'FIN'
+#!/usr/bin/env bash
+cat <<'JSON'
+{"result":"You are currently using your subscription to power your Claude Code usage\n\nCurrent session: 42% used · resets Sep 17, 5:10pm (UTC)\nCurrent week (all models): 7% used · resets Sep 22, 11pm (UTC)\n","total_cost_usd":0}
+JSON
+FIN
+  chmod +x "$doble_cuota"
+  resultado_cuota=$(CLAUDE_BIN="$doble_cuota" leer_cuota)
+  check "leer_cuota extrae el porcentaje de sesión" "42" "$(printf '%s' "$resultado_cuota" | cut -f1)"
+  check "leer_cuota extrae cuándo reinicia la sesión" "Sep 17, 5:10pm (UTC)" \
+    "$(printf '%s' "$resultado_cuota" | cut -f2)"
+  check "leer_cuota extrae el porcentaje de semana" "7" "$(printf '%s' "$resultado_cuota" | cut -f3)"
+  check "leer_cuota extrae cuándo reinicia la semana" "Sep 22, 11pm (UTC)" \
+    "$(printf '%s' "$resultado_cuota" | cut -f4)"
+  check "el bloque Consumo trae el encabezado con la cuota oficial" \
+    "Consumo (cuota oficial, leída" \
+    "$(CLAUDE_BIN="$doble_cuota" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | grep -oE '^Consumo \(cuota oficial, leída')"
+  check "el bloque Consumo trae sesión y semana" \
+    "sesión: 42% usada, reinicia Sep 17, 5:10pm (UTC)|semana: 7% usada, reinicia Sep 22, 11pm (UTC)" \
+    "$(CLAUDE_BIN="$doble_cuota" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | sed -n 's/^  //p' | paste -sd'|')"
+  check "sin fuente de cuota, --estado lo dice sin romper el resto" \
+    'Consumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora' \
+    "$(CLAUDE_BIN="$doble" WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
+  # Un `claude -p "/usage"` que no responde a tiempo no cuelga --estado: el
+  # `timeout` interno de leer_cuota corta y cae al mismo aviso de arriba.
+  local doble_cuota_lento
+  doble_cuota_lento="$tmp/claude-usage-lento"
+  printf '#!/usr/bin/env bash\nsleep 5\n' >"$doble_cuota_lento"
+  chmod +x "$doble_cuota_lento"
+  check "un /usage que no responde no cuelga --estado" \
+    'Consumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora' \
+    "$(CLAUDE_BIN="$doble_cuota_lento" CUOTA_TIMEOUT=1 WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
 
   # De punta a punta: un lanzamiento real deja su línea lanzando y --estado
   # lo muestra terminado. El origen esperado se calcula aquí y no se fija en
@@ -1882,7 +1978,8 @@ FIN
     "lanzando (origen=${origen_esperado:-?}): \"/task-submit DEVKIT-7\"" \
     "$(grep -oE 'lanzando \(origen=[^)]*\): "/task-submit DEVKIT-7"' "$tmp/run/watch.log" | head -1)"
   check "lanzamiento real: --estado lo muestra terminado" "terminó" \
-    "$(DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+        bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
 
   return $fail
 }
