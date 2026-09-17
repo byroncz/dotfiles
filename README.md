@@ -348,10 +348,14 @@ pidiendo autorizar el conector o bloqueada sin poder leer ni escribir en la
 card. `run_claude` (la función interna que arma cada `claude -p`) ya no pasa
 el entorno tal cual: lo arma de cero con `env -i` y una lista blanca
 (`HOME`, `PATH`, `LANG`, `LC_ALL`, `TZ`, `CLAUDE_CONFIG_DIR`,
-`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN` y las variables de proxy), en vez de
-una lista negra de marcas de sesión anidada: una versión nueva de la CLI
-puede sumar una marca que hoy no existe, y una lista negra la dejaría pasar
-igual. Con ese entorno ya armado, antes de lanzar de verdad prueba con
+`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, las variables de proxy,
+`DISABLE_AUTOUPDATER` y `MCP_OAUTH_CALLBACK_PORT`, las dos últimas fijas en
+el `Dockerfile` y en `compose.yaml` respectivamente), en vez de una lista
+negra de marcas de sesión anidada: una versión nueva de la CLI puede sumar
+una marca que hoy no existe, y una lista negra la dejaría pasar igual.
+`TERM` y los `UV_PYTHON_INSTALL_DIR`/`UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` del
+`Dockerfile` quedan fuera a propósito: `claude -p` no es interactivo, y los
+tres `UV_*` ya apuntan a rutas bajo `$HOME`, que sí viaja en la lista. Con ese entorno ya armado, antes de lanzar de verdad prueba con
 `claude mcp list` que Notion está conectada; si no, no lanza, lo dice por
 `stderr` y deja `ALARMA: sin Notion conectado` en `watch.log` en vez de
 gastar turnos en una skill que no va a poder leer la card. Si el `result`
