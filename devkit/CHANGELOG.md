@@ -22,9 +22,9 @@ versión que usa un proyecto y la destino.
   salida vaya a una tubería, dejando la ruta del log fuera de la línea.
 - `devkit-run <skill> <Clave>` no lanza si ya hay un worker o un `claude -p`
   de ese mismo prompt vivo o esperando el candado: imprime
-  `ya hay un lanzamiento de "<prompt>" en curso (pid <n>); síguelo con
-  devkit-run --estado` y sale con 68. `devkit-run --forzar <skill> <Clave>`
-  salta la comprobación.
+  `ya hay un lanzamiento de "<prompt>" en curso (pid <n>, log <ruta>);
+  síguelo con devkit-run --estado` y sale con 68. `devkit-run --forzar
+  <skill> <Clave>` salta la comprobación.
 - `confirmar_arranque` identifica el `claude -p` del worker recién lanzado
   por descendencia (hijo, nieto, ...) de su PID, no por el primer proceso
   del sistema cuyo prompt coincida: con dos lanzamientos vivos del mismo

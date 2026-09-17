@@ -2627,16 +2627,17 @@ FIN
   printf '#!/usr/bin/env bash\necho "9001 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 %s/task-start-9.log opus high 40"\n' \
     "$tmp/run" >"$pslist_dup"
   chmod +x "$pslist_dup"
-  : >"$tmp/run/watch.log"
+  printf '%s task-start-9 lanzando (origen=humano): "/task-start DEVKIT-9" log=%s/task-start-9.log\n' \
+    "$(date +%FT%T%:z)" "$tmp/run" >"$tmp/run/watch.log"
   dup_out=$(DEVKIT_PS_BIN="$pslist_dup" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-start DEVKIT-9 2>&1); dup_rc=$?
   check "lanzamiento duplicado: sale con error" 68 "$dup_rc"
-  check "lanzamiento duplicado: avisa con el pid del worker" 1 \
-    "$(printf '%s' "$dup_out" | grep -c 'ya hay un lanzamiento de "/task-start DEVKIT-9" en curso (pid 9001')"
-  check "lanzamiento duplicado: no escribe la línea lanzando" 0 \
+  check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo" 1 \
+    "$(printf '%s' "$dup_out" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9001, log $tmp/run/task-start-9.log)")"
+  check "lanzamiento duplicado: no agrega una segunda línea lanzando" 1 \
     "$(grep -c 'lanzando' "$tmp/run/watch.log" 2>/dev/null)"
-  check "lanzamiento duplicado: --forzar sí lanza" 1 \
+  check "lanzamiento duplicado: --forzar sí lanza (agrega su propia línea lanzando)" 2 \
     "$(DEVKIT_PS_BIN="$pslist_dup" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
         bash "$HERE/devkit-run.sh" --forzar task-start DEVKIT-9 >/dev/null 2>&1
@@ -2865,7 +2866,9 @@ prompt="/$skill $clave"
 # esta comprobación, por ejemplo tras matar a mano el proceso viejo.
 if [ -z "$forzar" ]; then
   if dup_pid=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | lanzamiento_duplicado "$prompt"); then
-    echo "devkit-run: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid); síguelo con \`devkit-run --estado\` (o usa --forzar para lanzarlo igual)." >&2
+    dup_log=$(grep -F "): \"$(prompt_en_linea "$prompt")\" log=" "$WATCH_LOG" 2>/dev/null \
+      | tail -1 | grep -oE 'log=.*$' | sed 's/^log=//')
+    echo "devkit-run: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid, log ${dup_log:-desconocido}); síguelo con \`devkit-run --estado\` (o usa --forzar para lanzarlo igual)." >&2
     exit 68
   fi
 fi
