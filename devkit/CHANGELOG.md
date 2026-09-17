@@ -24,7 +24,7 @@ versión que usa un proyecto y la destino.
   <Título>` por cada Épica `En progreso` representada entre las filas (en el
   orden en que aparecen), y un bloque final `(sin Épica)` para las filas sin
   Padre activo o sin Clave resuelta. Con una sola Épica, o ninguna, la tabla
-  sigue plana. Caché de 30 s (`EPICAS_CACHE`/`EPICAS_TTL`), refrescada en
+  sigue plana. Caché de 30 s (`DEVKIT_EPICAS_CACHE`/`DEVKIT_EPICAS_TTL`), refrescada en
   segundo plano igual que `bloqueos`: nunca bloquea la lectura de
   `--estado`.
 - Motivo: la Ampliación 1 de DEVKIT-63 pedía esta agrupación y quedó
