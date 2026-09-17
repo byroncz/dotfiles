@@ -363,15 +363,19 @@ una marca que hoy no existe, y una lista negra la dejaría pasar igual.
 tres `UV_*` ya apuntan a rutas bajo `$HOME`, que sí viaja en la lista. Con ese entorno ya armado, antes de lanzar de verdad prueba con
 `claude mcp list` que Notion está conectada; si no, no lanza, lo dice por
 `stderr` y deja `ALARMA: sin Notion conectado` en `watch.log` en vez de
-gastar turnos en una skill que no va a poder leer la card. Si el `result`
-final menciona "notion" junto con alguna de las formas con las que un agente
-describe la falta de acceso ("no tiene permiso", "no tengo acceso", "sin
-acceso", "no tengo/estoy autorizado", "autorizar mcp__", "permissions.allow")
-aunque la sonda haya visto Notion conectada, cuenta igual que la pregunta
-abierta: alarma y bloquea la card con `task-block.sh`. "No autorizado" a
-secas, sin mencionar Notion, no cuenta: coincidía con un `result` que solo
-citaba un comando bloqueado por `pr-guard`, una card que terminó bien (H6 y
-H9 de `pr-review`, DEVKIT-65). Por si el nombre del servidor vuelve a
+gastar turnos en una skill que no va a poder leer la card. Aunque la sonda
+haya visto Notion conectada, el final del `claude -p` cuenta igual que la
+pregunta abierta (alarma y bloqueo de la card con `task-block.sh`) si el
+campo `permission_denials` del evento `result` lista una herramienta de
+Notion (`mcp__*notion*`). Como respaldo, también cuenta si el texto del
+`result` dice en la misma oración "notion" y una forma de falta de acceso
+("no tiene permiso", "no tengo acceso", "sin acceso", "no tengo/estoy
+autorizado"), o pide "autorizar mcp__…Notion". Antes de buscar se descarta
+lo que va entre comillas o backticks: un agente que termina bien suele citar
+esas frases al describir el cambio, y dos `result` reales de este PR
+bloqueaban la card por eso (H10 de `pr-review`). "No autorizado" a secas,
+sin mencionar Notion, tampoco cuenta: coincidía con un `result` que solo
+citaba un comando bloqueado por `pr-guard` (H6 y H9, DEVKIT-65). Por si el nombre del servidor vuelve a
 cambiar con otra versión de la CLI, `--allowedTools` trae los dos nombres
 conocidos (`mcp__plugin_Notion_notion` y `mcp__claude_ai_Notion`), y
 `devkit/agents/settings.json` los autoriza también para la sesión
