@@ -189,18 +189,24 @@ resolve_extensions() {
         motor="$(json_engine_vscode "$resp")"
       fi
       if [ -n "$fetched" ]; then
-        estado="$(engine_check "$motor" "$editor")"
-        if [ "$estado" = no ]; then
-          if alt="$(ultima_compatible "$ns" "$ext" "$resp")"; then
-            echo "devkit: aviso: $id $fetched exige VS Code $motor; la imagen lleva $editor; se usa ${alt% *} (VS Code ${alt#* })" >&2
-            fetched="${alt% *}"
-          else
-            rm -f "$resp"
-            echo "devkit: $id $fetched exige VS Code $motor; la imagen lleva $editor y no hay ninguna versión publicada que calce" >&2
-            return 1
+        if [ -z "$motor" ]; then
+          echo "devkit: aviso: $id no declara engines.vscode; se instala sin verificar" >&2
+        else
+          estado="$(engine_check "$motor" "$editor")"
+          if [ "$estado" = no ]; then
+            if alt="$(ultima_compatible "$ns" "$ext" "$resp")"; then
+              echo "devkit: aviso: $id $fetched exige VS Code $motor; la imagen lleva $editor; se usa ${alt% *} (VS Code ${alt#* })" >&2
+              [ "$(engine_check "${alt#* }" "$editor")" = desconocido ] && \
+                echo "devkit: aviso: ${alt% *} trae engines.vscode \"${alt#* }\", un formato que no reconozco; no se verificó del todo" >&2
+              fetched="${alt% *}"
+            else
+              rm -f "$resp"
+              echo "devkit: $id $fetched exige VS Code $motor; la imagen lleva $editor y no hay ninguna versión publicada que calce" >&2
+              return 1
+            fi
+          elif [ "$estado" = desconocido ]; then
+            echo "devkit: aviso: $id declara engines.vscode \"$motor\", un formato que no reconozco; se instala sin verificar" >&2
           fi
-        elif [ "$estado" = desconocido ]; then
-          echo "devkit: aviso: $id declara engines.vscode \"$motor\", un formato que no reconozco; se instala sin verificar" >&2
         fi
         rm -f "$resp"
         version="$fetched"
@@ -234,7 +240,9 @@ resolve_extensions() {
       if [ "$http_code" = 200 ]; then
         motor="$(json_engine_vscode "$resp")"
         rm -f "$resp"
-        if [ -n "$motor" ]; then
+        if [ -z "$motor" ]; then
+          echo "devkit: aviso: $id no declara engines.vscode; se instala sin verificar" >&2
+        else
           estado="$(engine_check "$motor" "$editor")"
           if [ "$estado" = no ]; then
             echo "devkit: $id $version exige VS Code $motor; la imagen lleva $editor" >&2
