@@ -370,12 +370,14 @@ con `task-block.sh`) si el campo `permission_denials` del evento `result`
 lista una herramienta de Notion (`mcp__*notion*`). Es la única señal que
 bloquea. Como respaldo, si el texto del `result` dice en la misma oración
 "notion" y una forma de falta de acceso ("no tiene permiso", "no tengo
-acceso", "sin acceso", "no tengo/estoy autorizado"), o pide "autorizar
-mcp__…Notion", solo deja `ALARMA: el resultado describe falta de acceso a
+acceso", "sin acceso", "no tengo/estoy/están autorizado(s)"), o una forma de
+"autorizar" seguida de `mcp__…Notion`, solo deja `ALARMA: el resultado describe falta de acceso a
 Notion (ver resultado)` en `watch.log`, sin bloquear: un agente que termina
 bien describe este mismo mecanismo con esas frases, y tres `result` reales
 de este PR habrían bloqueado la card por eso (H10 y H13 de `pr-review`).
-Antes de buscar se descarta lo que va entre comillas o backticks. "No autorizado" a secas,
+La búsqueda va sobre el `result` crudo, con comillas y backticks: el agente
+suele escribir así el nombre del plugin o de la herramienta, y descartarlos
+ocultaba los incidentes reales (H14). "No autorizado" a secas,
 sin mencionar Notion, tampoco cuenta: coincidía con un `result` que solo
 citaba un comando bloqueado por `pr-guard` (H6 y H9, DEVKIT-65). Por si el nombre del servidor vuelve a
 cambiar con otra versión de la CLI, `--allowedTools` trae los dos nombres

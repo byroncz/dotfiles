@@ -589,12 +589,11 @@ notion_denegado() {  # notion_denegado <logf>
 # una ALARMA, no bloquea (H13 de pr-review): un `result` que resume este mismo
 # mecanismo, como `task-fix-46-ce49aa6.log`, que terminó bien, dice las mismas
 # frases, y esa clase de falso positivo no se agota sumando negativos.
+# H14: sobre el `result` crudo, sin quitar comillas ni backticks, porque el
+# agente suele escribir entre backticks el nombre del plugin o la herramienta.
 result_sin_notion() {  # result_sin_notion <logf>
-  local texto
-  texto=$(tail -1 "$1" 2>/dev/null | jq -r '.result // ""' 2>/dev/null \
-    | tr '\n' ' ' | sed -E 's/"[^"]*"//g; s/`[^`]*`//g; s/“[^”]*”//g')
-  printf '%s' "$texto" | grep -qiE \
-    'notion[^.]{0,80}(no tiene permiso|no tengo acceso|sin acceso|no (tengo|estoy) autorizad[oa])|(no tiene permiso|no tengo acceso|sin acceso)[^.]{0,40}notion|autorizar mcp__[a-z_]*notion'
+  tail -1 "$1" 2>/dev/null | jq -r '.result // ""' 2>/dev/null | tr '\n' ' ' | grep -qiE \
+    'notion[^.]{0,80}(no tiene permiso|no tengo acceso|sin acceso|no (tengo|estoy|están?) autorizad[oa]s?)|(no tiene permiso|no tengo acceso|sin acceso)[^.]{0,40}notion|(autoriza[rd][a-z]*|autorizad[oa]s?)[^.]{0,20}mcp__[a-z_]*notion'
 }
 
 # Modelo vacío: la CLI rechaza `--model ""` con un 400 en el primer turno y el
@@ -1657,8 +1656,15 @@ FIN
   printf '%s\n' '{"result":"no tengo acceso a Notion en esta sesión"}' >"$tmp/result-no-tengo-acceso.json"
   printf '%s\n' '{"result":"el plugin de Notion no tiene permiso en esta sesión headless"}' >"$tmp/result-sin-permiso.json"
   printf '%s\n' '{"result":"pidió autorizar mcp__claude_ai_Notion__* en permissions.allow"}' >"$tmp/result-otro-nombre.json"
+  # H14: las mismas frases como las escribe el agente, con backticks,
+  # comillas y otras conjugaciones de "autorizar".
+  printf '%s\n' '{"result":"Pedí autorizar `mcp__claude_ai_Notion__*` en `permissions.allow`"}' >"$tmp/result-autorizar-backticks.json"
+  printf '%s\n' '{"result":"El plugin `Notion` no tiene permiso en esta sesión headless"}' >"$tmp/result-plugin-backticks.json"
+  printf '%s\n' '{"result":"No pude leer la card: \"El plugin de Notion no tiene permiso en esta sesión headless\""}' >"$tmp/result-entre-comillas.json"
+  printf '%s\n' '{"result":"Las herramientas mcp__claude_ai_Notion__* no están autorizadas"}' >"$tmp/result-no-estan-autorizadas.json"
   local caso_texto
-  for caso_texto in no-tengo-acceso sin-permiso otro-nombre; do
+  for caso_texto in no-tengo-acceso sin-permiso otro-nombre autorizar-backticks plugin-backticks \
+    entre-comillas no-estan-autorizadas; do
     check "el result $caso_texto deja ALARMA y no bloquea la card" "no 1" "$(caso_notion "$caso_texto")"
   done
 
