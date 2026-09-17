@@ -40,6 +40,8 @@
 #   devkit-run --otros-agentes                      lista los `claude -p` ajenos
 #                                                    sobre este workspace; sale 0
 #                                                    si está libre, 1 si no
+#   devkit-run --pregunta-abierta "<resultado>"     sale 0 si el resultado es una
+#                                                    pregunta abierta, 1 si no
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
