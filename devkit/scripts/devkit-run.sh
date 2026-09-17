@@ -834,11 +834,14 @@ filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
   done
 }
 
-# El propio `claude -p` de quien llama, entre sus ancestros (DEVKIT-77): el
-# mismo criterio de `filtrar_agentes` (descarta `devkit-run.sh`, se queda con
-# `claude ... -p ...`), pero sobre la ascendencia propia en vez del `ps`
-# completo, y devuelve el primero que encuentra en vez de filtrarlos todos.
-# Puro, para probarlo con una tabla fija: recibe "<pid> <args>" por línea.
+# El propio `claude -p` de quien llama, entre sus ancestros (DEVKIT-77):
+# descarta `devkit-run.sh` y se queda con `claude ... -p <prompt> ...`, igual
+# que la variante con banderas después del prompt de `filtrar_agentes` (no la
+# variante sin espacio final, `*claude*" -p"`, porque `run_claude` siempre
+# pasa el prompt después de `-p`), pero sobre la ascendencia propia en vez del
+# `ps` completo, y devuelve el primero que encuentra en vez de filtrarlos
+# todos. Puro, para probarlo con una tabla fija: recibe "<pid> <args>" por
+# línea.
 propio_de() {
   local pid args prompt
   while read -r pid args; do
