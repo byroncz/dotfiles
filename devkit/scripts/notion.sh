@@ -22,6 +22,11 @@
 #                                             en Lista que dependen de ella
 #                                             (columna "bloquea a" de
 #                                             `devkit-run --estado`, DEVKIT-63)
+#   notion.sh epicas <código>                 por cada Tarea del proyecto
+#                                             cuya Épica (Padre) está En
+#                                             progreso, la Clave y el título
+#                                             de esa Épica (agrupación de
+#                                             `devkit-run --estado`, DEVKIT-80)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -290,6 +295,30 @@ cmd_bloqueos() {  # cmd_bloqueos <código>
   ' <<<"$filas"
 }
 
+# Épica de origen de cada Tarea (DEVKIT-80, ampliación de DEVKIT-63 que
+# quedó pendiente en el PR #53): una sola consulta -todas las páginas
+# Tareas y Épicas del proyecto- porque `estado_filas` no sabe de antemano
+# cuáles Épicas están activas. El cruce Tarea → Padre → Épica se hace en jq,
+# mismo patrón que `bloqueos` con "Depende de".
+cmd_epicas() {  # cmd_epicas <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{property: "Proyecto", relation: {contains: $p}}')") || return
+  jq -c --arg codigo "$codigo" '
+    def clave($n): "\($codigo)-\($n)";
+    def titulo: (.properties["Título"].title // []) | map(.plain_text) | join("");
+    (map({id, numero: .properties.ID.unique_id.number, estado: .properties.Estado.select.name,
+          nivel: .properties.Nivel.select.name, titulo: titulo,
+          padre: ((.properties.Padre.relation // [])[0].id)})) as $todas
+    | (reduce ($todas[] | select(.nivel == "Épica" and .estado == "En progreso")) as $e
+        ({}; . + {($e.id): {clave: clave($e.numero), titulo: $e.titulo}})) as $epicas
+    | [ $todas[] | select(.nivel == "Tarea" and .padre != null and ($epicas[.padre] // null) != null)
+        | {clave: clave(.numero), epica: $epicas[.padre].clave, epica_titulo: $epicas[.padre].titulo} ]
+  ' <<<"$filas"
+}
+
 # Texto de la sección "Criterios de aceptación": los bloques entre ese
 # encabezado y el siguiente encabezado, uno por línea. Puro sobre la lista de
 # bloques, para la autoprueba.
@@ -481,6 +510,28 @@ $(tarea card-99 99 "Lista para merge" "")],\"has_more\":false}"
   check "bloqueos: DEVKIT-62 frena a DEVKIT-63" '[{"clave":"DEVKIT-62","bloquea_a":["DEVKIT-63"]}]' \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" bloqueos DEVKIT)"
 
+  # epicas: DEVKIT-57 y DEVKIT-58 son hijas de la Épica DEVKIT-50, En
+  # progreso: salen con su Clave y título. DEVKIT-59 es hija de DEVKIT-51,
+  # que no está En progreso: no sale. DEVKIT-60 no tiene Padre: no sale.
+  epica() {  # epica <id> <numero> <estado>
+    jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" \
+      '{id: $id, properties: {ID: {unique_id: {number: $n}}, Nivel: {select: {name: "Épica"}},
+        Estado: {select: {name: $e}}, "Título": {title: [{plain_text: ("Épica " + ($n | tostring))}]},
+        Padre: {relation: []}}}'
+  }
+  hija() {  # hija <id> <numero> <padre_id o vacío>
+    jq -nc --arg id "$1" --argjson n "$2" --arg padre "$3" \
+      '{id: $id, properties: {ID: {unique_id: {number: $n}}, Nivel: {select: {name: "Tarea"}},
+        Estado: {select: {name: "En progreso"}}, "Título": {title: [{plain_text: "hija"}]},
+        Padre: {relation: ($padre | if . == "" then [] else [{id: .}] end)}}}'
+  }
+  resp POST__databases_dbtareas_query "{\"results\":[$(epica epica-50 50 "En progreso"),\
+$(epica epica-51 51 Lista),$(hija card-57 57 epica-50),$(hija card-58 58 epica-50),\
+$(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
+  check "epicas: Tareas de una Épica En progreso, con Clave y título" \
+    '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Épica 50"}]' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas DEVKIT)"
+
   return $fail
 }
 
@@ -493,6 +544,7 @@ case "${1:-}" in
   hijas) cmd_hijas "${2:?page_id}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
   bloqueos) cmd_bloqueos "${2:?código}" ;;
+  epicas) cmd_epicas "${2:?código}" ;;
   --test) run_tests ;;
   *)
     sed -n '9,25p' "$0" >&2

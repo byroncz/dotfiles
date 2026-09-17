@@ -168,6 +168,13 @@ CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 BLOQUEOS_TTL="${DEVKIT_BLOQUEOS_TTL:-30}"
 BLOQUEOS_CACHE="${DEVKIT_BLOQUEOS_CACHE:-$RUN_DIR/bloqueos.cache}"
 BLOQUEOS_LOCK="${DEVKIT_BLOQUEOS_LOCK:-$RUN_DIR/bloqueos.lock}"
+# Agrupación por Épica de origen de `--estado` (DEVKIT-80, ampliación de
+# DEVKIT-63 que quedó pendiente en el PR #53): mismo patrón de caché que
+# Bloqueos, caché aparte porque `notion.sh epicas` trae todo el proyecto
+# (Épicas y Tareas), no solo Lista/Lista para merge.
+EPICAS_TTL="${DEVKIT_EPICAS_TTL:-30}"
+EPICAS_CACHE="${DEVKIT_EPICAS_CACHE:-$RUN_DIR/epicas.cache}"
+EPICAS_LOCK="${DEVKIT_EPICAS_LOCK:-$RUN_DIR/epicas.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -709,6 +716,36 @@ bloquea_a() {  # bloquea_a <Clave>
   [ "$edad" -lt "$BLOQUEOS_TTL" ] || refrescar_bloqueos_bg
   lista=$(jq -r --arg c "$1" '.[] | select(.clave == $c) | .bloquea_a | join(", ")' <<<"$bloqueos" 2>/dev/null)
   [ -n "$lista" ] && printf 'bloquea a: %s' "$lista"
+}
+
+# Refresca EPICAS_CACHE en segundo plano, mismo patrón que
+# `refrescar_bloqueos_bg`.
+refrescar_epicas_bg() {
+  (
+    mkdir -p "$(dirname "$EPICAS_CACHE")" 2>/dev/null
+    exec 9>"$EPICAS_LOCK"
+    flock -n 9 || exit 0
+    local codigo epicas
+    codigo=$(project_code)
+    if [ -n "$codigo" ] && epicas=$("$NOTION_BIN" epicas "$codigo" 2>/dev/null); then
+      printf '%s\t%s\n' "$(date +%s)" "$epicas" >"$EPICAS_CACHE.tmp" && mv -f "$EPICAS_CACHE.tmp" "$EPICAS_CACHE"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# "Épica <Clave>: <Título>" para una fila de `--estado` cuya Clave tiene una
+# Épica (Padre) `En progreso` (DEVKIT-80); vacío si no hay caché todavía, si
+# la Clave no tiene Épica activa, o si no aparece en `notion.sh epicas`.
+# `mostrar_estado` la usa para decidir si agrupa la tabla y bajo qué
+# encabezado va cada fila.
+epica_de() {  # epica_de <Clave>
+  local ts epicas edad linea
+  [ -s "$EPICAS_CACHE" ] || { refrescar_epicas_bg; return 0; }
+  IFS=$'\t' read -r ts epicas <"$EPICAS_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$EPICAS_TTL" ] || refrescar_epicas_bg
+  linea=$(jq -r --arg c "$1" '.[] | select(.clave == $c) | "Épica \(.epica): \(.epica_titulo)"' <<<"$epicas" 2>/dev/null)
+  printf '%s' "$linea"
 }
 
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
@@ -1254,24 +1291,79 @@ rellenar() {  # rellenar <texto> <ancho>
   printf '%s%*s' "$s" "$(( n > ${#s} ? n - ${#s} : 0 ))" ''
 }
 
+encabezado_tabla() {
+  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
+    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+}
+
+# Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
+# si corresponde. Aparte de `mostrar_estado` para que agrupar por Épica
+# (DEVKIT-80) no duplique el formato de columnas.
+formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle>
+  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 frena=""
+  [ "$clave" = - ] || frena=$(bloquea_a "$clave")
+  if [ -n "$frena" ]; then
+    [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
+  fi
+  printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
+    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
+}
+
 mostrar_estado() {
   local filas skill clave origen edad estado detalle
   filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
   else
-    printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-      "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
-    local frena
+    # Épica de origen por Clave (DEVKIT-80): una consulta a la caché por
+    # Clave distinta, no por fila. Agrupa la tabla solo si hay más de una
+    # Épica `En progreso` entre las filas; con una sola, o ninguna, la tabla
+    # queda plana como antes de esta card.
+    local -A epica_de_clave
+    local -a orden_epicas=()
+    local clave_vista=""
     while IFS=$'\t' read -r skill clave origen edad estado detalle; do
-      frena=""
-      [ "$clave" = - ] || frena=$(bloquea_a "$clave")
-      if [ -n "$frena" ]; then
-        [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
+      [ "$clave" = - ] && continue
+      case " $clave_vista " in *" $clave "*) continue ;; esac
+      clave_vista="$clave_vista $clave"
+      epica_de_clave[$clave]=$(epica_de "$clave")
+      if [ -n "${epica_de_clave[$clave]}" ]; then
+        local encontrada=0 e
+        for e in "${orden_epicas[@]}"; do [ "$e" = "${epica_de_clave[$clave]}" ] && { encontrada=1; break; }; done
+        [ "$encontrada" = 1 ] || orden_epicas+=("${epica_de_clave[$clave]}")
       fi
-      printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-        "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
     done <<<"$filas"
+
+    if [ "${#orden_epicas[@]}" -ge 2 ]; then
+      local primero=1
+      for e in "${orden_epicas[@]}"; do
+        [ "$primero" = 1 ] || echo
+        primero=0
+        printf '%s\n' "$e"
+        encabezado_tabla
+        while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+        done <<<"$filas"
+      done
+      # Filas sin Épica activa (sin Padre En progreso, o sin Clave): quedan
+      # en un bloque aparte al final, no se pierden.
+      local hay_sin=0
+      while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+        [ "$clave" != - ] && [ -n "${epica_de_clave[$clave]:-}" ] && continue
+        if [ "$hay_sin" = 0 ]; then
+          echo
+          echo "(sin Épica)"
+          encabezado_tabla
+          hay_sin=1
+        fi
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+      done <<<"$filas"
+    else
+      encabezado_tabla
+      while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+      done <<<"$filas"
+    fi
   fi
   mostrar_consumo
   mkdir -p "$(dirname "$ALARMAS_VISTAS")" 2>/dev/null
@@ -2480,6 +2572,53 @@ FIN
         CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio2/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio2/cuota.lock" \
         PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
         WATCH_LOG="$est/watch.log" mostrar_estado | grep 'DEVKIT-57' | grep -oE 'bloquea a: DEVKIT-61, DEVKIT-99')"
+
+  # Agrupar por Épica de origen (DEVKIT-80): DEVKIT-57 y DEVKIT-58 son hijas
+  # de la Épica DEVKIT-50 En progreso, DEVKIT-59 y DEVKIT-60 de la Épica
+  # DEVKIT-51 En progreso, ambas presentes en el mismo watch.log de arriba.
+  # Caché ya tibia, mismo criterio que Bloqueos: sin llamar a notion.sh en el
+  # propio check.
+  local epic salida_epicas bloque_50 bloque_51 bloque_sin
+  epic="$tmp/epicas"
+  mkdir -p "$epic"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Alfa"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Alfa"},{"clave":"DEVKIT-59","epica":"DEVKIT-51","epica_titulo":"Beta"},{"clave":"DEVKIT-60","epica":"DEVKIT-51","epica_titulo":"Beta"}]' \
+    >"$epic/epicas.cache"
+  check "epica_de: Clave con Épica activa" "Épica DEVKIT-50: Alfa" \
+    "$(EPICAS_CACHE="$epic/epicas.cache" EPICAS_LOCK="$epic/epicas.lock" epica_de DEVKIT-57)"
+  check "epica_de: Clave sin Épica activa, vacío" "" \
+    "$(EPICAS_CACHE="$epic/epicas.cache" EPICAS_LOCK="$epic/epicas.lock" epica_de DEVKIT-56)"
+  salida_epicas=$(EPICAS_CACHE="$epic/epicas.cache" EPICAS_LOCK="$epic/epicas.lock" \
+      BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" \
+      CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-epicas/cuota.cache" CUOTA_LOCK="$tmp/cuota-epicas/cuota.lock" \
+      PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
+      WATCH_LOG="$est/watch.log" mostrar_estado)
+  check "--estado con dos Épicas En progreso: un encabezado por Épica, en orden de aparición" \
+    "Épica DEVKIT-50: Alfa
+Épica DEVKIT-51: Beta" \
+    "$(printf '%s\n' "$salida_epicas" | grep '^Épica ')"
+  bloque_50=$(printf '%s\n' "$salida_epicas" | sed -n '/^Épica DEVKIT-50:/,/^$/p')
+  bloque_51=$(printf '%s\n' "$salida_epicas" | sed -n '/^Épica DEVKIT-51:/,/^$/p')
+  bloque_sin=$(printf '%s\n' "$salida_epicas" | sed -n '/^(sin Épica)/,/^$/p')
+  check "grupo de DEVKIT-50: sus dos Tareas, no las de la otra Épica" "1 1 0" \
+    "$(printf '%s' "$bloque_50" | grep -c 'DEVKIT-57 ') $(printf '%s' "$bloque_50" | grep -c 'DEVKIT-58 ') $(printf '%s' "$bloque_50" | grep -c 'DEVKIT-59 ')"
+  check "grupo de DEVKIT-51: sus dos Tareas, no las de la otra Épica" "1 1 0" \
+    "$(printf '%s' "$bloque_51" | grep -c 'DEVKIT-59 ') $(printf '%s' "$bloque_51" | grep -c 'DEVKIT-60 ') $(printf '%s' "$bloque_51" | grep -c 'DEVKIT-57 ')"
+  check "(sin Épica) trae las Claves sin Épica activa, no las agrupadas" "1 1 1 1 0" \
+    "$(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-56 ') $(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-5 ') \
+$(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-63 ') $(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-61 ') \
+$(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-57 ')"
+  local epic_sola
+  epic_sola="$tmp/epicas-sola"
+  mkdir -p "$epic_sola"
+  printf '%s\t%s\n' "$(date +%s)" '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Alfa"}]' \
+    >"$epic_sola/epicas.cache"
+  check "--estado con una sola Épica En progreso: tabla plana, sin encabezados" 0 \
+    "$(EPICAS_CACHE="$epic_sola/epicas.cache" EPICAS_LOCK="$epic_sola/epicas.lock" \
+        BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" \
+        CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-epica-sola/cuota.cache" CUOTA_LOCK="$tmp/cuota-epica-sola/cuota.lock" \
+        PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
+        WATCH_LOG="$est/watch.log" mostrar_estado | grep -c '^Épica ')"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
