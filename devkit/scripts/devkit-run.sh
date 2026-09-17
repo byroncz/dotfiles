@@ -757,8 +757,14 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
       printf '%s\n' "$alarmas" | sed 's/^/  /'
     fi
   } >&2
-  printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
-    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+  # H5 de pr-review (DEVKIT-65): sin Notion conectada, `alarma_sin_notion` (en
+  # `run_claude`) ya dejó la alarma específica del caso; sin este `if`, esto
+  # sumaba una segunda "ALARMA: no arrancó" genérica y menos precisa por el
+  # mismo evento (rc=67, candado ya liberado).
+  if ! grep -qE "falló \(rc=67\) \[$id\]:" "$WATCH_LOG" 2>/dev/null; then
+    printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
+      "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+  fi
   return 1
 }
 
@@ -1577,6 +1583,10 @@ FIN
     "$(jq -r .result "$tmp/run/sin-notion.log" 2>/dev/null)"
   check "sin Notion conectada deja la alarma en watch.log" 'ALARMA: sin Notion conectado' \
     "$(grep -oE 'ALARMA: sin Notion conectado' "$tmp/run/watch.log" | head -1)"
+  # H5 de pr-review (DEVKIT-65): una sola ALARMA por el evento, no la
+  # genérica "terminó con error (rc=67)" de encima.
+  check "sin Notion conectada no repite la alarma genérica de error" 0 \
+    "$(grep -c 'ALARMA: terminó con error' "$tmp/run/watch.log")"
 
   # Notion conectada al probar, pero el propio `result` dice lo contrario al
   # terminar: mismo remedio que la pregunta abierta, bloquea la card.
@@ -1841,7 +1851,10 @@ case "${1:-}" in
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf"
       fi
-    else
+    elif [ "$rc" -ne 67 ]; then
+      # rc=67 (sin Notion conectada) ya dejó su propia alarma en
+      # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
+      # segunda alarma por el mismo evento (H5 de pr-review, DEVKIT-65).
       printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
         "$(date -u +%FT%TZ)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
     fi
