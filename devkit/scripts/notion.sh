@@ -307,7 +307,10 @@ cmd_bloqueos() {  # cmd_bloqueos <código>
 # "Depende de". Cada Épica En progreso también sale como entrada de sí misma
 # (epica == epica_titulo de su propia Clave): un lanzamiento sobre la Épica
 # (por ejemplo `epic-plan`) se agrupa bajo su propio encabezado, no en
-# "(sin Épica)".
+# "(sin Épica)". Acotar las Tareas a Estado != Hecha (en vez de traer las
+# hijas de cada Épica activa con una consulta aparte) es una decisión
+# deliberada, no un olvido (hallazgo H6 de `pr-review`): una Tarea ya Hecha
+# cuya Épica sigue activa cae en "(sin Épica)" en vez de agruparse.
 cmd_epicas() {  # cmd_epicas <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
