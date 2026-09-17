@@ -138,6 +138,13 @@ ARRANQUE_ESPERA="${DEVKIT_ARRANQUE_ESPERA:-5}"
 ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
+# `-ww` en todo `ps` que lee argumentos (`args=`), acá y en watch.sh: sin
+# ella, `ps` corta cada línea al ancho de COLUMNS/LINES del entorno aunque la
+# salida vaya a una tubería, y una terminal integrada (la del editor) los
+# exporta. El 2026-09-17 eso dejó la ruta del log fuera de la línea y
+# `estado_filas` vio "no arrancó" con el agente vivo; el humano relanzó la
+# misma card tres veces sin saberlo (DEVKIT-79). `-ww` (ancho ilimitado)
+# ignora esas variables.
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
 # Marcador de alarmas vistas (DEVKIT-63): `--estado` guarda ahí cuántas líneas
 # de watch.log tenía al mostrarlas, y el segmento `!<k>` del prompt cuenta las
@@ -869,10 +876,10 @@ propio_de() {
 # de tener que buscarlo aparte.
 otros_agentes() {
   local encontrados propio
-  encontrados=$(ps -eo pid=,args= 2>/dev/null | filtrar_agentes "$(ancestros_propios)")
+  encontrados=$(ps -eo pid=,args= -ww 2>/dev/null | filtrar_agentes "$(ancestros_propios)")
   if propio=$(
     for pid in $(ancestros_propios); do
-      printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" 2>/dev/null)"
+      printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" -ww 2>/dev/null)"
     done | propio_de
   ); then
     printf 'propio: %s\n' "$propio"
@@ -921,8 +928,29 @@ origen_lanzamiento() {
   fi
   local pid
   for pid in $(ancestros_propios); do
-    printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" 2>/dev/null)"
+    printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" -ww 2>/dev/null)"
   done | origen_de
+}
+
+# Antes de lanzar: ¿ya hay un worker o un `claude -p` de este mismo prompt
+# vivo o esperando el candado? Sin esto, un falso "no arrancó" (ver el
+# comentario junto a PS_BIN) llevó al humano a relanzar tres veces la misma
+# card el 2026-09-17 sin saber que el lanzamiento anterior seguía vivo: la
+# reanudación quedó esperando el candado detrás de la primera. Puro: lee
+# "<pid> <args>" por línea de stdin, igual que filtrar_agentes.
+lanzamiento_duplicado() {  # lanzamiento_duplicado <prompt>
+  local prompt=$1 pid args
+  while read -r pid args; do
+    [ -n "$pid" ] || continue
+    case "$args" in
+      *"--worker $prompt "*) printf '%s\n' "$pid"; return 0 ;;
+    esac
+    case "$args" in *devkit-run.sh*) continue ;; esac
+    case "$args" in
+      *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # El prompt en una sola línea, sin comillas y corto: un task-fix con el
@@ -982,6 +1010,41 @@ avisar_atras_de_origin() {  # avisar_atras_de_origin <prompt>
     "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$atras" >> "$WATCH_LOG" 2>/dev/null
 }
 
+# El `claude -p` del worker recién lanzado, entre sus descendientes: no el
+# primer proceso del sistema cuyo prompt coincida (DEVKIT-79). Evidencia del
+# 2026-09-17: con dos lanzamientos vivos del mismo prompt -uno esperando el
+# candado, otro corriendo de verdad- `confirmar_arranque` tomaba el `claude
+# -p` del lanzamiento anterior porque `ps` lo listaba primero, y reportaba
+# como "arrancó" el proceso equivocado. Puro: lee "<pid> <ppid> <args>" por
+# línea de stdin y recorre el árbol de procesos desde <raíz> en anchura.
+claude_descendiente() {  # claude_descendiente <raíz> <prompt>
+  local raiz=$1 prompt=$2
+  local -A hijos_de args_de vistos
+  local pid ppid args hijo
+  while read -r pid ppid args; do
+    [ -n "$pid" ] || continue
+    hijos_de[$ppid]="${hijos_de[$ppid]:-} $pid"
+    args_de[$pid]=$args
+  done
+  local -a cola=("$raiz")
+  local i=0
+  while [ "$i" -lt "${#cola[@]}" ]; do
+    pid=${cola[$i]}
+    i=$((i + 1))
+    [ -z "${vistos[$pid]:-}" ] || continue
+    vistos[$pid]=1
+    args=${args_de[$pid]:-}
+    case "$args" in
+      *devkit-run.sh*) ;;
+      *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
+    esac
+    for hijo in ${hijos_de[$pid]:-}; do
+      cola+=("$hijo")
+    done
+  done
+  return 1
+}
+
 # Confirma que el lanzamiento en segundo plano arrancó. Espera hasta
 # ARRANQUE_ESPERA segundos mirando al worker; si sigue vivo, arrancó (corre
 # su `claude -p` o espera el candado). Si murió, solo vale como arranque si
@@ -996,8 +1059,7 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
     t=$((t + 1))
   done
   if kill -0 "$pid" 2>/dev/null; then
-    claude_pid=$(ps -eo pid=,args= 2>/dev/null | grep -F -- "-p $prompt" \
-      | grep -v -e 'devkit-run.sh' -e 'grep' | awk 'NR == 1 {print $1}')
+    claude_pid=$("$PS_BIN" -eo pid=,ppid=,args= -ww 2>/dev/null | claude_descendiente "$pid" "$prompt")
     if [ -n "$claude_pid" ]; then
       echo "arrancó: claude -p vivo (pid $claude_pid)"
     else
@@ -1065,7 +1127,7 @@ hace() {  # hace <segundos>
 # Lee `ps` de PS_BIN y la hora de <ahora>, para probarlo con datos fijos.
 estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   local wlog=$1 ahora=$2 procesos candado=libre
-  procesos=$("$PS_BIN" -eo pid=,args= 2>/dev/null)
+  procesos=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null)
   # Lectura, no escritura: abrir el candado con `>` le cambiaría el mtime,
   # que watch.sh usa como señal de actividad para la alarma de rama huérfana.
   if [ -e "$LOCK" ] && exec 7<"$LOCK"; then
@@ -1154,7 +1216,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
 agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
   local wlog=$1 ahora=$2 procesos lanz ids candado=libre en_curso=0
   local -A done_ids
-  procesos=$("$PS_BIN" -eo args= 2>/dev/null)
+  procesos=$("$PS_BIN" -eo args= -ww 2>/dev/null)
   lanz=$(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
   [ -n "$lanz" ] || { echo 0; return 0; }
   ids=$(printf '%s\n' "$lanz" | cut -f3 | paste -sd'|' -)
@@ -1288,6 +1350,26 @@ run_tests() {
   propio_sin=$(printf '%s\n' "$tabla" | grep -E '^(37786|37792|37793) ' | propio_de) || propio_rc=$?
   check "concurrencia: sin un claude -p propio entre los ancestros, no hay salida" "" "$propio_sin"
   check "concurrencia: sin un claude -p propio entre los ancestros, sale con error" 1 "$propio_rc"
+
+  # DEVKIT-79: lanzamiento_duplicado encuentra el worker vivo del mismo
+  # prompt, sin confundirse con un `claude -p` de otra card.
+  local tabla_dup
+  tabla_dup='50001 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 /run/devkit/task-start-1.log opus high 40
+50002 claude -p /task-fix DEVKIT-9 --model opus --effort high --output-format json'
+  check "lanzamiento_duplicado: encuentra el worker vivo del mismo prompt" 50001 \
+    "$(printf '%s\n' "$tabla_dup" | lanzamiento_duplicado '/task-start DEVKIT-9')"
+  check "lanzamiento_duplicado: sin coincidencia, no hay salida" "" \
+    "$(printf '%s\n' "$tabla_dup" | lanzamiento_duplicado '/task-start DEVKIT-99')"
+  local tabla_dup2
+  tabla_dup2='50003 claude -p /task-start DEVKIT-9 --model opus --effort high --output-format json'
+  check "lanzamiento_duplicado: encuentra el claude -p vivo del mismo prompt" 50003 \
+    "$(printf '%s\n' "$tabla_dup2" | lanzamiento_duplicado '/task-start DEVKIT-9')"
+  # H1 de pr-review en el PR #56: una Clave que es prefijo de otra no debe
+  # dar falso positivo.
+  local tabla_dup3
+  tabla_dup3='50004 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
+  check "lanzamiento_duplicado: Clave prefijo de otra no da falso positivo" "" \
+    "$(printf '%s\n' "$tabla_dup3" | lanzamiento_duplicado '/task-start DEVKIT-7')"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
@@ -2316,6 +2398,63 @@ FIN
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
   check "agentes_en_curso_rapido coincide con las filas en curso de estado_filas" 2 \
     "$(PS_BIN="$pslist" LOCK="$est/skill.lock" agentes_en_curso_rapido "$est/watch.log" "$ahora")"
+
+  # DEVKIT-79: con COLUMNS en el entorno (una terminal integrada, como la del
+  # editor, lo exporta) `ps` sin `-ww` recorta la línea y estado_filas deja
+  # de ver el proceso. Este caso usa el `ps` real del sistema (PS_BIN por
+  # defecto), no un doble que ignore la variable: sin `-ww` en `estado_filas`
+  # fallaría con COLUMNS=60.
+  local sleeper_ww logf_larga_ww ww_pid watch_ww tabla_ww
+  sleeper_ww="$tmp/sleeper-ww"
+  printf '#!/usr/bin/env bash\nsleep 5\n' >"$sleeper_ww"
+  chmod +x "$sleeper_ww"
+  logf_larga_ww="$tmp/ww/relleno-$(printf 'x%.0s' $(seq 1 80))/task-start-1.log"
+  mkdir -p "$(dirname "$logf_larga_ww")"
+  "$sleeper_ww" --worker /task-start DEVKIT-9 "$logf_larga_ww" opus high 40 &
+  ww_pid=$!
+  watch_ww="$tmp/ww/watch.log"
+  printf '%s task-start-1 lanzando (origen=humano): "/task-start DEVKIT-9" log=%s\n' \
+    "$(date -u +%FT%T%:z)" "$logf_larga_ww" >"$watch_ww"
+  tabla_ww=$(COLUMNS=60 estado_filas "$watch_ww" "$(date +%s)")
+  kill "$ww_pid" 2>/dev/null; wait "$ww_pid" 2>/dev/null
+  check "estado_filas con COLUMNS=60 y ps real: sigue viendo el proceso (-ww)" "en curso" \
+    "$(printf '%s\n' "$tabla_ww" | awk -F'\t' '$2 == "DEVKIT-9" {print $5}')"
+
+  # DEVKIT-79: confirmar_arranque elige el `claude -p` que de verdad
+  # desciende del worker recién lanzado, no el primero que `ps` liste con el
+  # mismo prompt (podría ser el de un lanzamiento anterior, todavía vivo).
+  # `sleep` real como raíz -confirmar_arranque solo comprueba con `kill -0`
+  # que el worker sigue vivo-, y una tabla de `ps` de mentira con dos
+  # `claude -p` del mismo prompt: uno bajo un worker viejo (55500), otro bajo
+  # la raíz real.
+  local root_pid pslist_conf salida_conf claude_nuevo_pid
+  sleep 5 &
+  root_pid=$!
+  claude_nuevo_pid=$((root_pid + 20000))
+  pslist_conf="$tmp/ps-confirmar"
+  cat >"$pslist_conf" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+55500 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 /run/devkit/task-start-1.log opus high 40
+55501 55500 claude -p /task-start DEVKIT-9 --model opus --effort high --output-format json
+$root_pid 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 /run/devkit/task-start-2.log opus high 40
+$claude_nuevo_pid $root_pid claude -p /task-start DEVKIT-9 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_conf"
+  salida_conf=$(PS_BIN="$pslist_conf" ARRANQUE_ESPERA=1 confirmar_arranque "$root_pid" "/task-start DEVKIT-9" "$tmp/confirmar.log")
+  kill "$root_pid" 2>/dev/null; wait "$root_pid" 2>/dev/null
+  check "confirmar_arranque elige el claude -p del worker nuevo, no el viejo" \
+    "arrancó: claude -p vivo (pid $claude_nuevo_pid)" "$salida_conf"
+
+  # H1 de pr-review en el PR #56: mismo caso que lanzamiento_duplicado, pero
+  # para claude_descendiente, que comparte el mismo patrón.
+  local tabla_desc
+  tabla_desc='90000 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-79 /run/devkit/task-start-1.log opus high 40
+90001 90000 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
+  check "claude_descendiente: Clave prefijo de otra no da falso positivo" "" \
+    "$(printf '%s\n' "$tabla_desc" | claude_descendiente 90000 '/task-start DEVKIT-7')"
+
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
   # todavía no hay lectura en caché. `head -1` porque, desde DEVKIT-62,
@@ -2493,6 +2632,31 @@ FIN
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
 
+  # DEVKIT-79: un lanzamiento duplicado (mismo prompt, worker vivo o
+  # esperando el candado) no se lanza dos veces. Doble de `ps` que informa un
+  # worker ya corriendo para "/task-start DEVKIT-9"; sin --forzar, el
+  # lanzamiento se rechaza antes de escribir la línea "lanzando".
+  local pslist_dup dup_out dup_rc
+  pslist_dup="$tmp/ps-dup"
+  printf '#!/usr/bin/env bash\necho "9001 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 %s/task-start-9.log opus high 40"\n' \
+    "$tmp/run" >"$pslist_dup"
+  chmod +x "$pslist_dup"
+  printf '%s task-start-9 lanzando (origen=humano): "/task-start DEVKIT-9" log=%s/task-start-9.log\n' \
+    "$(date +%FT%T%:z)" "$tmp/run" >"$tmp/run/watch.log"
+  dup_out=$(DEVKIT_PS_BIN="$pslist_dup" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-9 2>&1); dup_rc=$?
+  check "lanzamiento duplicado: sale con error" 68 "$dup_rc"
+  check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo" 1 \
+    "$(printf '%s' "$dup_out" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9001, log $tmp/run/task-start-9.log)")"
+  check "lanzamiento duplicado: no agrega una segunda línea lanzando" 1 \
+    "$(grep -c 'lanzando' "$tmp/run/watch.log" 2>/dev/null)"
+  check "lanzamiento duplicado: --forzar sí lanza (agrega su propia línea lanzando)" 2 \
+    "$(DEVKIT_PS_BIN="$pslist_dup" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+        DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+        bash "$HERE/devkit-run.sh" --forzar task-start DEVKIT-9 >/dev/null 2>&1
+      grep -c 'lanzando' "$tmp/run/watch.log")"
+
   return $fail
 }
 
@@ -2663,23 +2827,25 @@ falta_valor() {  # falta_valor <valor>
   esac
 }
 
-modelo_manual="" esfuerzo_manual=""
+modelo_manual="" esfuerzo_manual="" forzar=""
 while true; do
   case "${1:-}" in
     --modelo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
       modelo_manual="$2"; shift 2 ;;
     --esfuerzo)
       if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
+        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
         echo "     devkit-run --test   corre la autoprueba" >&2
         exit 64
       fi
       esfuerzo_manual="$2"; shift 2 ;;
+    --forzar)
+      forzar=1; shift ;;
     *) break ;;
   esac
 done
@@ -2687,7 +2853,7 @@ done
 skill="${1:-}"
 clave="${2:-}"
 if [ -z "$skill" ] || [ -z "$clave" ]; then
-  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]" >&2
+  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
   echo "     devkit-run --test   corre la autoprueba" >&2
   exit 64
 fi
@@ -2706,6 +2872,20 @@ esac
 
 prompt="/$skill $clave"
 [ $# -eq 0 ] || prompt="$prompt $*"
+
+# DEVKIT-79: ¿ya hay un worker o un `claude -p` de este mismo prompt vivo o
+# esperando el candado? El relanzamiento manual sobre un falso "no arrancó"
+# (ver el comentario junto a PS_BIN) puso dos agentes a trabajar la misma
+# card sin que nadie lo supiera hasta revisar `ps` a mano. `--forzar` salta
+# esta comprobación, por ejemplo tras matar a mano el proceso viejo.
+if [ -z "$forzar" ]; then
+  if dup_pid=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | lanzamiento_duplicado "$prompt"); then
+    dup_log=$(grep -F "): \"$(prompt_en_linea "$prompt")\" log=" "$WATCH_LOG" 2>/dev/null \
+      | tail -1 | grep -oE 'log=.*$' | sed 's/^log=//')
+    echo "devkit-run: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid, log ${dup_log:-desconocido}); síguelo con \`devkit-run --estado\` (o usa --forzar para lanzarlo igual)." >&2
+    exit 68
+  fi
+fi
 
 # Antes de resolver el modelo: la sonda de frontera también necesita el
 # token que el arranque todavía no terminó de cargar.

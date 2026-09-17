@@ -523,7 +523,11 @@ orphan_branch_alarm() {  # orphan_branch_alarm <edad en segundos> <tiene PR: si|
 interactive_session_alive() {
   local pid cwd
   for pid in $(ps -eo pid=,comm= 2>/dev/null | awk '$2 == "claude" {print $1}'); do
-    ps -p "$pid" -o args= 2>/dev/null | grep -qE '(^| )-p( |$)' && continue
+    # `-ww`: sin ancho ilimitado, `ps` recorta la línea al COLUMNS del
+    # entorno (una terminal integrada como la del editor lo exporta,
+    # DEVKIT-79) y una sesión interactiva con argumentos largos se vería sin
+    # `-p`, como si fuera headless.
+    ps -p "$pid" -o args= -ww 2>/dev/null | grep -qE '(^| )-p( |$)' && continue
     cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null) || continue
     [ "$cwd" = "$WS" ] || continue
     return 0
@@ -583,7 +587,10 @@ check_orphan_branch() {
 # no tiene proceso lo muestra `devkit-run --estado`.
 agentes_vivos() {
   local lineas
-  lineas=$(ps -eo pid=,args= 2>/dev/null | grep -E -- '--(worker|sync) /' | grep -v grep)
+  # `-ww`: mismo motivo que en interactive_session_alive (DEVKIT-79); sin
+  # ella, una ruta de log larga queda fuera de la línea y el agente parece
+  # no tener `--worker`/`--sync`.
+  lineas=$(ps -eo pid=,args= -ww 2>/dev/null | grep -E -- '--(worker|sync) /' | grep -v grep)
   if [ -z "$lineas" ]; then
     echo "sin agentes vivos"
     return 0
