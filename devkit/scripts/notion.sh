@@ -22,11 +22,15 @@
 #                                             en Lista que dependen de ella
 #                                             (columna "bloquea a" de
 #                                             `devkit-run --estado`, DEVKIT-63)
-#   notion.sh epicas <código>                 por cada Tarea del proyecto
-#                                             cuya Épica (Padre) está En
-#                                             progreso, la Clave y el título
-#                                             de esa Épica (agrupación de
-#                                             `devkit-run --estado`, DEVKIT-80)
+#   notion.sh epicas <código>                 por cada Épica En progreso del
+#                                             proyecto, una entrada de sí
+#                                             misma, y por cada Tarea que no
+#                                             está Hecha con esa Épica como
+#                                             Padre, su Clave y título; una
+#                                             Tarea ya Hecha no aparece aunque
+#                                             su Épica siga activa (agrupación
+#                                             de `devkit-run --estado`,
+#                                             DEVKIT-80)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -558,9 +562,10 @@ $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
     '{"or":[{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Épica"}},{"property":"Estado","select":{"equals":"En progreso"}}]},{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"does_not_equal":"Hecha"}}]}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
-  # El uso (sed -n '9,30p') debe llegar hasta la línea de --test: si el
-  # bloque crece y el rango no se actualiza, un subcomando inválido corta la
-  # ayuda a media frase (DEVKIT-80).
+  # El uso calcula su rango buscando la línea de --test en vez de un rango
+  # fijo (DEVKIT-80: un rango fijo cortaba la ayuda a media frase cada vez
+  # que el bloque crecía, hallazgo H1 de `pr-review` sobre el PR #57, que
+  # este mismo PR volvió a activar al documentar H6 y H7).
   check "uso: el rango impreso llega hasta la línea de --test" \
     "#   notion.sh --test                          autoprueba, sin red" \
     "$(bash "$HERE/notion.sh" no-existe 2>&1 >/dev/null | tail -1)"
@@ -580,7 +585,8 @@ case "${1:-}" in
   epicas) cmd_epicas "${2:?código}" ;;
   --test) run_tests ;;
   *)
-    sed -n '9,30p' "$0" >&2
+    fin=$(grep -n '^#   notion.sh --test' "$0" | head -1 | cut -d: -f1)
+    sed -n "9,${fin}p" "$0" >&2
     exit 64
     ;;
 esac

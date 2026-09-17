@@ -16,15 +16,17 @@ versión que usa un proyecto y la destino.
 
 ### devkit-run --estado agrupa por Épica de origen cuando hay más de una En progreso (DEVKIT-80)
 
-- `notion.sh epicas <código>`: por cada Tarea del proyecto cuya Épica
-  (`Padre`) está `En progreso`, la Clave y el título de esa Épica. Una sola
-  consulta -Épicas y Tareas del proyecto juntas-, mismo criterio que
-  `bloqueos`.
+- `notion.sh epicas <código>`: por cada Épica `En progreso` del proyecto, una
+  entrada de sí misma, y por cada Tarea que no está `Hecha` con esa Épica
+  como `Padre`, su Clave y título. Una sola consulta, con las dos ramas de
+  `Estado` repitiendo el filtro de Proyecto para no anidar tres niveles: la
+  API de Notion solo acepta dos.
 - `devkit-run --estado` agrupa la tabla con un encabezado `Épica <Clave>:
   <Título>` por cada Épica `En progreso` representada entre las filas (en el
   orden en que aparecen), y un bloque final `(sin Épica)` para las filas sin
-  Padre activo o sin Clave resuelta. Con una sola Épica, o ninguna, la tabla
-  sigue plana. Caché de 30 s (`DEVKIT_EPICAS_CACHE`/`DEVKIT_EPICAS_TTL`), refrescada en
+  Padre activo, sin Clave resuelta, o cuya card ya está `Hecha` aunque su
+  Épica siga activa. Con una sola Épica, o ninguna, la tabla sigue plana.
+  Caché de 30 s (`DEVKIT_EPICAS_CACHE`/`DEVKIT_EPICAS_TTL`), refrescada en
   segundo plano igual que `bloqueos`: nunca bloquea la lectura de
   `--estado`.
 - Motivo: la Ampliación 1 de DEVKIT-63 pedía esta agrupación y quedó
