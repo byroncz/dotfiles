@@ -19,7 +19,10 @@ cutoff=$(date -d "-${WINDOW_MIN} minutes" +%s)
 domains=$(grep -h "Rejected\|Denied\|refused" "$LOG" 2>/dev/null | while IFS= read -r line; do
   ts=$(printf '%s' "$line" | grep -oE '[A-Z][a-z]{2} +[0-9]{1,2} [0-9:.]+')
   [ -n "$ts" ] || continue
-  epoch=$(date -d "$ts" +%s 2>/dev/null) || continue
+  # El log es del contenedor "proxy", que no recibe DEVKIT_TZ (compose.yaml)
+  # y sigue en UTC sin zona en la marca: convertir en esa misma zona, no en
+  # la del contenedor "dev", o la ventana se corre el offset (DEVKIT-64).
+  epoch=$(TZ=UTC date -d "$ts" +%s 2>/dev/null) || continue
   [ "$epoch" -ge "$cutoff" ] || continue
   printf '%s\n' "$line" | grep -oE '"[^"]+"' | tr -d '"'
 done | sort -u) || true
