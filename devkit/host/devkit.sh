@@ -87,7 +87,10 @@ resolve_extensions() {
   # Una línea no vacía y sin comentario que no calce con "id" = "versión" se
   # ignoraba en silencio y la extensión desaparecía de la imagen sin aviso
   # (H5, DEVKIT-67); gen-stack.sh repite este mismo aviso al generar la lista.
-  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$toml" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$')"
+  # El comentario final es opcional: el `sed` de abajo ya lo tolera (H9,
+  # DEVKIT-67), así que la validación admite el mismo formato o avisaría de
+  # una línea que sí se usa.
+  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$toml" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*(#.*)?$')"
   if [ -n "$malas" ]; then
     echo "devkit: aviso: $toml tiene líneas que no calzan con \"id\" = \"versión\" y se ignoran:" >&2
     printf '%s\n' "$malas" | sed 's/^/  /' >&2

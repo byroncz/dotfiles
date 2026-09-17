@@ -18,9 +18,10 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"   # devkit/
 # comillas, con sangría, comilla simple...) se ignoraba en silencio y la
 # extensión desaparecía de la lista sin que --check lo notara (H5,
 # DEVKIT-67). Avisa por stderr; devkit.sh (resolve_extensions) repite este
-# mismo aviso al resolver.
+# mismo aviso al resolver. El comentario final es opcional: el `sed` de abajo
+# ya lo tolera (H9, DEVKIT-67), así que la validación admite el mismo formato.
 advertir_lineas_invalidas() {  # advertir_lineas_invalidas <extensions.toml>
-  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$1" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*$')"
+  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$1" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*(#.*)?$')"
   [ -n "$malas" ] || return 0
   echo "gen-stack.sh: aviso: $1 tiene líneas que no calzan con \"id\" = \"versión\" y se ignoran:" >&2
   printf '%s\n' "$malas" | sed 's/^/  /' >&2
@@ -64,6 +65,14 @@ if [ "${1:-}" = "--test" ]; then
   check "línea que no calza no rompe la extensión válida" \
     'Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code latest.' \
     "$(linea "$tmp/mala.toml" 2>/dev/null)"
+
+  printf '"Anthropic.claude-code" = "1.2.3"  # fija\n' > "$tmp/comentario.toml"
+  salida="$(linea "$tmp/comentario.toml" 2>&1 >/dev/null)"
+  check "línea válida con comentario al final no avisa" no \
+    "$(printf '%s' "$salida" | grep -q 'no calzan' && echo si || echo no)"
+  check "línea válida con comentario al final se usa" \
+    'Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code 1.2.3.' \
+    "$(linea "$tmp/comentario.toml" 2>/dev/null)"
 
   printf '"Anthropic.claude-code" = "latest"\n' > "$tmp/toml"
   printf '%s\n' "$(linea "$tmp/toml")" > "$tmp/README.md"

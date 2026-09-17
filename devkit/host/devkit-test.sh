@@ -322,6 +322,17 @@ check        "línea inválida no impide construir con la extensión válida" \
              "Anthropic.claude-code=1.2.3" "$(env_ext)"
 check        "línea inválida: termina bien" 0 "$ESTADO"
 
+# --- Línea válida con comentario al final (H9, DEVKIT-67) --------------------
+# El `sed` que extrae ya toleraba un comentario al final de la línea; la
+# validación no, y avisaba "se ignoran" de una línea que sí se usaba.
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"  # fija\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+corre recreate
+check        "línea con comentario al final no avisa" no \
+             "$(grep -q 'no calzan con' "$OUT" && echo si || echo no)"
+check        "línea con comentario al final se usa igual" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"
