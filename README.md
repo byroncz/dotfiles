@@ -514,8 +514,11 @@ sin gastar tokens, todas como líneas `ALARMA: ...` en `watch.log` (la petición
 formal de review en GitHub ya cubre el aviso externo, así que no hay canal
 aparte): una skill que termina con error; una skill que lleva más de
 `DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo (1200 por defecto, sondeada
-cada `DEVKIT_WATCH_SKILL_POLL` segundos); un `result` que termina en pregunta
-en vez de resolver en un estado observable (el defecto de headless que
+cada `DEVKIT_WATCH_SKILL_POLL` segundos); un `result` que es una pregunta
+abierta (`devkit-run --pregunta-abierta`, la misma regla `pregunta_abierta`
+que usa `--worker`, no solo cuando el texto termina en "?": ver DEVKIT-77 en
+la descripción de `devkit-run.sh` arriba) en vez de resolver en un estado
+observable (el defecto de headless que
 `AGENTS.md` prohíbe: no se comprueba el Estado de la card en Notion, porque el
 bucle no la consulta desde bash, así que alarma cualquier pregunta final,
 esté o no la card `En progreso`); y la rama en la que quedó el workspace, sin

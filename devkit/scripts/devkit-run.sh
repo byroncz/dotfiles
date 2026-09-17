@@ -2609,6 +2609,15 @@ case "${1:-}" in
     otros_agentes
     exit $?
     ;;
+  --pregunta-abierta)
+    # DEVKIT-77 H1: `watch.sh` lanza pr-review/task-fix/task-document con
+    # `--sync`, un camino que no pasaba por `pregunta_abierta` (solo lo hacía
+    # `--worker`) y se había quedado con el `grep` viejo de DEVKIT-50.
+    # Subcomando puro, igual que `--resumen`/`--rol`, para que las dos
+    # llamadas usen la misma regla.
+    pregunta_abierta "${2:-}"
+    exit $?
+    ;;
   --estado)
     if [ "${2:-}" = --seguir ]; then seguir_estado; fi
     mostrar_estado

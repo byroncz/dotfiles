@@ -32,6 +32,11 @@ versión que usa un proyecto y la destino.
   card `En progreso` sin PR, deja `ALARMA: terminó sin entregar ni bloquear`
   en `watch.log` y `devkit-run --estado` lo muestra como `error`, no como
   `terminó`.
+- `devkit-run --pregunta-abierta <resultado>` expone la misma
+  `pregunta_abierta` de arriba como subcomando puro, igual que `--resumen`/
+  `--rol`. `watch.sh` lo usa en el camino `--sync` (el que lanza `pr-review`,
+  `task-fix` y `task-document`), que se había quedado con el `grep` viejo de
+  DEVKIT-50: solo `--worker` veía las formas nuevas.
 - Motivo: el 2026-09-17, un `task-start DEVKIT-63` lanzado por `task-close`
   encontró su propio `claude -p` en `ps` (PPID 1, efecto del `nohup` de su
   lanzador), desconfió del resultado ya correcto de `--otros-agentes` y

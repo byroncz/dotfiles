@@ -52,7 +52,8 @@
 # son estas (la quinta, más abajo): skill que terminó
 # con error, skill de más de `DEVKIT_WATCH_SKILL_TIMEOUT` segundos corriendo
 # (1200 por defecto), `result` que termina en pregunta en vez de un estado
-# observable, y rama de una card sin PR y sin `claude -p` vivo hace más de
+# observable (`devkit-run --pregunta-abierta`, no solo cuando termina en "?"),
+# y rama de una card sin PR y sin `claude -p` vivo hace más de
 # `DEVKIT_WATCH_ORPHAN_AGE` segundos (1800 por defecto). `bash watch.sh
 # --agentes-vivos` lista PID, Clave y paso de cada skill en curso. El hook
 # `--orphan-branch <edad> <tiene PR: si|no> <skill viva: si|no>` prueba la
@@ -463,7 +464,7 @@ run_skill() {
     # Alarma 2 de 4: un `result` que termina en pregunta es la card en curso
     # cortando en seco en vez de resolver en un estado observable (AGENTS.md).
     resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
-    if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
+    if "$DEVKIT_RUN" --pregunta-abierta "$resultado"; then
       log "ALARMA: $name terminó con una pregunta abierta en vez de un estado observable"
     fi
   else
