@@ -19,19 +19,33 @@ trap 'rm -rf "$TMP"' EXIT
 export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
 
 # --- Doble de curl -----------------------------------------------------------
-# Solo responde la API "latest" de Open VSX que usa resolve_extensions;
-# cualquier otra URL (por ejemplo la descarga de una etiqueta en `update`, que
-# estos escenarios no ejercitan) sale en 0 sin cuerpo. `DEVKIT_TEST_CURL_DOWN=1`
-# simula el Mac sin red.
+# Solo responde la API "latest" de Open VSX que usa resolve_extensions, con
+# `-o <archivo> -w '%{http_code}'` como el real: escribe el cuerpo en el
+# archivo y el código HTTP en stdout, para poder distinguir un 404
+# (`DEVKIT_TEST_CURL_404=1`) de un 200 (H4, DEVKIT-67). Cualquier otra URL
+# (por ejemplo la descarga de una etiqueta en `update`, que estos escenarios
+# no ejercitan) sale en 0 sin cuerpo. `DEVKIT_TEST_CURL_DOWN=1` simula el Mac
+# sin red: exit 7, como el curl real, antes de escribir nada.
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'FIN'
 #!/bin/sh
 echo "curl $*" >> "$DEVKIT_TEST_LOG"
 [ "${DEVKIT_TEST_CURL_DOWN:-0}" = 1 ] && exit 7
-for a; do url="$a"; done
+out=""; prev=""
+for a; do
+  [ "$prev" = -o ] && out="$a"
+  prev="$a"; url="$a"
+done
 case "$url" in
-  https://open-vsx.org/api/*/latest) printf '{"version":"%s"}' "${DEVKIT_TEST_OVX_VERSION:-9.9.9}" ;;
-  *) exit 0 ;;
+  https://open-vsx.org/api/*/latest)
+    if [ "${DEVKIT_TEST_CURL_404:-0}" = 1 ]; then
+      [ -n "$out" ] && : > "$out"
+      printf '404'
+    else
+      body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\"}"
+      if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
+    fi ;;
+  *) [ -n "$out" ] && : > "$out" ;;
 esac
 FIN
 chmod +x "$TMP/bin/curl"
@@ -241,7 +255,7 @@ export DEVKIT_TEST_OVX_VERSION=2.1.270
 escenario dev; corre recreate
 check        "latest resuelto: queda en .env" "Anthropic.claude-code=2.1.270" "$(env_ext)"
 check        "latest resuelto: queda en extensions.lock" "Anthropic.claude-code=2.1.270" "$(lock_ext)"
-check_docker "latest resuelto: consulta Open VSX" si 'curl -fsSL https://open-vsx\.org/api/Anthropic/claude-code/latest'
+check_docker "latest resuelto: consulta Open VSX" si 'curl -sS -o .* -w %\{http_code\} https://open-vsx\.org/api/Anthropic/claude-code/latest'
 check        "latest resuelto: termina bien" 0 "$ESTADO"
 
 escenario dev
@@ -269,6 +283,14 @@ unset DEVKIT_TEST_CURL_DOWN
 check_salida "sin red sin resolución previa: lo explica" "sin red y sin resolución previa"
 check        "sin red sin resolución previa: se detiene" 1 "$ESTADO"
 check_docker "sin red sin resolución previa: no construye" no 'up -d'
+
+escenario dev
+export DEVKIT_TEST_CURL_404=1
+corre recreate
+unset DEVKIT_TEST_CURL_404
+check_salida "404 de Open VSX: lo explica" "no existe en Open VSX"
+check        "404 de Open VSX: se detiene" 1 "$ESTADO"
+check_docker "404 de Open VSX: no construye" no 'up -d'
 
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123

@@ -91,9 +91,21 @@ resolve_extensions() {
     id="${linea%% *}"; version="${linea#* }"
     if [ "$version" = latest ]; then
       ns="${id%%.*}"; ext="${id#*.}"
-      fetched="$(curl -fsSL "https://open-vsx.org/api/$ns/$ext/latest" 2>/dev/null \
-        | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+      resp="$(mktemp)"
+      # -w separa el código HTTP del cuerpo: un 404 (id mal escrito) o un 5xx
+      # de Open VSX ya no se confunden con "sin red" (H4). "|| http_code=000"
+      # evita que un curl caído (rc 7, sin red) corte el script por `set -e`.
+      http_code="$(curl -sS -o "$resp" -w '%{http_code}' "https://open-vsx.org/api/$ns/$ext/latest" 2>/dev/null)" \
+        || http_code=000
+      if [ "$http_code" = 404 ]; then
+        rm -f "$resp"
+        echo "devkit: extensión $id no existe en Open VSX (404)" >&2
+        return 1
+      fi
+      fetched=""
+      [ "$http_code" = 200 ] && fetched="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$resp" | head -1 \
         | sed -E 's/.*"([^"]+)"$/\1/')"
+      rm -f "$resp"
       if [ -n "$fetched" ]; then
         version="$fetched"
       else
