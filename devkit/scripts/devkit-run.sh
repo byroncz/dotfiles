@@ -594,6 +594,9 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
 # Refresca CUOTA_CACHE en segundo plano, sin bloquear a quien la llamó (H1 de
 # pr-review en DEVKIT-62). El candado evita dos refrescos a la vez: si uno ya
 # está en curso, este no espera ni relanza, simplemente no hace nada.
+# La subshell cierra sus descriptores de entrada/salida (H3 de pr-review): si
+# no, hereda los del llamador y quien lea `--estado` por pipe o `$(...)`
+# queda atado a que termine el refresco, justo lo que H1 evitaba.
 refrescar_cuota_bg() {
   (
     mkdir -p "$(dirname "$CUOTA_CACHE")" 2>/dev/null
@@ -605,7 +608,7 @@ refrescar_cuota_bg() {
     else
       printf '%s\tfail\n' "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
     fi
-  ) &
+  ) </dev/null >/dev/null 2>&1 &
 }
 
 # Bloque `Consumo` de `--estado`: porcentaje de cuota en vivo, con la hora de
@@ -2047,6 +2050,26 @@ FIN
     sleep 0.3
   done
   check "el refresco en segundo plano reemplaza la caché vencida" 1 "$refrescada"
+
+  # H3 de pr-review: la subshell de refrescar_cuota_bg no debe heredar los
+  # descriptores del llamador. Antes de cerrarlos, leer --estado por pipe (o
+  # `$(...)`, como aquí con `tail -1`) esperaba a que el refresco de fondo
+  # terminara, hasta CUOTA_TIMEOUT.
+  local cuota_pipe salida_pipe t0_pipe t1_pipe ms_pipe
+  cuota_pipe="$tmp/cuota-pipe"
+  mkdir -p "$cuota_pipe"
+  printf '%s\tok\t10\tya\t10\tya\n' "$(( $(date +%s) - 120 ))" >"$cuota_pipe/cuota.cache"
+  t0_pipe=$(date +%s%N)
+  salida_pipe=$(CLAUDE_BIN="$doble_cuota_lento" CUOTA_TIMEOUT=3 CUOTA_TTL=60 \
+    CUOTA_CACHE="$cuota_pipe/cuota.cache" CUOTA_LOCK="$cuota_pipe/cuota.lock" \
+    WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)
+  t1_pipe=$(date +%s%N)
+  ms_pipe=$(( (t1_pipe - t0_pipe) / 1000000 ))
+  check "leído por pipe, --estado no espera el refresco de fondo" si \
+    "$([ "$ms_pipe" -lt 1000 ] && echo si || echo "no (${ms_pipe}ms)")"
+  check "leído por pipe, el bloque Consumo igual llega completo" \
+    "semana: 10% usada, reinicia ya" \
+    "$(printf '%s\n' "$salida_pipe" | grep -oE 'semana: 10% usada, reinicia ya')"
 
   # El criterio de la card: sin caché y con un `claude -p "/usage"` que no
   # responde, --estado sigue respondiendo bajo un segundo, incluso con un

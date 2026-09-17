@@ -520,7 +520,10 @@ Esa lectura tarda ~1.3 s, así que `--estado` nunca la espera en línea: lee la
 ninguna todavía, la refresca en segundo plano (sin bloquear) y sigue
 respondiendo bajo un segundo. La primera vez, sin caché, dice `Consumo:
 todavía no hay una lectura de la cuota oficial, refrescando en segundo
-plano`.
+plano`. El refresco cierra su entrada y salida (`</dev/null >/dev/null 2>&1`)
+para no heredar las del llamador: sin eso, leer `--estado` por un pipe o
+`$(...)` quedaba atado a que el refresco terminara, contradiciendo el propio
+"nunca la espera" (H3 de pr-review en DEVKIT-62).
 
 `--estado` parte de las líneas `lanzando` de `watch.log`, no de los procesos:
 el 2026-09-16, `--agentes-vivos` respondió "sin agentes vivos" dos segundos

@@ -700,7 +700,11 @@ línea rompía el criterio de que `--estado` responda bajo un segundo. Por eso
 hora) y, si venció `DEVKIT_CUOTA_TTL` (60 s) o no hay ninguna todavía,
 dispara un refresco en segundo plano (candado en `$RUN_DIR/cuota.lock`, para
 no correr dos a la vez) y sigue sin esperarlo. La primera vez que corre, sin
-caché, el bloque dice que va a refrescar en vez de mostrar una cifra.
+caché, el bloque dice que va a refrescar en vez de mostrar una cifra. El
+refresco corre con su entrada y salida cerradas (`</dev/null >/dev/null
+2>&1`): sin eso hereda las del llamador, y leer `--estado` por un pipe o
+`$(...)` quedaba atado igual al refresco, el mismo problema que el TTL
+resolvía para la línea de comandos (H3 de pr-review en DEVKIT-62).
 
 ## 7. Modelo de datos en Notion
 

@@ -33,6 +33,11 @@ versión que usa un proyecto y la destino.
   vence `DEVKIT_CUOTA_TTL` (60 s) o no hay ninguna todavía (revisión de
   pr-review: la primera versión sí esperaba, y `--estado` pasaba de 0.2 s a
   1.4–2.2 s con un `watch.log` de mil líneas).
+- El refresco en segundo plano cierra su entrada y salida
+  (`</dev/null >/dev/null 2>&1`): la primera versión las heredaba del
+  llamador, así que leer `--estado` por un pipe o `$(...)` seguía atado a la
+  lectura, hasta `DEVKIT_CUOTA_TIMEOUT` (revisión de pr-review, segundo
+  ciclo).
 - Cambios requeridos: ninguno, `devkit recreate` alcanza.
 
 ### `resolve_extensions` comprueba el motor del editor antes de construir (DEVKIT-73)
