@@ -10,6 +10,29 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Entorno limpio y comprobación de Notion en el `claude -p` hijo (DEVKIT-65)
+
+- `run_claude` (en `devkit-run.sh`) arma el entorno de cada `claude -p` con
+  `env -i` y una lista blanca (`ENV_HEREDABLE`) en vez de heredar el
+  entorno tal cual: identidad de Notion/GitHub, red de salida, hora local,
+  `DISABLE_AUTOUPDATER` y `MCP_OAUTH_CALLBACK_PORT`. Un `task-start`
+  lanzado por `epic-plan` -que a su vez corre dentro de otro `claude -p`-
+  dejaba de leer la card porque la CLI hija montaba el conector de Notion
+  con otro nombre; la causa exacta queda como hipótesis, no confirmada.
+  `DEVKIT_ENV_LIMPIO=0` vuelve al entorno heredado completo.
+- `watch.sh` pasa `DEVKIT_LANZADOR=watch` a `--sync`, y `run_claude` la
+  repone en el entorno del hijo pese a `env -i`, para que `task-fix` sepa
+  si lo lanzó el bucle y no firme `manual=1` de más.
+- Antes de lanzar de verdad, `run_claude` prueba con `claude mcp list` que
+  Notion está conectada en ese mismo entorno; si no, dejar `ALARMA: sin
+  Notion conectado` en `watch.log` y no lanza. `DEVKIT_NOTION_CHECK=0`
+  apaga la sonda.
+- `--allowedTools` trae los dos nombres conocidos del conector de Notion
+  (`mcp__plugin_Notion_notion` y `mcp__claude_ai_Notion`), y
+  `devkit/agents/settings.json` los autoriza también para la sesión
+  interactiva.
+- Cambios requeridos: ninguno, `devkit recreate` alcanza.
+
 ### Ajustes rápidos del editor y del shell (DEVKIT-66)
 
 - Alias `c` para `clear` en `zshrc`.
