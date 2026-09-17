@@ -870,7 +870,13 @@ la reemplaza como fuente: una línea por extensión, con versión fija o
   mismo mecanismo que `DEVKIT_EXTRA_APT`: el `Dockerfile` la recibe como
   `ARG EXTENSIONS` con versiones exactas, nunca `"latest"`, así que dos builds
   con la misma resolución cachean la capa de extensiones y una resolución
-  distinta la invalida, como cualquier otro `ARG`.
+  distinta la invalida, como cualquier otro `ARG`. Ese `ARG` se declara justo
+  antes de su `RUN`, no arriba con los demás: Docker mete todo `ARG` en el
+  entorno de cada `RUN` posterior a su declaración, y declararlo arriba
+  invalidaría la caché desde el primer `RUN` (apt, gh, rclone, zsh, claude...)
+  con cada versión nueva. Con la declaración movida, solo se rehacen esta capa
+  y las que la siguen (el `RUN uv python install` de 4.2), no la imagen
+  entera.
 - Sin red en el Mac, se usa la última resolución guardada en `extensions.lock`
   y se avisa; sin red y sin resolución previa, el comando se detiene con un
   mensaje claro en vez de construir a ciegas o con una versión implícita.

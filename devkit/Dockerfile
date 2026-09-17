@@ -26,7 +26,6 @@ ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
 ARG EXTRA_APT=""
-ARG EXTENSIONS=""
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -123,6 +122,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # el paquete de su plataforma (Open VSX no publica todas así) y, si no existe,
 # el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
 # (redirección de descarga) van en `domains` de .devkit/devkit.toml.
+# ARG EXTENSIONS se declara aquí, no arriba con los demás: Docker mete todo
+# ARG en el entorno de cada RUN posterior a su declaración, así que si
+# viviera arriba, cada versión nueva de una extensión invalidaría la caché
+# desde el primer RUN (apt, gh, rclone, zsh, claude...), no solo esta capa.
+ARG EXTENSIONS=""
 RUN set -eux; \
     case "$(uname -m)" in \
       x86_64)  ovx_platform=linux-x64 ;; \
