@@ -36,7 +36,9 @@ versión que usa un proyecto y la destino.
   sucio y un `git switch`/`pull` fallido dejan `task-close.sh <Clave> no
   limpia el workspace: <motivo>` en `watch.log`. `devkit-run` también avisa
   cuando el workspace queda detrás de `origin/main` al lanzar, antes de
-  resolver el modelo.
+  resolver el modelo: hace `git fetch origin main` primero, porque sin ese
+  fetch la comparación usaba la referencia local vieja de `origin/main` y no
+  veía un avance reciente del remoto (hallazgo de `pr-review`, PR #53).
 - Ampliación de la card: `devkit-run --estado` suma "bloquea a: <Claves>" a
   la fila de una card en `Lista para merge`, con las cards en `Lista` que la
   tienen en `Depende de` (`notion.sh bloqueos`, una consulta por refresco,

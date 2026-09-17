@@ -891,6 +891,10 @@ esperar_arranque() {  # esperar_arranque <prompt>
 # hace observable antes de resolver el modelo, cuando todavía se puede parar.
 avisar_atras_de_origin() {  # avisar_atras_de_origin <prompt>
   local atras
+  if ! timeout 5 git -C "$WS" fetch -q origin main 2>/dev/null; then
+    printf 'devkit-run: no se pudo comprobar si el workspace está detrás de origin/main (git fetch falló).\n' >&2
+    return 0
+  fi
   atras=$(git -C "$WS" rev-list --count main..origin/main 2>/dev/null) || return 0
   case "$atras" in ''|0) return 0 ;; esac
   printf 'devkit-run: el workspace está %s commit(s) detrás de origin/main; puede estar lanzando con código viejo (git switch main && git pull --ff-only).\n' \
@@ -2063,6 +2067,21 @@ FIN
   check "avisar_atras_de_origin: atrás deja ALARMA en watch.log" \
     'ALARMA: workspace 1 commit(s) detrás de origin/main' \
     "$(grep -oE 'ALARMA: workspace 1 commit\(s\) detrás de origin/main' "$atras/watch.log" | head -1)"
+  # H1 del PR #53: el remoto avanza otra vez desde un segundo clon y `ws`
+  # nunca vuelve a hacer `git fetch` por su cuenta. Antes, la función
+  # comparaba contra la referencia `origin/main` que ya tenía guardada -la
+  # de la línea 2062, un commit atrás- y se quedaba corta.
+  local otro_clon
+  otro_clon="$tmp/atras-otro-clon"
+  git clone -q "$atras/origin.git" "$otro_clon"
+  git -C "$otro_clon" config user.email t@t.com
+  git -C "$otro_clon" config user.name t
+  git -C "$otro_clon" commit -q --allow-empty -m "avanza sin que ws se entere"
+  git -C "$otro_clon" push -q origin main
+  check "avisar_atras_de_origin: detecta sin fetch previo del clon" \
+    'el workspace está 2 commit(s) detrás de origin/main' \
+    "$(WS="$atras/ws" WATCH_LOG="$atras/watch.log" avisar_atras_de_origin "/task-start DEVKIT-1" 2>&1 >/dev/null \
+        | grep -oE 'el workspace está 2 commit\(s\) detrás de origin/main')"
 
   # --estado con un watch.log fijo, un `ps` de mentira y una hora fija: un
   # caso por estado. Las fechas se cuentan hacia atrás desde AHORA.
