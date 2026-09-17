@@ -5,3 +5,4 @@
 # a la imagen ya fija, nunca como "latest". Una versión fija se instala tal
 # cual, sin consultar la API.
 "Anthropic.claude-code" = "latest"
+"GitHub.vscode-pull-request-github" = "0.128.0"
