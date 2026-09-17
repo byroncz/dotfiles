@@ -4,10 +4,11 @@
 #
 # Este archivo se copia a ~/.devkit/<proyecto>/ junto con:
 #   .env        variables de interpolación de compose (proyecto, versión, apt
-#                extra, dominios extra, extensiones del editor ya resueltas).
-#                new-project.sh la crea; devkit.sh la mantiene al día leyendo
-#                .devkit/devkit.toml del contenedor y vscode/extensions.toml
-#                del template: es una copia derivada, no se edita a mano.
+#                extra, dominios extra, extensiones del editor ya resueltas,
+#                zona horaria del Mac). new-project.sh la crea; devkit.sh la
+#                mantiene al día leyendo .devkit/devkit.toml del contenedor,
+#                vscode/extensions.toml del template y /etc/localtime del
+#                Mac: es una copia derivada, no se edita a mano.
 #   devkit.env  variables que entran al contenedor (las editas tú: repo,
 #                identidad git, remoto de Dropbox)
 #   template/   copia del template en la versión declarada (contexto de build)
@@ -30,6 +31,9 @@ services:
     environment:
       DEVKIT_PROJECT: ${DEVKIT_PROJECT}
       DEVKIT_VERSION: ${DEVKIT_VERSION}
+      # Zona horaria del Mac, detectada por devkit.sh (DEVKIT-64): así `date`
+      # y los logs quedan en su hora. Sin zona detectable: UTC.
+      TZ: ${DEVKIT_TZ:-UTC}
       HTTP_PROXY: http://proxy:8888
       HTTPS_PROXY: http://proxy:8888
       NO_PROXY: localhost,127.0.0.1,proxy

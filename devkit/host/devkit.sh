@@ -20,6 +20,10 @@
 set -eu
 ROOT="${DEVKIT_HOME:-$HOME/.devkit}"
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
+# Ruta de /etc/localtime, sustituible por devkit-test.sh: simula un Mac con
+# un symlink propio, sin tocar el /etc/localtime real de quien corre la
+# prueba (que puede no ser un Mac).
+LOCALTIME="${DEVKIT_LOCALTIME_FILE:-/etc/localtime}"
 cmd="${1:-}"; proj="${2:-}"
 usage() { sed -n '2,19p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
@@ -44,6 +48,29 @@ sync_toml_env() {
   domains="$(printf '%s\n' "$toml" | toml_list domains)"
   grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; } > "$dir/.env"
+  rm -f "$dir/.env.tmp"
+}
+# Zona horaria del Mac, para pasarla al contenedor como TZ (DEVKIT-64): así
+# `date`, los logs y watch.log quedan en la hora del Mac, comparable a ojo
+# con su pantalla, y solo lo que ya es de por sí UTC (GitHub, Notion) se
+# queda en UTC. `/etc/localtime` en macOS es un symlink a
+# `/var/db/timezone/zoneinfo/<Zona>`; sin symlink reconocible (Linux con
+# zona por `/etc/timezone`, o el enlace ausente) se avisa y se usa UTC.
+detectar_tz() {
+  link="$(readlink "$LOCALTIME" 2>/dev/null)" || link=""
+  case "$link" in
+    */zoneinfo/*) printf '%s' "${link#*/zoneinfo/}"; return 0 ;;
+  esac
+  echo "devkit: aviso: no se pudo detectar la zona horaria del Mac (/etc/localtime); se usa UTC" >&2
+  printf 'UTC'
+}
+# A diferencia de sync_toml_env, no depende del contenedor: se escribe en
+# up/recreate/rebuild/update, incluso en el primer `up`, antes de que el
+# contenedor exista.
+sync_tz_env() {
+  tz="$(detectar_tz)"
+  grep -v '^DEVKIT_TZ=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
+  { cat "$dir/.env.tmp"; printf 'DEVKIT_TZ=%s\n' "$tz"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
 }
 # El contexto de build es $dir/template, una copia del template que solo
@@ -324,14 +351,14 @@ awake() {
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
-  up)       sync_dev_template; resolve_extensions && compose up -d --build ;;
+  up)       sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
   awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
-  rebuild)  confirm && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
+  recreate) confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
+  rebuild)  confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
@@ -364,7 +391,7 @@ case "$cmd" in
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
-    resolve_extensions && sync_toml_env && compose up -d --build --force-recreate
+    resolve_extensions && sync_toml_env && sync_tz_env && compose up -d --build --force-recreate
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;

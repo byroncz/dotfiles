@@ -35,11 +35,14 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # --- Paquetes de sistema ---------------------------------------------------
 # ncurses-base trae la base terminfo (evita el fallo de borrado en el REPL de
 # python-build-standalone). ripgrep y fd-find van en la lista de permisos de
-# los agentes.
+# los agentes. tzdata trae la base de zonas horarias que usa TZ (DEVKIT-64,
+# la zona del Mac que pasa compose.yaml); sin ella, TZ con una zona con
+# nombre (no un offset fijo) no cambia nada y el contenedor se queda en UTC.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git gnupg unzip zip jq less procps \
       ncurses-base ncurses-term zsh ripgrep fd-find openssh-client socat \
+      tzdata \
       ${EXTRA_APT} \
  && ln -s /usr/bin/fdfind /usr/local/bin/fd \
  && rm -rf /var/lib/apt/lists/*
