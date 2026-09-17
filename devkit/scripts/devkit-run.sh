@@ -141,6 +141,13 @@ PS_BIN="${DEVKIT_PS_BIN:-ps}"
 # local que no llama al modelo (mide bajo 1.5 s aislado), pero un margen
 # generoso evita que --estado se cuelgue si la CLI no responde.
 CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
+# La lectura en sí tarda ~1.3 s: --estado nunca la espera en línea (H1 de
+# pr-review en DEVKIT-62). CUOTA_TTL es cuánto se muestra una lectura antes de
+# refrescarla en segundo plano; CUOTA_CACHE guarda la última lectura con su
+# hora, y CUOTA_LOCK evita que dos refrescos corran a la vez.
+CUOTA_TTL="${DEVKIT_CUOTA_TTL:-60}"
+CUOTA_CACHE="${DEVKIT_CUOTA_CACHE:-$RUN_DIR/cuota.cache}"
+CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -564,7 +571,12 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
 leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"
   local vacio salida texto linea_sesion linea_semana sesion_pct sesion_reset semana_pct semana_reset
   vacio=$(mktemp -d)
+  # --no-session-persistence (H2 de pr-review en DEVKIT-62): sin ella, cada
+  # lectura deja una sesión de Claude Code en ~/.claude/projects/, que con
+  # --estado --seguir son miles por hora y además inflan las cifras de
+  # sesiones/requests que el propio /usage reporta.
   salida=$(cd "$vacio" && timeout "$CUOTA_TIMEOUT" "$CLAUDE_BIN" -p "/usage" --output-format json \
+      --no-session-persistence \
       --strict-mcp-config --mcp-config '{"mcpServers":{}}' </dev/null 2>/dev/null)
   rm -rf "$vacio"
   texto=$(printf '%s' "$salida" | jq -r '.result // empty' 2>/dev/null)
@@ -579,19 +591,45 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
   printf '%s\t%s\t%s\t%s' "$sesion_pct" "$sesion_reset" "$semana_pct" "$semana_reset"
 }
 
+# Refresca CUOTA_CACHE en segundo plano, sin bloquear a quien la llamó (H1 de
+# pr-review en DEVKIT-62). El candado evita dos refrescos a la vez: si uno ya
+# está en curso, este no espera ni relanza, simplemente no hace nada.
+refrescar_cuota_bg() {
+  (
+    mkdir -p "$(dirname "$CUOTA_CACHE")" 2>/dev/null
+    exec 8>"$CUOTA_LOCK"
+    flock -n 8 || exit 0
+    local cuota
+    if cuota=$(leer_cuota); then
+      printf '%s\tok\t%s\n' "$(date +%s)" "$cuota" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
+    else
+      printf '%s\tfail\n' "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
+    fi
+  ) &
+}
+
 # Bloque `Consumo` de `--estado`: porcentaje de cuota en vivo, con la hora de
-# la lectura (DEVKIT-62). Si `leer_cuota` no puede leerlo (CLI vieja, sin red,
-# fallo transitorio), lo dice en vez de romper el resto de `--estado`.
+# la lectura (DEVKIT-62). `claude -p "/usage"` tarda ~1.3 s; en vez de
+# esperarlo en línea, se muestra la última lectura de CUOTA_CACHE (si hay) y
+# se refresca en segundo plano cuando vence CUOTA_TTL o cuando no hay ninguna
+# todavía. Así `--estado` nunca queda atado a esa lectura (H1 de pr-review).
 mostrar_consumo() {
-  local cuota sesion_pct sesion_reset semana_pct semana_reset
-  if ! cuota=$(leer_cuota); then
-    printf '\nConsumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora\n'
-    return 0
+  local ts estado sesion_pct sesion_reset semana_pct semana_reset edad
+  if [ -s "$CUOTA_CACHE" ]; then
+    IFS=$'\t' read -r ts estado sesion_pct sesion_reset semana_pct semana_reset <"$CUOTA_CACHE"
+    edad=$(( $(date +%s) - ts ))
+    if [ "$estado" = ok ]; then
+      printf '\nConsumo (cuota oficial, leída %s)\n' "$(date -d "@$ts" +%T 2>/dev/null || date -r "$ts" +%T)"
+      printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
+      printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
+    else
+      printf '\nConsumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora\n'
+    fi
+    [ "$edad" -lt "$CUOTA_TTL" ] || refrescar_cuota_bg
+  else
+    printf '\nConsumo: todavía no hay una lectura de la cuota oficial, refrescando en segundo plano\n'
+    refrescar_cuota_bg
   fi
-  IFS=$'\t' read -r sesion_pct sesion_reset semana_pct semana_reset <<<"$cuota"
-  printf '\nConsumo (cuota oficial, leída %s)\n' "$(date +%T)"
-  printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
-  printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
 }
 
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
@@ -1916,11 +1954,12 @@ FIN
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
-  # no se cae por eso, solo agrega el bloque Consumo con el aviso de falta de
-  # fuente. `head -1` porque, desde DEVKIT-62, mostrar_estado siempre agrega
-  # ese bloque al final, con o sin lanzamientos.
+  # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
+  # todavía no hay lectura en caché. `head -1` porque, desde DEVKIT-62,
+  # mostrar_estado siempre agrega ese bloque al final, con o sin lanzamientos.
   check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
-    "$(CLAUDE_BIN="$doble" WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
+    "$(CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio/cuota.lock" \
+        WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
@@ -1943,26 +1982,98 @@ FIN
   check "leer_cuota extrae el porcentaje de semana" "7" "$(printf '%s' "$resultado_cuota" | cut -f3)"
   check "leer_cuota extrae cuándo reinicia la semana" "Sep 22, 11pm (UTC)" \
     "$(printf '%s' "$resultado_cuota" | cut -f4)"
-  check "el bloque Consumo trae el encabezado con la cuota oficial" \
+
+  # H2 de pr-review: leer_cuota no debe dejar una sesión propia de Claude
+  # Code en ~/.claude/projects/ (con --seguir serían miles por hora).
+  local doble_cuota_args args_cuota
+  doble_cuota_args="$tmp/claude-usage-args"
+  cat >"$doble_cuota_args" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >"$DEVKIT_TEST_ARGS_FILE"
+cat <<'JSON'
+{"result":"Current session: 1% used · resets nunca\nCurrent week (all models): 1% used · resets nunca\n","total_cost_usd":0}
+JSON
+FIN
+  chmod +x "$doble_cuota_args"
+  args_cuota="$tmp/args-cuota.txt"
+  DEVKIT_TEST_ARGS_FILE="$args_cuota" CLAUDE_BIN="$doble_cuota_args" leer_cuota >/dev/null
+  check "leer_cuota pide --no-session-persistence a claude -p /usage" 1 \
+    "$(grep -c -- '--no-session-persistence' "$args_cuota")"
+
+  # H1 de pr-review: --estado no espera nunca la lectura de la cuota. Con
+  # caché fresca, muestra la lectura sin volver a invocar `claude` (CLAUDE_BIN
+  # apunta a un binario roto: si mostrar_consumo lo llamara, este caso caería).
+  local cuota_fresca
+  cuota_fresca="$tmp/cuota-fresca"
+  mkdir -p "$cuota_fresca"
+  printf '%s\tok\t42\tSep 17, 5:10pm (UTC)\t7\tSep 22, 11pm (UTC)\n' "$(date +%s)" >"$cuota_fresca/cuota.cache"
+  check "con caché fresca, el bloque Consumo trae el encabezado con la cuota oficial" \
     "Consumo (cuota oficial, leída" \
-    "$(CLAUDE_BIN="$doble_cuota" WATCH_LOG="$est/vacio.log" mostrar_estado \
-        | grep -oE '^Consumo \(cuota oficial, leída')"
-  check "el bloque Consumo trae sesión y semana" \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_fresca/cuota.cache" CUOTA_LOCK="$cuota_fresca/cuota.lock" \
+        WATCH_LOG="$est/vacio.log" mostrar_estado | grep -oE '^Consumo \(cuota oficial, leída')"
+  check "con caché fresca, el bloque Consumo trae sesión y semana sin invocar claude" \
     "sesión: 42% usada, reinicia Sep 17, 5:10pm (UTC)|semana: 7% usada, reinicia Sep 22, 11pm (UTC)" \
-    "$(CLAUDE_BIN="$doble_cuota" WATCH_LOG="$est/vacio.log" mostrar_estado \
-        | sed -n 's/^  //p' | paste -sd'|')"
-  check "sin fuente de cuota, --estado lo dice sin romper el resto" \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_fresca/cuota.cache" CUOTA_LOCK="$cuota_fresca/cuota.lock" \
+        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -n 's/^  //p' | paste -sd'|')"
+
+  # Con la caché en fail (una lectura anterior sin fuente), --estado lo dice
+  # sin romper el resto, tampoco esperando un nuevo intento.
+  local cuota_fail
+  cuota_fail="$tmp/cuota-fail"
+  mkdir -p "$cuota_fail"
+  printf '%s\tfail\n' "$(date +%s)" >"$cuota_fail/cuota.cache"
+  check "con la caché en fail, --estado avisa sin colgarse" \
     'Consumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora' \
-    "$(CLAUDE_BIN="$doble" WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
-  # Un `claude -p "/usage"` que no responde a tiempo no cuelga --estado: el
-  # `timeout` interno de leer_cuota corta y cae al mismo aviso de arriba.
-  local doble_cuota_lento
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_fail/cuota.cache" CUOTA_LOCK="$cuota_fail/cuota.lock" \
+        WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
+
+  # Caché vencida: se sigue mostrando la última lectura al instante, y se
+  # dispara un refresco en segundo plano que la reemplaza sin que --estado lo
+  # espere.
+  local doble_cuota_lento cuota_vieja intento
   doble_cuota_lento="$tmp/claude-usage-lento"
   printf '#!/usr/bin/env bash\nsleep 5\n' >"$doble_cuota_lento"
   chmod +x "$doble_cuota_lento"
-  check "un /usage que no responde no cuelga --estado" \
-    'Consumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora' \
-    "$(CLAUDE_BIN="$doble_cuota_lento" CUOTA_TIMEOUT=1 WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
+  cuota_vieja="$tmp/cuota-vieja"
+  mkdir -p "$cuota_vieja"
+  printf '%s\tok\t10\tya\t10\tya\n' "$(( $(date +%s) - 120 ))" >"$cuota_vieja/cuota.cache"
+  check "caché vencida: se muestra igual, sin esperar el refresco" \
+    "sesión: 10% usada, reinicia ya|semana: 10% usada, reinicia ya" \
+    "$(CLAUDE_BIN="$doble_cuota" CUOTA_TTL=60 CUOTA_CACHE="$cuota_vieja/cuota.cache" CUOTA_LOCK="$cuota_vieja/cuota.lock" \
+        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -n 's/^  //p' | paste -sd'|')"
+  local refrescada=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f2,3 "$cuota_vieja/cuota.cache" 2>/dev/null)" = "$(printf 'ok\t42')" ] && { refrescada=1; break; }
+    sleep 0.3
+  done
+  check "el refresco en segundo plano reemplaza la caché vencida" 1 "$refrescada"
+
+  # El criterio de la card: sin caché y con un `claude -p "/usage"` que no
+  # responde, --estado sigue respondiendo bajo un segundo, incluso con un
+  # watch.log de mil líneas.
+  local watch_mil cuota_lenta t0 t1 ms salida_mil
+  watch_mil="$tmp/watch-mil.log"
+  : >"$watch_mil"
+  for i in $(seq 1000); do printf '2026-09-16T11:00:00Z ruido de relleno %s\n' "$i"; done >>"$watch_mil"
+  cuota_lenta="$tmp/cuota-lenta"
+  salida_mil="$tmp/salida-mil.txt"
+  t0=$(date +%s%N)
+  CLAUDE_BIN="$doble_cuota_lento" CUOTA_TIMEOUT=1 \
+    CUOTA_CACHE="$cuota_lenta/cuota.cache" CUOTA_LOCK="$cuota_lenta/cuota.lock" \
+    WATCH_LOG="$watch_mil" mostrar_estado >"$salida_mil"
+  t1=$(date +%s%N)
+  ms=$(( (t1 - t0) / 1000000 ))
+  check "--estado responde bajo 1s con un /usage lento y un watch.log de mil líneas" si \
+    "$([ "$ms" -lt 1000 ] && echo si || echo "no (${ms}ms)")"
+  check "sin caché, --estado avisa que va a refrescar en segundo plano" \
+    "Consumo: todavía no hay una lectura de la cuota oficial, refrescando en segundo plano" \
+    "$(tail -1 "$salida_mil")"
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$cuota_lenta/cuota.cache" ] && break
+    sleep 0.3
+  done
+  check "el refresco en segundo plano respeta CUOTA_TIMEOUT y deja fail en la caché" fail \
+    "$(cut -f2 "$cuota_lenta/cuota.cache" 2>/dev/null)"
 
   # De punta a punta: un lanzamiento real deja su línea lanzando y --estado
   # lo muestra terminado. El origen esperado se calcula aquí y no se fija en

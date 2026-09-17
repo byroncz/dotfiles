@@ -688,10 +688,19 @@ json` devuelve en el campo `result` el mismo texto que `/usage` en una sesión
 interactiva, como comando local que no gasta turnos ni cuota
 (`duration_api_ms=0`). No hay un campo numérico estructurado, así que
 `--estado` lo extrae de ese texto con una expresión regular, aislado (sin
-MCP, directorio vacío) y con timeout, igual que la sonda de modelo de 5.3.
+MCP, directorio vacío) y con `--no-session-persistence` para no dejar una
+sesión propia en `~/.claude/projects/`, igual que la sonda de modelo de 5.3.
 Es una cifra oficial, no una estimación desde `watch.log`: si la CLI no
 responde o cambia ese texto, el bloque lo dice en vez de calcular algo
 distinto.
+
+Esa lectura tarda ~1.3 s, y la revisión de DEVKIT-62 midió que llamarla en
+línea rompía el criterio de que `--estado` responda bajo un segundo. Por eso
+`--estado` nunca la espera: lee `$RUN_DIR/cuota.cache` (última lectura, con su
+hora) y, si venció `DEVKIT_CUOTA_TTL` (60 s) o no hay ninguna todavía,
+dispara un refresco en segundo plano (candado en `$RUN_DIR/cuota.lock`, para
+no correr dos a la vez) y sigue sin esperarlo. La primera vez que corre, sin
+caché, el bloque dice que va a refrescar en vez de mostrar una cifra.
 
 ## 7. Modelo de datos en Notion
 

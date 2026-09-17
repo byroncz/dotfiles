@@ -24,9 +24,15 @@ versión que usa un proyecto y la destino.
 - `devkit-run --estado` (y `--estado --seguir`) agrega un bloque `Consumo`
   con el porcentaje de sesión y de semana, la hora en que reinician y la hora
   de la lectura: cifra oficial, no una estimación desde `watch.log`. Se lee
-  aislado (directorio vacío, sin MCP) y con timeout
+  aislado (directorio vacío, sin MCP), con `--no-session-persistence` (no
+  deja sesión propia en `~/.claude/projects/`) y con timeout
   (`DEVKIT_CUOTA_TIMEOUT`, 20 s); si la CLI no responde o cambia ese texto,
   el bloque lo dice en vez de romper el resto de `--estado`.
+- La lectura tarda ~1.3 s, y `--estado` nunca la espera en línea: la cachea en
+  `$RUN_DIR/cuota.cache` con su hora y la refresca en segundo plano cuando
+  vence `DEVKIT_CUOTA_TTL` (60 s) o no hay ninguna todavía (revisión de
+  pr-review: la primera versión sí esperaba, y `--estado` pasaba de 0.2 s a
+  1.4–2.2 s con un `watch.log` de mil líneas).
 - Cambios requeridos: ninguno, `devkit recreate` alcanza.
 
 ### `resolve_extensions` comprueba el motor del editor antes de construir (DEVKIT-73)

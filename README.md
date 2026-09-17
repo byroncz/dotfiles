@@ -509,10 +509,18 @@ card probó, con la CLI instalada, que `claude -p "/usage" --output-format
 json` sí expone ese texto como comando local (no gasta turnos ni cuota:
 `duration_api_ms=0`); `--estado` lo extrae del campo `result` con una
 expresión regular, porque no hay un campo numérico estructurado. Corre
-aislado (directorio vacío, sin MCP), igual que la sonda de modelos, con
+aislado (directorio vacío, sin MCP) con `--no-session-persistence` (no deja
+sesión propia en `~/.claude/projects/`), igual que la sonda de modelos, con
 `DEVKIT_CUOTA_TIMEOUT` (20 s) de margen; si la CLI no responde o cambia ese
 texto, el bloque dice `Consumo: no se pudo leer la cuota oficial con \`claude
 -p "/usage"\` ahora` en vez de romper el resto de `--estado`.
+
+Esa lectura tarda ~1.3 s, así que `--estado` nunca la espera en línea: lee la
+última de `$RUN_DIR/cuota.cache` y, si pasó `DEVKIT_CUOTA_TTL` (60 s) o no hay
+ninguna todavía, la refresca en segundo plano (sin bloquear) y sigue
+respondiendo bajo un segundo. La primera vez, sin caché, dice `Consumo:
+todavía no hay una lectura de la cuota oficial, refrescando en segundo
+plano`.
 
 `--estado` parte de las líneas `lanzando` de `watch.log`, no de los procesos:
 el 2026-09-16, `--agentes-vivos` respondió "sin agentes vivos" dos segundos
