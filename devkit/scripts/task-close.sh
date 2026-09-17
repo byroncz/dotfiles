@@ -28,6 +28,7 @@ DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
 TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$HERE/task-next.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
+WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
 # Lo que este script lance (task-document, la siguiente hija vía task-next.sh)
@@ -172,13 +173,30 @@ fi
 # --- Limpieza local --------------------------------------------------------
 # Solo con el workspace libre: el bucle de merges corre en paralelo con las
 # skills, y un `git switch` en medio de un task-start le movería la rama.
+# Antes de DEVKIT-63 esta sección callaba cuando no actuaba (candado ocupado,
+# árbol sucio, `git switch`/`pull` fallidos): el 2026-09-16, tras DEVKIT-58,
+# el candado ocupado por el `task-start` de la siguiente hija -el bucle de
+# merges corre aparte del principal a propósito, sin compartir `skill.lock`
+# (ver watch.sh)- hizo que `flock -n` fallara aquí sin dejar rastro, y el
+# workspace quedó en la rama recién mergeada. `no_limpia` deja el motivo en
+# watch.log en los tres casos en que no toca nada, para que ese silencio no
+# se repita.
+no_limpia() {  # no_limpia <motivo>
+  printf '%s task-close.sh %s no limpia el workspace: %s\n' "$(date -u +%FT%TZ)" "$clave" "$1" >> "$WATCH_LOG"
+}
 exec 9>"$LOCK"
 if flock -n 9; then
   rama=$(jq -r '.rama // ""' <<<"$card" | sed -E 's#^.*/tree/##')
   if [ -n "$rama" ] && git -C "$WS" show-ref --verify --quiet "refs/heads/$rama"; then
     if [ "$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null)" = "$rama" ]; then
       if [ -z "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
-        git -C "$WS" switch -q main && git -C "$WS" pull -q --ff-only >/dev/null 2>&1
+        if git -C "$WS" switch -q main && git -C "$WS" pull -q --ff-only >/dev/null 2>&1; then
+          say "workspace de vuelta en main"
+        else
+          no_limpia "git switch/pull a main falló"
+        fi
+      else
+        no_limpia "árbol sucio"
       fi
     fi
     # `-d` no sirve tras un squash merge: la rama no queda como ancestro de
@@ -191,6 +209,8 @@ if flock -n 9; then
     fi
   fi
   flock -u 9
+else
+  no_limpia "candado ocupado"
 fi
 exec 9>&-
 

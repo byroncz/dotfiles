@@ -137,6 +137,10 @@ ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
+# Marcador de alarmas vistas (DEVKIT-63): `--estado` guarda ahí cuántas líneas
+# de watch.log tenía al mostrarlas, y el segmento `!<k>` del prompt cuenta las
+# `ALARMA:` posteriores a esa marca en vez de recorrer todo el log cada vez.
+ALARMAS_VISTAS="${DEVKIT_ALARMAS_VISTAS:-$RUN_DIR/alarmas-vistas}"
 # Timeout de `leer_cuota` (DEVKIT-62): `claude -p "/usage"` es un comando
 # local que no llama al modelo (mide bajo 1.5 s aislado), pero un margen
 # generoso evita que --estado se cuelgue si la CLI no responde.
@@ -148,6 +152,13 @@ CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
 CUOTA_TTL="${DEVKIT_CUOTA_TTL:-60}"
 CUOTA_CACHE="${DEVKIT_CUOTA_CACHE:-$RUN_DIR/cuota.cache}"
 CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
+# Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
+# caché que Consumo, una sola llamada a Notion por refresco. BLOQUEOS_TTL es
+# más corto que CUOTA_TTL porque el Estado de una card cambia más seguido que
+# la cuota del plan.
+BLOQUEOS_TTL="${DEVKIT_BLOQUEOS_TTL:-30}"
+BLOQUEOS_CACHE="${DEVKIT_BLOQUEOS_CACHE:-$RUN_DIR/bloqueos.cache}"
+BLOQUEOS_LOCK="${DEVKIT_BLOQUEOS_LOCK:-$RUN_DIR/bloqueos.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -635,6 +646,47 @@ mostrar_consumo() {
   fi
 }
 
+# Código del proyecto activo, para `notion.sh bloqueos <código>`. Se relee
+# cada vez: un proyecto nuevo arranca con `project = "PROJ"` en
+# `.devkit/devkit.toml` y `project-init` lo corrige después, sin que haya que
+# reiniciar el contenedor (mismo criterio que `project_code` en watch.sh).
+project_code() {
+  [ -f "$WS/.devkit/devkit.toml" ] || return 0
+  sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1
+}
+
+# Refresca BLOQUEOS_CACHE en segundo plano, mismo patrón que
+# `refrescar_cuota_bg`: `notion.sh bloqueos` es una llamada a la red, y
+# `--estado` no la espera en línea.
+refrescar_bloqueos_bg() {
+  (
+    mkdir -p "$(dirname "$BLOQUEOS_CACHE")" 2>/dev/null
+    exec 8>"$BLOQUEOS_LOCK"
+    flock -n 8 || exit 0
+    local codigo bloqueos
+    codigo=$(project_code)
+    if [ -n "$codigo" ] && bloqueos=$("$NOTION_BIN" bloqueos "$codigo" 2>/dev/null); then
+      printf '%s\t%s\n' "$(date +%s)" "$bloqueos" >"$BLOQUEOS_CACHE.tmp" && mv -f "$BLOQUEOS_CACHE.tmp" "$BLOQUEOS_CACHE"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# "bloquea a: <Claves>" para una fila de `--estado` cuya Clave frena a otras
+# (ampliación de DEVKIT-63): vacío si no hay caché todavía, si no frena a
+# nadie, o si la Clave de la fila ni siquiera aparece (no está Lista para
+# merge). El refresco en segundo plano corre una sola vez por TTL, no por
+# fila: `mostrar_estado` llama esta función varias veces por vuelta y todas
+# comparten la misma caché.
+bloquea_a() {  # bloquea_a <Clave>
+  local ts bloqueos edad lista
+  [ -s "$BLOQUEOS_CACHE" ] || { refrescar_bloqueos_bg; return 0; }
+  IFS=$'\t' read -r ts bloqueos <"$BLOQUEOS_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$BLOQUEOS_TTL" ] || refrescar_bloqueos_bg
+  lista=$(jq -r --arg c "$1" '.[] | select(.clave == $c) | .bloquea_a | join(", ")' <<<"$bloqueos" 2>/dev/null)
+  [ -n "$lista" ] && printf 'bloquea a: %s' "$lista"
+}
+
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
 # watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
 # proceso con el bucle, así que no puede reusar su función.
@@ -829,6 +881,28 @@ esperar_arranque() {  # esperar_arranque <prompt>
   return 1
 }
 
+# Ampliación de DEVKIT-63: en modo dev, `devkit-run` lee `roles.toml` y este
+# mismo archivo del workspace en el instante del lanzamiento, no de la imagen.
+# Tras el merge de DEVKIT-61 (22:19 del 2026-09-16) el workspace seguía en el
+# `main` que había clonado el `recreate` anterior -la Limpieza local de
+# `task-close.sh` no lo actualizó, ver el comentario junto a `no_limpia` en
+# task-close.sh-, y un lanzamiento manual a las 22:50 salió sin la escalera de
+# modelos aunque `origin/main` ya la tenía. Este aviso no arregla eso: solo lo
+# hace observable antes de resolver el modelo, cuando todavía se puede parar.
+avisar_atras_de_origin() {  # avisar_atras_de_origin <prompt>
+  local atras
+  if ! timeout 5 git -C "$WS" fetch -q origin main 2>/dev/null; then
+    printf 'devkit-run: no se pudo comprobar si el workspace está detrás de origin/main (git fetch falló).\n' >&2
+    return 0
+  fi
+  atras=$(git -C "$WS" rev-list --count main..origin/main 2>/dev/null) || return 0
+  case "$atras" in ''|0) return 0 ;; esac
+  printf 'devkit-run: el workspace está %s commit(s) detrás de origin/main; puede estar lanzando con código viejo (git switch main && git pull --ff-only).\n' \
+    "$atras" >&2
+  printf '%s devkit-run "%s" ALARMA: workspace %s commit(s) detrás de origin/main; puede lanzar con código viejo\n' \
+    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$atras" >> "$WATCH_LOG" 2>/dev/null
+}
+
 # Confirma que el lanzamiento en segundo plano arrancó. Espera hasta
 # ARRANQUE_ESPERA segundos mirando al worker; si sigue vivo, arrancó (corre
 # su `claude -p` o espera el candado). Si murió, solo vale como arranque si
@@ -975,6 +1049,50 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   done 3< <(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
 }
 
+# Conteo rápido de "en curso" para el segmento `agentes:<a>` del prompt
+# (DEVKIT-63): mismo criterio que `estado_filas`, en una sola pasada del log
+# y con bash builtins en vez de un `grep`/`date`/`tail` por fila -con unos 15
+# lanzamientos, `estado_filas` completo mide sobre 90 ms (`starship timings`),
+# muy por encima del presupuesto de 50 ms por módulo del prompt. La única
+# diferencia a propósito: un `--sync` anidado del bucle (un `claude -p`
+# lanzado dentro de otro, caso raro) cuenta como "en curso" recién cuando
+# aparece en `ps` con la ruta de su log, no antes; `estado_filas` también lo
+# detecta por su patrón `--sync /<skill> <arg>` en la lista de procesos. Ver
+# docs/ARCHITECTURE.md 4.4.
+agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
+  local wlog=$1 ahora=$2 procesos lanz ids candado=libre en_curso=0
+  local -A done_ids
+  procesos=$("$PS_BIN" -eo args= 2>/dev/null)
+  lanz=$(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
+  [ -n "$lanz" ] || { echo 0; return 0; }
+  ids=$(printf '%s\n' "$lanz" | cut -f3 | paste -sd'|' -)
+  if [ -n "$ids" ]; then
+    while IFS= read -r d; do [ -n "$d" ] && done_ids[$d]=1; done < <(
+      grep -oE "($ids) terminado: |ALARMA: ($ids) terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[($ids)\]:|devkit-run \".*\" ALARMA: no arrancó.*\[($ids)\]\$" \
+        "$wlog" 2>/dev/null | grep -oE -- "$ids")
+  fi
+  if [ -e "$LOCK" ] && exec 7<"$LOCK"; then
+    flock -n 7 || candado=ocupado
+    exec 7<&-
+  fi
+  local ln ts id origen prompt logf t0 edad
+  while IFS=$'\t' read -r ln ts id origen prompt logf; do
+    [ -n "${done_ids[$id]:-}" ] && continue
+    if [[ $procesos == *"$logf"* ]]; then
+      en_curso=$((en_curso + 1)); continue
+    fi
+    t0=$(date -d "$ts" +%s 2>/dev/null || echo "$ahora")
+    edad=$((ahora - t0))
+    if [ "$edad" -lt "$ESTADO_GRACIA" ]; then
+      en_curso=$((en_curso + 1)); continue
+    fi
+    if [ "$candado" = ocupado ] && grep -qE "^[^ ]+ $id espera: " "$wlog" 2>/dev/null; then
+      en_curso=$((en_curso + 1))
+    fi
+  done <<<"$lanz"
+  echo "$en_curso"
+}
+
 # Rellena a <n> caracteres. `printf %-Ns` cuenta bytes, y "terminó" o
 # "no arrancó" desalinearían la tabla.
 rellenar() {  # rellenar <texto> <ancho>
@@ -990,12 +1108,21 @@ mostrar_estado() {
   else
     printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
       "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+    local frena
     while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+      frena=""
+      [ "$clave" = - ] || frena=$(bloquea_a "$clave")
+      if [ -n "$frena" ]; then
+        [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
+      fi
       printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
         "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
     done <<<"$filas"
   fi
   mostrar_consumo
+  mkdir -p "$(dirname "$ALARMAS_VISTAS")" 2>/dev/null
+  wc -l <"$WATCH_LOG" 2>/dev/null >"$ALARMAS_VISTAS.tmp" && mv -f "$ALARMAS_VISTAS.tmp" "$ALARMAS_VISTAS" \
+    || echo 0 >"$ALARMAS_VISTAS"
 }
 
 seguir_estado() {
@@ -1911,6 +2038,51 @@ FIN
   check "arranque fallido: imprime las últimas líneas del log" 'error: token OAuth ausente' \
     "$(printf '%s' "$salida" | grep -oE 'error: token OAuth ausente' | head -1)"
 
+  # `avisar_atras_de_origin` (DEVKIT-63): repo real, porque lo que mide es
+  # `git rev-list --count main..origin/main`, no algo que un doble simule.
+  local atras
+  atras="$tmp/atras"
+  mkdir -p "$atras"
+  git init -q --bare "$atras/origin.git"
+  git init -q "$atras/ws"
+  git -C "$atras/ws" config user.email t@t.com
+  git -C "$atras/ws" config user.name t
+  git -C "$atras/ws" commit -q --allow-empty -m base
+  git -C "$atras/ws" branch -M main
+  git -C "$atras/ws" remote add origin "$atras/origin.git"
+  git -C "$atras/ws" push -q origin main
+  check "avisar_atras_de_origin: al día no avisa" "" \
+    "$(WS="$atras/ws" WATCH_LOG="$atras/watch.log" avisar_atras_de_origin "/task-start DEVKIT-1" 2>&1)"
+  check "avisar_atras_de_origin: al día no deja ALARMA" 0 \
+    "$([ -f "$atras/watch.log" ] && grep -c 'ALARMA' "$atras/watch.log" || echo 0)"
+  # origin/main avanza con un commit que el clon todavía no conoce.
+  git -C "$atras/ws" commit -q --allow-empty -m adelante
+  git -C "$atras/ws" push -q origin main
+  git -C "$atras/ws" reset -q --hard HEAD^
+  git -C "$atras/ws" fetch -q origin
+  check "avisar_atras_de_origin: atrás lo dice por stderr" \
+    'el workspace está 1 commit(s) detrás de origin/main' \
+    "$(WS="$atras/ws" WATCH_LOG="$atras/watch.log" avisar_atras_de_origin "/task-start DEVKIT-1" 2>&1 >/dev/null \
+        | grep -oE 'el workspace está 1 commit\(s\) detrás de origin/main')"
+  check "avisar_atras_de_origin: atrás deja ALARMA en watch.log" \
+    'ALARMA: workspace 1 commit(s) detrás de origin/main' \
+    "$(grep -oE 'ALARMA: workspace 1 commit\(s\) detrás de origin/main' "$atras/watch.log" | head -1)"
+  # H1 del PR #53: el remoto avanza otra vez desde un segundo clon y `ws`
+  # nunca vuelve a hacer `git fetch` por su cuenta. Antes, la función
+  # comparaba contra la referencia `origin/main` que ya tenía guardada -la
+  # de la línea 2062, un commit atrás- y se quedaba corta.
+  local otro_clon
+  otro_clon="$tmp/atras-otro-clon"
+  git clone -q "$atras/origin.git" "$otro_clon"
+  git -C "$otro_clon" config user.email t@t.com
+  git -C "$otro_clon" config user.name t
+  git -C "$otro_clon" commit -q --allow-empty -m "avanza sin que ws se entere"
+  git -C "$otro_clon" push -q origin main
+  check "avisar_atras_de_origin: detecta sin fetch previo del clon" \
+    'el workspace está 2 commit(s) detrás de origin/main' \
+    "$(WS="$atras/ws" WATCH_LOG="$atras/watch.log" avisar_atras_de_origin "/task-start DEVKIT-1" 2>&1 >/dev/null \
+        | grep -oE 'el workspace está 2 commit\(s\) detrás de origin/main')"
+
   # --estado con un watch.log fijo, un `ps` de mentira y una hora fija: un
   # caso por estado. Las fechas se cuentan hacia atrás desde AHORA.
   local est ahora pslist
@@ -1956,6 +2128,10 @@ FIN
   check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
+  # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
+  # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
+  check "agentes_en_curso_rapido coincide con las filas en curso de estado_filas" 2 \
+    "$(PS_BIN="$pslist" LOCK="$est/skill.lock" agentes_en_curso_rapido "$est/watch.log" "$ahora")"
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
   # todavía no hay lectura en caché. `head -1` porque, desde DEVKIT-62,
@@ -1963,6 +2139,24 @@ FIN
   check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
     "$(CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio/cuota.lock" \
         WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
+
+  # Columna "bloquea a" (ampliación de la card): caché ya tibia, sin llamar a
+  # notion.sh en el propio check -el refresco es en segundo plano y no debe
+  # bloquear la lectura (H1 de pr-review, mismo criterio que Consumo).
+  local bloq
+  bloq="$tmp/bloqueos"
+  mkdir -p "$bloq"
+  printf '%s\t%s\n' "$(date +%s)" '[{"clave":"DEVKIT-57","bloquea_a":["DEVKIT-61","DEVKIT-99"]}]' \
+    >"$bloq/bloqueos.cache"
+  check "bloquea_a: card en Lista para merge lista a quién frena" "bloquea a: DEVKIT-61, DEVKIT-99" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" bloquea_a DEVKIT-57)"
+  check "bloquea_a: card que no frena a nadie, vacío" "" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" bloquea_a DEVKIT-999)"
+  check "--estado suma la columna a la fila que corresponde" "bloquea a: DEVKIT-61, DEVKIT-99" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" \
+        CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio2/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio2/cuota.lock" \
+        PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
+        WATCH_LOG="$est/watch.log" mostrar_estado | grep 'DEVKIT-57' | grep -oE 'bloquea a: DEVKIT-61, DEVKIT-99')"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
@@ -2229,6 +2423,13 @@ case "${1:-}" in
     mostrar_estado
     exit 0
     ;;
+  --agentes)
+    # Para el segmento `agentes:<a>` del prompt: `agentes_en_curso_rapido`,
+    # no `estado_filas` (ver el comentario junto a su definición). Tampoco
+    # toca la red: solo lee watch.log y `ps`.
+    agentes_en_curso_rapido "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}"
+    exit 0
+    ;;
   --seguir)
     seguir_estado
     ;;
@@ -2304,6 +2505,7 @@ prompt="/$skill $clave"
 # Antes de resolver el modelo: la sonda de frontera también necesita el
 # token que el arranque todavía no terminó de cargar.
 esperar_arranque "$prompt" || exit 69
+avisar_atras_de_origin "$prompt"
 mkdir -p "$RUN_DIR"
 n=1
 while [ -e "$RUN_DIR/$skill-$n.log" ]; do n=$((n + 1)); done

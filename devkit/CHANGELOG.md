@@ -14,6 +14,42 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### Prompt de una línea, y `task-close.sh` deja de callar al limpiar (DEVKIT-63)
+
+- `devkit/zsh/starship.toml` deja el preset de símbolos de texto plano por un
+  único módulo `custom` que corre `devkit/scripts/prompt-status.sh`:
+  `<proyecto>:<template> <rama> ±<cambios> ↑<commits> agentes:<a> !<alarmas>
+  >`, con "arrancando" mientras no existe `/run/devkit/ready`. Rama corta
+  (`feat/DEVKIT-57`, sin el slug) con color por prefijo. Sin red; medido bajo
+  50 ms por módulo con `starship timings` (ver `docs/ARCHITECTURE.md` 4.4
+  para el porqué de cada decisión: `when = "true"`, `shell` sin `-c`
+  explícito, `style = ""`).
+- `devkit-run --agentes`: el mismo conteo que las filas `en curso` de
+  `--estado`, en una sola pasada del log con bash puro en vez del fork por
+  fila de `estado_filas` (baja de ~90 ms a menos de 20 ms). `--estado` deja
+  además un marcador de qué tanto de `watch.log` ya se mostró, para que el
+  segmento `!<k>` del prompt cuente solo las `ALARMA:` nuevas.
+- `task-close.sh` diagnosticado: la "Limpieza local" tomaba el mismo
+  `skill.lock` que un `task-start` corriendo la siguiente hija, y con el
+  candado ocupado `flock -n` fallaba sin dejar rastro; así quedó el
+  workspace en una rama ya mergeada tras DEVKIT-58. Ahora ese caso, el árbol
+  sucio y un `git switch`/`pull` fallido dejan `task-close.sh <Clave> no
+  limpia el workspace: <motivo>` en `watch.log`. `devkit-run` también avisa
+  cuando el workspace queda detrás de `origin/main` al lanzar, antes de
+  resolver el modelo: hace `git fetch origin main` primero, porque sin ese
+  fetch la comparación usaba la referencia local vieja de `origin/main` y no
+  veía un avance reciente del remoto (hallazgo de `pr-review`, PR #53).
+- Ampliación de la card: `devkit-run --estado` suma "bloquea a: <Claves>" a
+  la fila de una card en `Lista para merge`, con las cards en `Lista` que la
+  tienen en `Depende de` (`notion.sh bloqueos`, una consulta por refresco,
+  cacheada 30 s). Agrupar la tabla por Épica de origen cuando hay más de una
+  Épica `En progreso` queda en DEVKIT-80.
+- `±n` cuenta ahora con `git status --porcelain --untracked-files=all`: antes
+  un directorio nuevo sin seguimiento con varios archivos salía como una sola
+  línea y `±n` los subcontaba (hallazgo de `pr-review`, PR #53).
+- Cambios requeridos: `devkit recreate` (el `starship.toml` nuevo entra por
+  imagen).
+
 ### `devkit-run --estado` muestra la cuota del plan en vivo (DEVKIT-62)
 
 - Compuerta antes de programar: con la CLI instalada (`claude --version`

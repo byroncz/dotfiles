@@ -17,6 +17,11 @@
 #                                             Padre), como lista JSON
 #   notion.sh criterios <page_id>             texto de la sección "Criterios
 #                                             de aceptación" de la página
+#   notion.sh bloqueos <código>               por cada card en Lista para
+#                                             merge del proyecto, las Claves
+#                                             en Lista que dependen de ella
+#                                             (columna "bloquea a" de
+#                                             `devkit-run --estado`, DEVKIT-63)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -261,6 +266,30 @@ cmd_hijas() {  # cmd_hijas <page_id>
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
+# Quién frena a quién (DEVKIT-63, ampliación de la card): una sola consulta
+# por refresco (el proyecto entero, Lista y Lista para merge juntas) para que
+# `devkit-run --estado` no pague una llamada a Notion por fila. El cruce
+# "Depende de" se hace acá, en jq, no con una consulta por card.
+cmd_bloqueos() {  # cmd_bloqueos <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {or: [{property: "Estado", select: {equals: "Lista para merge"}},
+                  {property: "Estado", select: {equals: "Lista"}}]}]}')") || return
+  jq -c --arg codigo "$codigo" '
+    def clave($n): "\($codigo)-\($n)";
+    (map({id, numero: .properties.ID.unique_id.number, estado: .properties.Estado.select.name,
+          depende: (.properties["Depende de"].relation // [] | map(.id))})) as $todas
+    | [ $todas[] | select(.estado == "Lista para merge") | . as $f
+        | {clave: clave($f.numero),
+           bloquea_a: [ $todas[] | select(.estado == "Lista" and ((.depende | index($f.id)) != null))
+                        | clave(.numero) ]}
+        | select(.bloquea_a | length > 0) ]
+  ' <<<"$filas"
+}
+
 # Texto de la sección "Criterios de aceptación": los bloques entre ese
 # encabezado y el siguiente encabezado, uno por línea. Puro sobre la lista de
 # bloques, para la autoprueba.
@@ -438,6 +467,20 @@ dos" "$(jq -r "$CRITERIOS" <<<"$bloques")"
   env "${entorno[@]}" DEVKIT_NOTION_TOKEN_FILE="$tmp/no-existe" bash "$HERE/notion.sh" pagina x >/dev/null 2>&1
   check "sin token: sale con 3 sin llamar a la API" 3 "$?"
 
+  # bloqueos: DEVKIT-62 (Lista para merge) frena a DEVKIT-63 (Lista, depende
+  # de ella). DEVKIT-70 depende de DEVKIT-61, que no está Lista para merge en
+  # este recorte: no cuenta. DEVKIT-99 no frena a nadie: no sale en la lista.
+  tarea() {  # tarea <id> <numero> <estado> <depende (ids separados por coma)>
+    jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" --arg dep "$4" \
+      '{id: $id, properties: {ID: {unique_id: {number: $n}}, Estado: {select: {name: $e}},
+        "Depende de": {relation: ($dep | split(",") | map(select(. != "") | {id: .}))}}}'
+  }
+  resp POST__databases_dbtareas_query "{\"results\":[$(tarea card-62 62 "Lista para merge" ""),\
+$(tarea card-63 63 Lista card-62),$(tarea card-70 70 Lista card-61),\
+$(tarea card-99 99 "Lista para merge" "")],\"has_more\":false}"
+  check "bloqueos: DEVKIT-62 frena a DEVKIT-63" '[{"clave":"DEVKIT-62","bloquea_a":["DEVKIT-63"]}]' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" bloqueos DEVKIT)"
+
   return $fail
 }
 
@@ -449,9 +492,10 @@ case "${1:-}" in
   documentacion) cmd_documentacion "${2:?page_id}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
+  bloqueos) cmd_bloqueos "${2:?código}" ;;
   --test) run_tests ;;
   *)
-    sed -n '9,20p' "$0" >&2
+    sed -n '9,25p' "$0" >&2
     exit 64
     ;;
 esac
