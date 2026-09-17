@@ -13,8 +13,10 @@ versión que usa un proyecto y la destino.
 ### Ajustes rápidos del editor y del shell (DEVKIT-66)
 
 - Alias `c` para `clear` en `zshrc`.
-- `"chat.disableAIFeatures": true` en los ajustes del editor: el chat
-  integrado de VS Code no aparece en la paleta ni en la barra lateral. La
+- `"chat.disableAIFeatures": true` en los ajustes del editor, con la
+  intención de apagar el chat integrado de VS Code. En esta build de
+  openvscode-server (1.109.5) el comando `Chat: Open Chat` sigue en la
+  paleta: limitación conocida, sin arreglo aquí (ver DEVKIT-71). La
   extensión Claude Code no cambia.
 - `devkit awake <proyecto>` en el Mac: `caffeinate -i docker wait
   devkit-<proyecto>` evita el reposo por inactividad mientras el contenedor
