@@ -1,0 +1,7 @@
+# Extensiones del editor (openvscode-server), una línea por extensión.
+# Formato: "<editor>.<nombre>" = "<versión>" o "latest".
+# "latest" se resuelve contra Open VSX al construir (devkit.sh,
+# resolve_extensions); la resolución queda en ~/.devkit/<proyecto>/ y se pasa
+# a la imagen ya fija, nunca como "latest". Una versión fija se instala tal
+# cual, sin consultar la API.
+"Anthropic.claude-code" = "latest"

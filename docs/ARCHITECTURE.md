@@ -202,7 +202,7 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 |---|---|
 | Terminal en el Mac | Terminal.app, macOS 26. Corre solo el comando `devkit`: el trabajo real pasa por el editor en el navegador o por `devkit shell` |
 | Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
-| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensión Claude Code instalada desde Open VSX, `ruff` y `basedpyright` instalados con `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. `chat.disableAIFeatures` en los ajustes desde DEVKIT-66, con la intención de apagar el chat integrado de VS Code porque el agente del devkit es Claude Code y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. En esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta: limitación conocida, sin arreglo. Claude Code es una extensión aparte y no depende de él |
+| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensiones versionadas en `devkit/vscode/extensions.toml` (nace con `Anthropic.claude-code`), resueltas contra Open VSX al construir (sección 9) e instaladas por el `Dockerfile` con `ruff` y `basedpyright` desde `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. `chat.disableAIFeatures` en los ajustes desde DEVKIT-66, con la intención de apagar el chat integrado de VS Code porque el agente del devkit es Claude Code y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. En esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta: limitación conocida, sin arreglo. Claude Code es una extensión aparte y no depende de él. `extensions.autoUpdate` y `extensions.autoCheckUpdates` en `false`: una actualización en caliente muere en cada `recreate` (el directorio de extensiones no está en un volumen) y rompería la reproducibilidad de la imagen, que es la que fija la versión exacta que corre |
 
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
@@ -851,6 +851,38 @@ entre el `Dockerfile` y el arranque.
 
 Fuera de modo dev nada de esto corre: el contexto sigue siendo la copia de la
 etiqueta, que es lo que hace reproducible una versión.
+
+### 9.2 Versionado de extensiones del editor
+
+Hasta DEVKIT-67 la única extensión (Claude Code) iba fija en un `ARG` del
+`Dockerfile`; actualizarla era editarlo a mano. `devkit/vscode/extensions.toml`
+la reemplaza como fuente: una línea por extensión, con versión fija o
+`"latest"`.
+
+- `devkit up`, `recreate`, `rebuild` y `update` (`resolve_extensions` en
+  `devkit.sh`) resuelven cada `latest` en el Mac contra
+  `https://open-vsx.org/api/<ns>/<ext>/latest` (campo `version`) antes de
+  construir, después de que el contexto de build ya tiene la versión correcta
+  de `extensions.toml` (tras `sync_dev_template` en modo dev, o tras bajar la
+  etiqueta destino en `update`). Una versión fija no consulta la API.
+- La resolución queda en `~/.devkit/<proyecto>/extensions.lock` (una entrada
+  `ns.ext=versión` por línea) y se pasa a Compose como `DEVKIT_EXTENSIONS`, el
+  mismo mecanismo que `DEVKIT_EXTRA_APT`: el `Dockerfile` la recibe como
+  `ARG EXTENSIONS` con versiones exactas, nunca `"latest"`, así que dos builds
+  con la misma resolución cachean la capa de extensiones y una resolución
+  distinta la invalida, como cualquier otro `ARG`.
+- Sin red en el Mac, se usa la última resolución guardada en `extensions.lock`
+  y se avisa; sin red y sin resolución previa, el comando se detiene con un
+  mensaje claro en vez de construir a ciegas o con una versión implícita.
+- El `Dockerfile` prueba primero el paquete de la plataforma del build
+  (`linux-x64` o `linux-arm64`, que Open VSX no publica para todas las
+  extensiones) y si no existe instala el universal, en un solo paso para
+  todas las extensiones del argumento.
+- La lista de extensiones y versiones del README y de la entrada "Stack y
+  comandos del devkit" en Notion sale de `extensions.toml` con
+  `devkit/scripts/gen-stack.sh`, que también verifica el README (`--check`):
+  un `"latest"` se lista tal cual, sin resolver, porque esa resolución solo
+  existe en el Mac de quien construye, no en el repo.
 
 ## 10. Mínimo viable
 
