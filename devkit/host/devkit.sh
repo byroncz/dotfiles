@@ -108,14 +108,16 @@ engine_check() {
     }'
 }
 # ultima_compatible <ns> <ext> <archivo-de-/latest>: recorre "allVersions" del
-# JSON de /latest (solo versiones estables X.Y.Z, de la más nueva a la más
-# vieja, en el mismo orden en que Open VSX ya las entrega) y consulta cada una
-# hasta encontrar la primera cuyo engines.vscode admite $editor. Imprime
-# "versión motor"; sale en 1 si ninguna calza o si Open VSX no responde.
+# JSON de /latest (solo versiones estables X.Y.Z, ordenadas aquí mismo de la
+# más nueva a la más vieja, sin depender del orden en que las entregue Open
+# VSX) y consulta cada una hasta encontrar la primera cuyo engines.vscode
+# admite $editor. Imprime "versión motor"; sale en 1 si ninguna calza o si
+# Open VSX no responde.
 ultima_compatible() {
   ns="$1"; ext="$2"; archivo="$3"
   versiones="$(grep -o '"[0-9][0-9.]*"[[:space:]]*:[[:space:]]*"https://open-vsx\.org/api/[^"]*"' "$archivo" \
-    | sed -E 's/^"([0-9.]+)".*/\1/' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$')"
+    | sed -E 's/^"([0-9.]+)".*/\1/' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -t. -k1,1nr -k2,2nr -k3,3nr)"
   for v in $versiones; do
     resp="$(mktemp)"
     http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/$v" "$resp")"
