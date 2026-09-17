@@ -134,6 +134,46 @@ ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 PS_BIN="${DEVKIT_PS_BIN:-ps}"
+# Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
+# conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
+# piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
+# contra dobles de `claude` sin `mcp list`; las pruebas de esta comprobación
+# la reactivan a mano.
+NOTION_CHECK="${DEVKIT_NOTION_CHECK:-1}"
+# H4 de pr-review (DEVKIT-65): un `task-start` lanzado por `epic-plan` -que a
+# su vez corre dentro de otro `claude -p`- terminó tres veces montando el
+# conector de Notion con otro nombre de servidor y sin cobertura de
+# `--allowedTools` (incidentes reales del 2026-09-16). La hipótesis de que la
+# causa son las marcas de sesión anidada que el hijo hereda del padre
+# (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...) no quedó confirmada: en este
+# contenedor, `claude mcp list` con esas marcas puestas a mano y con la lista
+# blanca de abajo dio el mismo resultado (comentario de la card, 2026-09-17
+# 04:11; repetido en la revisión de pr-review sobre el commit ef9a3fe). Como
+# medida defensiva de todas formas, `run_claude` copia al hijo solo las
+# variables que de verdad hace falta -identidad de Notion/GitHub, red de
+# salida (compose.yaml la fija a nivel de contenedor, ver AGENTS.md) y hora
+# local- y descarta todo lo demás con esta lista blanca en vez de con una
+# lista negra de marcas de sesión anidada: una CLI nueva puede sumar una
+# marca que hoy no conocemos, y una lista negra la dejaría pasar igual.
+# H2 de pr-review (DEVKIT-65): revisado el bloque `ENV` del Dockerfile y el
+# `environment:` de `compose.yaml` completos. Suman `DISABLE_AUTOUPDATER=1`
+# (Dockerfile: sin ella la CLI intenta actualizarse sola, sin salida a
+# internet desde `dev`) y `MCP_OAUTH_CALLBACK_PORT=54545` (compose.yaml: el
+# plugin de Notion vuelve a este puerto fijo tras el OAuth; sin la variable
+# usa uno al azar que el proxy no espera). `TERM` y `UV_PYTHON_INSTALL_DIR`/
+# `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` quedan fuera a propósito: `claude -p` no
+# es interactivo y no consulta `TERM`, y los tres `UV_*` del Dockerfile ya
+# apuntan a rutas bajo `$HOME`, que sí viaja en la lista; sin la variable,
+# `uv` cae al mismo valor por defecto. `DEVKIT_PROJECT` y `DEVKIT_VERSION`
+# (compose.yaml) también quedan fuera: ninguna skill ni este script las lee.
+ENV_HEREDABLE="HOME PATH LANG LC_ALL TZ CLAUDE_CONFIG_DIR CLAUDE_CODE_OAUTH_TOKEN GH_TOKEN HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy DISABLE_AUTOUPDATER MCP_OAUTH_CALLBACK_PORT"
+# En 0, `run_claude` vuelve al `claude -p` con el entorno completo heredado
+# (el comportamiento previo a DEVKIT-65): lo usa la autoprueba de otro
+# archivo (`watch-test.sh`) cuyos dobles de `claude` ya simulan estado propio
+# con variables sueltas (contador de llamadas, `FIX_DIR`, ...) fuera de
+# ENV_HEREDABLE, y no le corresponde conocer esta lista. La comprobación de
+# la limpieza vive en la autoprueba de este archivo.
+ENV_LIMPIO="${DEVKIT_ENV_LIMPIO:-1}"
 
 # Última coincidencia de "<clave>.<campo> = valor" en roles.toml, sin
 # comillas. La clave puede ser un rol (`revision`, `implementacion`) o el
@@ -429,13 +469,59 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
 # la entrada de Documentación, para decidir con evidencia qué modelo alcanza
 # para cada papel. Se leen de aquí y no de roles.toml porque solo este punto
 # sabe qué se lanzó de verdad.
+#
+# Líneas "NOMBRE=valor" de ENV_HEREDABLE presentes en el entorno de quien
+# llama, para copiarlas al `claude -p` hijo con `env -i` (DEVKIT-65). Función
+# aparte para poder probarla sin lanzar nada de verdad.
+entorno_hijo() {
+  local nombre
+  for nombre in $ENV_HEREDABLE; do
+    [ -z "${!nombre:-}" ] || printf '%s=%s\n' "$nombre" "${!nombre}"
+  done
+}
+
+# Aviso de DEVKIT-65: sin Notion conectado en el entorno del `claude -p`
+# hijo, todas las skills piden autorizar el conector y no avanzan. Mejor
+# avisarlo antes que dejarlo fallar a medias.
+alarma_sin_notion() {  # alarma_sin_notion <prompt>
+  printf 'devkit-run: el servidor de Notion no está conectado en el entorno del lanzamiento ("%s mcp list"); no se lanza "%s".\n' \
+    "$CLAUDE_BIN" "$1" >&2
+  printf '%s devkit-run "%s" ALARMA: sin Notion conectado (claude mcp list); no se lanza\n' \
+    "$(date -u +%FT%TZ)" "$1" >> "$WATCH_LOG" 2>/dev/null
+}
+
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
-  DEVKIT_ORIGEN="" DEVKIT_MODELO_FORZADO="" DEVKIT_RONDA="" \
-  DEVKIT_MODEL="$2" DEVKIT_EFFORT="$3" \
-  DEVKIT_SCRIPTS_DIR="$HERE" DEVKIT_RUN_DIR="$RUN_DIR" \
-  "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
+  local -a extra=(
+    "DEVKIT_ORIGEN=" "DEVKIT_MODELO_FORZADO=" "DEVKIT_RONDA="
+    "DEVKIT_MODEL=$2" "DEVKIT_EFFORT=$3"
+    "DEVKIT_SCRIPTS_DIR=$HERE" "DEVKIT_RUN_DIR=$RUN_DIR"
+  )
+  [ -z "${DEVKIT_LOCK_HELD:-}" ] || extra+=("DEVKIT_LOCK_HELD=$DEVKIT_LOCK_HELD")
+  [ -z "${DEVKIT_LANZADOR:-}" ] || extra+=("DEVKIT_LANZADOR=$DEVKIT_LANZADOR")
+
+  local -a lanzador
+  if [ "$ENV_LIMPIO" = 0 ]; then
+    lanzador=(env "${extra[@]}")
+  else
+    local -a entorno
+    mapfile -t entorno < <(entorno_hijo)
+    entorno+=("${extra[@]}")
+    lanzador=(env -i "${entorno[@]}")
+  fi
+
+  # La sonda usa el mismo entorno que el lanzamiento real: comprobar con el
+  # entorno de quien llama (con marcas de sesión anidada de sobra) daría un
+  # falso "no conectado" justo en el caso que la lista blanca de arriba
+  # arregla.
+  if [ "$NOTION_CHECK" != 0 ] \
+     && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
+    alarma_sin_notion "$1"
+    return 67
+  fi
+  "${lanzador[@]}" "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
-    --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" "mcp__plugin_Notion_notion"
+    --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
+      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion"
 }
 
 # Línea de costo/tokens/turnos/modelo/esfuerzo de un log ya terminado. La
@@ -480,14 +566,34 @@ watch_long_running() {  # watch_long_running <prompt> <pid>
 # bloqueo es `task-block.sh`, bash contra la API de Notion: no gasta modelo
 # y no puede, a su vez, terminar en pregunta, así que ya no hace falta
 # excluir a nadie para evitar un bucle.
-forzar_task_block() {  # forzar_task_block <prompt> <logf>
-  local prompt=$1 logf=$2 skill clave motivo
+forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo>
+  local prompt=$1 logf=$2 motivo skill clave
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   [ -n "$clave" ] || return 0
-  motivo="devkit-run: $skill terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44); ver $logf"
+  motivo="devkit-run: $skill $3; ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
+}
+
+# ¿El `claude -p` terminó sin acceso a Notion? (DEVKIT-65). Solo bloquea la
+# card el campo estructurado `permission_denials` del evento `result`, cuando
+# lista una herramienta de Notion que la CLI negó: es un hecho, no una frase.
+notion_denegado() {  # notion_denegado <logf>
+  tail -1 "$1" 2>/dev/null \
+    | jq -e '[.permission_denials[]?.tool_name // ""] | map(test("mcp__.*notion"; "i")) | any' \
+      >/dev/null 2>&1
+}
+
+# Respaldo por si la CLI no anota la negación: la frase del agente. Solo deja
+# una ALARMA, no bloquea (H13 de pr-review): un `result` que resume este mismo
+# mecanismo, como `task-fix-46-ce49aa6.log`, que terminó bien, dice las mismas
+# frases, y esa clase de falso positivo no se agota sumando negativos.
+# H14: sobre el `result` crudo, sin quitar comillas ni backticks, porque el
+# agente suele escribir entre backticks el nombre del plugin o la herramienta.
+result_sin_notion() {  # result_sin_notion <logf>
+  tail -1 "$1" 2>/dev/null | jq -r '.result // ""' 2>/dev/null | tr '\n' ' ' | grep -qiE \
+    'notion[^.]{0,80}(no tiene permiso|no tengo acceso|sin acceso|no (tengo|estoy|están?) autorizad[oa]s?)|(no tiene permiso|no tengo acceso|sin acceso)[^.]{0,40}notion|(autoriza[rd][a-z]*|autorizad[oa]s?)[^.]{0,20}mcp__[a-z_]*notion'
 }
 
 # Modelo vacío: la CLI rechaza `--model ""` con un 400 en el primer turno y el
@@ -671,8 +777,14 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
       printf '%s\n' "$alarmas" | sed 's/^/  /'
     fi
   } >&2
-  printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
-    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+  # H5 de pr-review (DEVKIT-65): sin Notion conectada, `alarma_sin_notion` (en
+  # `run_claude`) ya dejó la alarma específica del caso; sin este `if`, esto
+  # sumaba una segunda "ALARMA: no arrancó" genérica y menos precisa por el
+  # mismo evento (rc=67, candado ya liberado).
+  if ! grep -qE "falló \(rc=67\) \[$id\]:" "$WATCH_LOG" 2>/dev/null; then
+    printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
+      "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+  fi
   return 1
 }
 
@@ -813,6 +925,12 @@ run_tests() {
       fail=1
     fi
   }
+
+  # Los dobles de `claude` de esta autoprueba no entienden `mcp list`
+  # (DEVKIT-65): sin apagar la comprobación aquí, cada lanzamiento de abajo
+  # la vería como "sin Notion" y no llegaría a correr. Los casos que sí
+  # prueban la comprobación la reactivan a mano con DEVKIT_NOTION_CHECK=1.
+  export DEVKIT_NOTION_CHECK=0
 
   check "rol de pr-review" revision "$(role_of '/pr-review 31')"
   check "rol de epic-plan" revision "$(role_of '/epic-plan DEVKIT-1')"
@@ -1312,6 +1430,8 @@ FIN
     "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
   check "task-block.sh recibe la Clave como primer argumento" 'DEVKIT-3' \
     "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+  check "el motivo de la pregunta abierta la nombra" 'pregunta abierta' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'pregunta abierta|sin acceso a Notion' | head -1)"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
   # bash, en primer plano y con los argumentos tal cual (DEVKIT-55).
@@ -1403,6 +1523,174 @@ FIN
     "$(DEVKIT_MODELO_FORZADO=modelo-forzado DEVKIT_CLAUDE_BIN="$espejo_modelo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
        DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-modelo" \
        bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
+
+  # H1 de pr-review (DEVKIT-65): DEVKIT_LANZADOR=watch, que watch.sh fija al
+  # llamar a --sync para que task-fix sepa que lo lanzó el bucle y no firme
+  # manual=1, debe llegar al `claude -p` hijo pese a ENV_LIMPIO=1 y su lista
+  # blanca de `env -i` (no está en ENV_HEREDABLE: la copia run_claude aparte).
+  local espejo_lanzador
+  espejo_lanzador="$tmp/claude-espejo-lanzador"
+  cat >"$espejo_lanzador" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"%s","total_cost_usd":0,"num_turns":1}\n' "${DEVKIT_LANZADOR:-vacío}"
+FIN
+  chmod +x "$espejo_lanzador"
+  check "--sync con DEVKIT_LANZADOR=watch lo pasa al claude -p pese a env -i" '{"result":"watch","total_cost_usd":0,"num_turns":1}' \
+    "$(DEVKIT_LANZADOR=watch DEVKIT_ENV_LIMPIO=1 DEVKIT_CLAUDE_BIN="$espejo_lanzador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-lanzador" \
+       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
+
+  # DEVKIT-65: hipótesis no confirmada (ver el comentario de ENV_HEREDABLE
+  # más arriba, H4 de pr-review) de que un `claude -p` lanzado por otro
+  # (`epic-plan` corriendo dentro de un `claude -p`) hereda del padre las
+  # marcas de sesión anidada (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...), que le
+  # cambiarían a la CLI hija el nombre con el que monta el conector de Notion
+  # y romperían `--allowedTools`. Confirmada o no, `run_claude` arranca con
+  # `env -i` y la lista blanca de ENV_HEREDABLE como medida defensiva: aunque
+  # el padre las meta, no llegan.
+  local espejo_anidado
+  espejo_anidado="$tmp/claude-espejo-anidado"
+  cat >"$espejo_anidado" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"CLAUDECODE=%s ENTRYPOINT=%s","total_cost_usd":0,"num_turns":1}\n' \
+  "${CLAUDECODE:-ausente}" "${CLAUDE_CODE_ENTRYPOINT:-ausente}"
+FIN
+  chmod +x "$espejo_anidado"
+  CLAUDECODE=1 CLAUDE_CODE_ENTRYPOINT=sdk-cli CLAUDE_CODE_CHILD_SESSION=1 \
+    DEVKIT_CLAUDE_BIN="$espejo_anidado" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-anidado.log" modelo-x high 40 >/dev/null 2>&1
+  check "el claude -p hijo no hereda las marcas de sesión anidada del padre" 'CLAUDECODE=ausente ENTRYPOINT=ausente' \
+    "$(jq -r .result "$tmp/run/espejo-anidado.log" 2>/dev/null)"
+
+  # Ampliación de DEVKIT-65: `--allowedTools` trae los dos nombres con los
+  # que la CLI puede montar el conector de Notion (el de la shell/bash y el
+  # visto dentro de un agente anidado), por si vuelve a cambiar con una
+  # versión de la CLI.
+  local espejo_argv
+  espejo_argv="$tmp/claude-espejo-argv"
+  cat >"$espejo_argv" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*"
+FIN
+  chmod +x "$espejo_argv"
+  DEVKIT_CLAUDE_BIN="$espejo_argv" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/espejo-argv.log" modelo-x high 40 >/dev/null 2>&1
+  check "--allowedTools trae los dos nombres del conector de Notion" 2 \
+    "$(grep -oE 'mcp__plugin_Notion_notion|mcp__claude_ai_Notion' "$tmp/run/espejo-argv.log" | sort -u | wc -l | tr -d ' ')"
+
+  # DEVKIT-65: antes de lanzar de verdad, `run_claude` prueba con
+  # `claude mcp list` que Notion está conectada en el entorno del hijo (el
+  # mismo que va a usar, no el de quien llama). Conectada, todo sigue igual.
+  local notion_ok
+  notion_ok="$tmp/claude-notion-ok"
+  cat >"$notion_ok" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1 $2" = "mcp list" ]; then
+  printf 'plugin:Notion:notion: https://mcp.notion.com/mcp (HTTP) - Connected\n'
+  exit 0
+fi
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$notion_ok"
+  DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$notion_ok" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/notion-ok.log" modelo-x high 40 >/dev/null 2>&1
+  check "Notion conectada: el lanzamiento sigue normal" 'listo' \
+    "$(jq -r .result "$tmp/run/notion-ok.log" 2>/dev/null)"
+
+  # Sin Notion conectada (un doble que no entiende `mcp list` se ve igual que
+  # un servidor caído), no corre el `claude -p` real y queda la alarma en vez
+  # de gastar turnos pidiendo autorizar el conector.
+  : >"$tmp/run/watch.log"
+  DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-9' "$tmp/run/sin-notion.log" modelo-x high 40 >/dev/null 2>&1
+  check "sin Notion conectada no corre el claude -p real" "" \
+    "$(jq -r .result "$tmp/run/sin-notion.log" 2>/dev/null)"
+  check "sin Notion conectada deja la alarma en watch.log" 'ALARMA: sin Notion conectado' \
+    "$(grep -oE 'ALARMA: sin Notion conectado' "$tmp/run/watch.log" | head -1)"
+  # H5 de pr-review (DEVKIT-65): una sola ALARMA por el evento, no la
+  # genérica "terminó con error (rc=67)" de encima.
+  check "sin Notion conectada no repite la alarma genérica de error" 0 \
+    "$(grep -c 'ALARMA: terminó con error' "$tmp/run/watch.log")"
+
+  # Notion conectada al probar, pero el final del `claude -p` dice lo
+  # contrario (DEVKIT-65). H13 de pr-review: solo `permission_denials` con una
+  # herramienta de Notion bloquea la card; la frase del agente deja una ALARMA
+  # y nada más. `--worker` corre sincrónico, así la prueba no depende de
+  # esperas. Imprime "<bloquea si|no> <cuántas ALARMA de texto>".
+  caso_notion() {  # caso_notion <nombre de $tmp/result-<nombre>.json>
+    local doble_real="$tmp/claude-result-$1"
+    cat >"$doble_real" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1 $2" = "mcp list" ]; then
+  printf 'plugin:Notion:notion: https://mcp.notion.com/mcp (HTTP) - Connected\n'
+  exit 0
+fi
+cat "${0/claude-result-/result-}.json"
+FIN
+    chmod +x "$doble_real"
+    rm -f "$tmp/bloqueo.args"
+    : >"$tmp/run/watch.log"
+    DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$doble_real" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+      DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+      bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-9' "$tmp/run/notion-$1.log" modelo-x high 40 >/dev/null 2>&1
+    printf '%s %s' "$([ -e "$tmp/bloqueo.args" ] && echo si || echo no)" \
+      "$(grep -c 'ALARMA: el resultado describe falta de acceso a Notion' "$tmp/run/watch.log")"
+  }
+
+  # Un `result` con una herramienta de Notion en `permission_denials` bloquea,
+  # con su propio motivo (H11), aunque el texto no diga nada.
+  cat >"$tmp/result-permission-denials.json" <<'FIN'
+{"result":"card sin cambios","permission_denials":[{"tool_name":"mcp__claude_ai_Notion__notion-fetch","tool_use_id":"x","tool_input":{}}],"total_cost_usd":0.01,"num_turns":2}
+FIN
+  check "permission_denials con mcp__claude_ai_Notion__notion-fetch bloquea la card sin ALARMA de texto" "si 0" \
+    "$(caso_notion permission-denials)"
+  check "el bloqueo por permission_denials deja su ALARMA en watch.log" 'ALARMA: terminó sin acceso a Notion' \
+    "$(grep -oE 'ALARMA: terminó sin acceso a Notion' "$tmp/run/watch.log" | head -1)"
+  check "el bloqueo por permission_denials es de DEVKIT-9" 'DEVKIT-9' \
+    "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+  check "el motivo del bloqueo dice sin acceso a Notion, no pregunta abierta" 'sin acceso a Notion|' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'sin acceso a Notion|pregunta abierta' | tr '\n' '|')"
+
+  # Las frases con las que la card describe los incidentes: ALARMA, sin
+  # bloquear (H9 y H13).
+  printf '%s\n' '{"result":"no tengo acceso a Notion en esta sesión"}' >"$tmp/result-no-tengo-acceso.json"
+  printf '%s\n' '{"result":"el plugin de Notion no tiene permiso en esta sesión headless"}' >"$tmp/result-sin-permiso.json"
+  printf '%s\n' '{"result":"pidió autorizar mcp__claude_ai_Notion__* en permissions.allow"}' >"$tmp/result-otro-nombre.json"
+  # H14: las mismas frases como las escribe el agente, con backticks,
+  # comillas y otras conjugaciones de "autorizar".
+  printf '%s\n' '{"result":"Pedí autorizar `mcp__claude_ai_Notion__*` en `permissions.allow`"}' >"$tmp/result-autorizar-backticks.json"
+  printf '%s\n' '{"result":"El plugin `Notion` no tiene permiso en esta sesión headless"}' >"$tmp/result-plugin-backticks.json"
+  printf '%s\n' '{"result":"No pude leer la card: \"El plugin de Notion no tiene permiso en esta sesión headless\""}' >"$tmp/result-entre-comillas.json"
+  printf '%s\n' '{"result":"Las herramientas mcp__claude_ai_Notion__* no están autorizadas"}' >"$tmp/result-no-estan-autorizadas.json"
+  local caso_texto
+  for caso_texto in no-tengo-acceso sin-permiso otro-nombre autorizar-backticks plugin-backticks \
+    entre-comillas no-estan-autorizadas; do
+    check "el result $caso_texto deja ALARMA y no bloquea la card" "no 1" "$(caso_notion "$caso_texto")"
+  done
+
+  # H6: un `result` que solo cita un comando bloqueado por pr-guard, sin
+  # mencionar Notion, ni bloquea ni alarma.
+  printf '%s\n' '{"result":"el comando gh pr merge no autorizado por pr-guard; card en Revisión automática"}' \
+    >"$tmp/result-pr-guard.json"
+  check "un comando no autorizado por pr-guard no se confunde con sin acceso a Notion" "no 0" \
+    "$(caso_notion pr-guard)"
+
+  # H10 y H13: `result` reales de ejecuciones que terminaron bien y describen
+  # este mismo mecanismo. Pueden alarmar; nunca bloquean la card.
+  cat >"$tmp/result-pr-review-46-7fdb66e.json" <<'FIN'
+{"result": "PR 46, veredicto **CAMBIOS**, 3 hallazgos (1 media, 2 baja). Informe publicado sobre el head 7fdb66e; la card DEVKIT-65 sigue en `Revisión automática`.\n\nQué encontré en este segundo ciclo:\n\n- **Los seis hallazgos anteriores quedaron corregidos.** H1 y H2 se confirman en vivo: esta misma sesión la lanzó el `run_claude` de la rama y su entorno ya trae `DEVKIT_LANZADOR=watch`, `DISABLE_AUTOUPDATER` y `MCP_OAUTH_CALLBACK_PORT`. H5 lo reproduje por el camino del lanzador y queda una sola alarma en lugar de tres. Las autopruebas pasan sin fallas: 118 casos en `devkit-run.sh --test` y 114 en `watch-test.sh`.\n- **H9 (media), el motivo del veredicto.** La sonda `claude mcp list` no reproduce el fallo, así que la única red que queda es la expresión sobre el `result`. Tras H6 solo reconoce \"no tengo acceso a Notion\" y \"no tengo/estoy autorizado\". Las frases con las que la card documenta los cuatro incidentes reales (\"el plugin de Notion no tiene permiso en esta sesión headless\", \"autorizar mcp__claude_ai_Notion__* en permissions.allow\") no coinciden. Si el fallo se repite, volvería a ser silencioso. Los logs de los incidentes ya no existen, así que lo contrasté con el texto citado en la card.\n- **H7 y H8 (baja).** Una frase del README sigue describiendo el disparador viejo de H6, y un comentario del caso de prueba afirma como hecho la causa que H4 retiró del resto.\n\nDos criterios quedan `No verificado` y son del humano: la demostración de la causa, que nadie ha logrado reproducir y el PR ya documenta con honestidad como hipótesis, y la prueba real con una Épica lanzada por `epic-plan`. Copia de trabajo y temporales eliminados.", "total_cost_usd": 0.01, "num_turns": 2}
+FIN
+  cat >"$tmp/result-task-start-1.json" <<'FIN'
+{"result": "DEVKIT-65 entregada: PR #46 abierto con auto-merge, card en Revisión automática.\n\n**Resumen del cambio:** `run_claude` en `devkit-run.sh` ahora arma el `claude -p` hijo con `env -i` y una lista blanca de entorno (en vez de heredarlo tal cual), así un `task-start` lanzado por `epic-plan` anidado no arrastra las marcas de sesión anidada del padre (`CLAUDECODE`, etc.). Antes de lanzar, prueba con `claude mcp list` que Notion está conectada; si no, avisa con `ALARMA:` y no lanza. Si el propio resultado dice \"sin acceso a Notion\" pese a que la sonda pasó, bloquea la card. `--allowedTools` y `settings.json` cubren los dos nombres conocidos del conector. Documentado en README y en la entrada de Notion; 115+114 casos de autoprueba en verde, sin regresiones.\n\n**Limitación que dejé anotada en la card y el PR:** no pude correr la prueba real de punta a punta (una Épica completa lanzada por `epic-plan` en el contenedor de producción) porque esta sesión corre en una sandbox de agente en la nube, no en el devkit Docker real con Notion/GitHub conectados. Queda para confirmar quien revise o el humano.", "total_cost_usd": 0.01, "num_turns": 2}
+FIN
+  cat >"$tmp/result-task-fix-46-ce49aa6.json" <<'FIN'
+{"result":"PR #46: corregí los 3 hallazgos (H10, H11, H12), no descarté ninguno. Head nuevo: `61eadf8`.\n\n- **H10:** `devkit-run.sh` ahora decide que el agente se quedó sin acceso a Notion sobre todo por el campo `permission_denials` del `result`. El texto queda de respaldo: \"notion\" y la frase de falta de acceso deben ir en la misma oración. Además, hice algo que el revisor no pidió: antes de buscar, se descarta lo que va entre comillas o backticks. Sin ese paso, los dos `result` reales (`pr-review-46-7fdb66e.log` y `task-start-1.log`) seguirían bloqueando la card, porque citan entre comillas la frase \"sin acceso a Notion\". Probé la detección con los 7 logs reales de `/run/devkit` y ninguno bloquea. Sumé a la autoprueba esos dos `result` reales, que no bloquean, y un caso que sí bloquea por `permission_denials`. También actualicé el README.\n- **H11:** `forzar_task_block` recibe el motivo como tercer argumento. Cuando falta Notion, la card ya no queda bloqueada con el motivo de \"pregunta abierta\". La autoprueba comprueba el motivo en los dos casos.\n- **H12:** agregué al CHANGELOG, en \"Sin publicar\", una viñeta sobre este bloqueo automático.\n\nLa autoprueba `devkit-run.sh --test` pasa con 125 casos correctos, y `bash -n` pasa sin errores. Publiqué la respuesta en el PR con el marcador que lee `pr-review`, sin `manual=1` porque me lanzó el bucle. Después avisé al bucle para que revise.\n\nPor error publiqué antes en el PR un comentario de prueba incompleto. Lo borré enseguida y no afecta al ciclo.","total_cost_usd":0.01,"num_turns":2}
+FIN
+  local caso_real
+  for caso_real in pr-review-46-7fdb66e task-start-1 task-fix-46-ce49aa6; do
+    check "el result real de $caso_real.log no bloquea la card" no \
+      "$(caso_notion "$caso_real" | cut -d' ' -f1)"
+  done
 
   # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
   # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
@@ -1629,9 +1917,27 @@ case "${1:-}" in
       if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
-        forzar_task_block "$prompt" "$logf"
+        forzar_task_block "$prompt" "$logf" \
+          "terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44)"
+      elif notion_denegado "$logf"; then
+        # La sonda de arriba vio Notion conectado, pero la CLI negó una
+        # herramienta de Notion (DEVKIT-65): mismo remedio que la pregunta
+        # abierta, la card queda sin resolver y necesita al humano. H11: con
+        # su propio motivo, para que el humano no busque una pregunta que no
+        # existe.
+        printf '%s devkit-run "%s" ALARMA: terminó sin acceso a Notion (permission_denials)\n' \
+          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+        forzar_task_block "$prompt" "$logf" \
+          "terminó sin acceso a Notion pese a que \`claude mcp list\` la vio conectada (DEVKIT-65)"
+      elif result_sin_notion "$logf"; then
+        # H13 de pr-review: el texto solo avisa; el humano mira el resultado.
+        printf '%s devkit-run "%s" ALARMA: el resultado describe falta de acceso a Notion (ver resultado)\n' \
+          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
       fi
-    else
+    elif [ "$rc" -ne 67 ]; then
+      # rc=67 (sin Notion conectada) ya dejó su propia alarma en
+      # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
+      # segunda alarma por el mismo evento (H5 de pr-review, DEVKIT-65).
       printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
         "$(date -u +%FT%TZ)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
     fi
