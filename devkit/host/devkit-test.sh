@@ -28,8 +28,9 @@ export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
 # simula un Open VSX caído que sí responde, distinto del Mac sin red (H8,
 # DEVKIT-67). Cualquier otra URL (por ejemplo la descarga de una etiqueta en
 # `update`, que estos escenarios no ejercitan) sale en 0 sin cuerpo.
-# `DEVKIT_TEST_CURL_DOWN=1` simula el Mac sin red: exit 7, como el curl real,
-# antes de escribir nada.
+# `DEVKIT_TEST_CURL_DOWN=1` simula el Mac sin red: imprime 000 (lo que el
+# curl real escribe con -w al no poder conectar) y sale con 7, como el curl
+# real.
 #
 # DEVKIT-73: el cuerpo de "/latest" también lleva "engines.vscode"
 # (`DEVKIT_TEST_OVX_ENGINE`, por defecto compatible) y, si se declara,
@@ -48,7 +49,7 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'FIN'
 #!/bin/sh
 echo "curl $*" >> "$DEVKIT_TEST_LOG"
-[ "${DEVKIT_TEST_CURL_DOWN:-0}" = 1 ] && exit 7
+[ "${DEVKIT_TEST_CURL_DOWN:-0}" = 1 ] && { printf '000'; exit 7; }
 out=""; prev=""; retry=0
 for a; do
   [ "$prev" = -o ] && out="$a"

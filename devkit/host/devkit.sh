@@ -74,7 +74,8 @@ sync_dev_template() {
 # -f); un 000 solo ocurre si el propio curl no pudo ni conectar (sin red),
 # igual que antes de DEVKIT-73.
 curl_ovx() {
-  curl -sS -o "$2" -w '%{http_code}' --retry 5 --retry-delay 3 "$1" 2>/dev/null || echo 000
+  code="$(curl -sS -o "$2" -w '%{http_code}' --retry 5 --retry-delay 3 "$1" 2>/dev/null)" || code=000
+  printf '%s' "${code:-000}"
 }
 # json_field <clave> <archivo>: valor de "<clave>":"<valor>" en un JSON de
 # Open VSX (una línea, sin anidar objetos salvo "engines").
