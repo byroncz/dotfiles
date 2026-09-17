@@ -21,7 +21,6 @@ ARG RCLONE_VERSION=1.75.1
 ARG BWS_VERSION=2.1.0
 ARG STARSHIP_VERSION=1.24.2
 ARG OPENVSCODE_VERSION=1.109.5
-ARG CLAUDE_CODE_EXT_VERSION=2.1.270
 ARG TOOLS_PYTHON=3.14
 ARG USERNAME=dev
 ARG USER_UID=1000
@@ -115,22 +114,39 @@ WORKDIR /workspace
 RUN curl -fsSL https://claude.ai/install.sh | bash \
  && claude --version
 
-# --- Extensión Claude Code para openvscode-server, desde Open VSX ----------
-# Versionada en el template (ARG de arriba), instalada al build: nunca a mano
-# en el contenedor. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
+# --- Extensiones del editor, desde Open VSX ---------------------------------
+# Versionadas en el template (devkit/vscode/extensions.toml), resueltas al
+# construir por devkit.sh (resolve_extensions) y pasadas aquí ya fijas, como
+# "ns.ext=versión" separadas por espacio: nunca "latest" a esta altura, y
+# nunca una extensión a mano en el contenedor. Por cada una se prueba primero
+# el paquete de su plataforma (Open VSX no publica todas así) y, si no existe,
+# el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
 # (redirección de descarga) van en `domains` de .devkit/devkit.toml.
+# ARG EXTENSIONS se declara aquí, no arriba con los demás: Docker mete todo
+# ARG en el entorno de cada RUN posterior a su declaración, así que si
+# viviera arriba, cada versión nueva de una extensión invalidaría la caché
+# desde el primer RUN (apt, gh, rclone, zsh, claude...), no solo esta capa.
+ARG EXTENSIONS=""
 RUN set -eux; \
     case "$(uname -m)" in \
       x86_64)  ovx_platform=linux-x64 ;; \
       aarch64) ovx_platform=linux-arm64 ;; \
       *) echo "arquitectura no soportada: $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSLo /tmp/claude-code.vsix \
-      "https://open-vsx.org/api/Anthropic/claude-code/${ovx_platform}/${CLAUDE_CODE_EXT_VERSION}/file/Anthropic.claude-code-${CLAUDE_CODE_EXT_VERSION}@${ovx_platform}.vsix"; \
-    openvscode-server --install-extension /tmp/claude-code.vsix \
-      --server-data-dir "$HOME/.openvscode-server/data" \
-      --extensions-dir "$HOME/.openvscode-server/extensions"; \
-    rm -f /tmp/claude-code.vsix
+    for entry in ${EXTENSIONS}; do \
+      id="${entry%%=*}"; version="${entry#*=}"; \
+      ns="${id%%.*}"; ext="${id#*.}"; \
+      curl -fsSLo /tmp/ext.vsix \
+        "https://open-vsx.org/api/${ns}/${ext}/${ovx_platform}/${version}/file/${ns}.${ext}-${version}@${ovx_platform}.vsix" \
+      || curl -fsSLo /tmp/ext.vsix \
+        "https://open-vsx.org/api/${ns}/${ext}/${version}/file/${ns}.${ext}-${version}.vsix"; \
+      openvscode-server --install-extension /tmp/ext.vsix \
+        --server-data-dir "$HOME/.openvscode-server/data" \
+        --extensions-dir "$HOME/.openvscode-server/extensions"; \
+      rm -f /tmp/ext.vsix; \
+    done; \
+    openvscode-server --list-extensions --show-versions \
+      --extensions-dir "$HOME/.openvscode-server/extensions"
 
 # --- Herramientas de Python para el editor ---------------------------------
 # Un Python fijo solo para las herramientas. El de cada proyecto lo decide su

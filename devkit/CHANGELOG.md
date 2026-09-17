@@ -10,6 +10,33 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Extensiones del editor versionadas en `extensions.toml` y resueltas contra Open VSX (DEVKIT-67)
+
+- `devkit/vscode/extensions.toml` reemplaza el `ARG CLAUDE_CODE_EXT_VERSION`
+  del `Dockerfile`: una línea por extensión, versión fija o `"latest"`. Nace
+  con `"Anthropic.claude-code" = "latest"`.
+- `devkit.sh` suma `resolve_extensions`, enganchada en `up`, `recreate`,
+  `rebuild` y `update`: resuelve cada `"latest"` en el Mac contra la API de
+  Open VSX, guarda la resolución en `~/.devkit/<proyecto>/extensions.lock` y
+  la pasa al build como `DEVKIT_EXTENSIONS` (mismo mecanismo que
+  `DEVKIT_EXTRA_APT`, vía `.env` y `compose.yaml`). Sin red se usa la última
+  resolución guardada con aviso; sin red y sin resolución previa, el comando
+  se detiene en vez de construir a ciegas.
+- `Dockerfile`: un solo `RUN` instala todas las extensiones del `ARG
+  EXTENSIONS` (ya con versiones exactas, nunca `"latest"`), con el paquete de
+  la plataforma si Open VSX lo publica así y el universal si no.
+- `devkit/scripts/gen-stack.sh` genera la línea de extensiones de la sección
+  Stack del README desde `extensions.toml` y la verifica con `--check`; la
+  entrada de Notion "Stack y comandos del devkit" la refleja a mano en el
+  mismo PR.
+- `devkit/host/devkit-test.sh` suma un doble de `curl` y cubre los cuatro
+  casos: `latest` resuelto y guardado, versión fija sin consulta, sin red con
+  resolución previa (aviso y build) y sin red sin resolución (se detiene).
+- Cambios requeridos: `compose.yaml` del proyecto cambia (build arg
+  `EXTENSIONS` nuevo); reinstala con `new-project.sh <proyecto> --ref <rama>`
+  para probarlo antes de una etiqueta, o `--version <x>` después de
+  publicarla.
+
 ### `pr-review` corre en Opus; `epic-plan` conserva el primer modelo de frontera (DEVKIT-72)
 
 - `roles.toml`: `revision.model_index = 2`. Con `frontera = ["fable", "opus",

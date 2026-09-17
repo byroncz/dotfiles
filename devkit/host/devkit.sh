@@ -68,6 +68,85 @@ sync_dev_template() {
     echo "devkit: aviso: no se pudo copiar devkit/ del workspace; se construye con la copia de $dir/template" >&2
   fi
 }
+# devkit/vscode/extensions.toml declara las extensiones del editor: una
+# versión fija se instala tal cual, "latest" se resuelve aquí contra Open VSX
+# antes de construir. La resolución queda en $dir/extensions.lock (una por
+# proyecto) para poder seguir construyendo sin red, y se pasa a compose como
+# DEVKIT_EXTENSIONS, igual que DEVKIT_EXTRA_APT. Corre después de
+# sync_dev_template (o de bajar la etiqueta destino en `update`), así que
+# $dir/template/vscode/extensions.toml ya está al día.
+resolve_extensions() {
+  toml="$dir/template/vscode/extensions.toml"
+  if [ ! -f "$toml" ]; then
+    echo "devkit: aviso: no hay $toml; se construye sin extensiones" >&2
+    grep -v '^DEVKIT_EXTENSIONS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
+    mv "$dir/.env.tmp" "$dir/.env"
+    return 0
+  fi
+  lock="$dir/extensions.lock"
+  # Una línea no vacía y sin comentario que no calce con "id" = "versión" se
+  # ignoraba en silencio y la extensión desaparecía de la imagen sin aviso
+  # (H5, DEVKIT-67); gen-stack.sh repite este mismo aviso al generar la lista.
+  # El comentario final es opcional: el `sed` de abajo ya lo tolera (H9,
+  # DEVKIT-67), así que la validación admite el mismo formato o avisaría de
+  # una línea que sí se usa.
+  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$toml" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*(#.*)?$')"
+  if [ -n "$malas" ]; then
+    echo "devkit: aviso: $toml tiene líneas que no calzan con \"id\" = \"versión\" y se ignoran:" >&2
+    printf '%s\n' "$malas" | sed 's/^/  /' >&2
+  fi
+  declarados="$(sed -n 's/^"\([^"]*\)"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1 \2/p' "$toml")"
+  resuelto=""
+  while IFS= read -r linea; do
+    [ -n "$linea" ] || continue
+    id="${linea%% *}"; version="${linea#* }"
+    if [ "$version" = latest ]; then
+      ns="${id%%.*}"; ext="${id#*.}"
+      resp="$(mktemp)"
+      # -w separa el código HTTP del cuerpo: un 404 (id mal escrito) o un 5xx
+      # de Open VSX ya no se confunden con "sin red" (H4). "|| http_code=000"
+      # evita que un curl caído (rc 7, sin red) corte el script por `set -e`.
+      http_code="$(curl -sS -o "$resp" -w '%{http_code}' "https://open-vsx.org/api/$ns/$ext/latest" 2>/dev/null)" \
+        || http_code=000
+      if [ "$http_code" = 404 ]; then
+        rm -f "$resp"
+        echo "devkit: extensión $id no existe en Open VSX (404)" >&2
+        return 1
+      fi
+      fetched=""
+      [ "$http_code" = 200 ] && fetched="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$resp" | head -1 \
+        | sed -E 's/.*"([^"]+)"$/\1/')"
+      rm -f "$resp"
+      if [ -n "$fetched" ]; then
+        version="$fetched"
+      else
+        cached="$(awk -F= -v id="$id" '$1==id{print substr($0, length(id)+2); exit}' "$lock" 2>/dev/null)"
+        # 000 es curl sin poder ni conectar (sin red); cualquier otro código
+        # (5xx, 429) sí llegó a Open VSX, así que el aviso lo distingue de un
+        # Mac sin red (H8, DEVKIT-67).
+        if [ "$http_code" = 000 ]; then
+          razon_aviso="sin red para Open VSX"; razon_seco="sin red"
+        else
+          razon_aviso="Open VSX respondió $http_code"; razon_seco="$razon_aviso"
+        fi
+        if [ -n "$cached" ]; then
+          echo "devkit: aviso: $razon_aviso; se usa la última versión resuelta de $id ($cached)" >&2
+          version="$cached"
+        else
+          echo "devkit: $razon_seco y sin resolución previa para $id; construye una vez con red o fija su versión en extensions.toml" >&2
+          return 1
+        fi
+      fi
+    fi
+    resuelto="$resuelto${resuelto:+ }$id=$version"
+  done <<EOF_DECLARADOS
+$declarados
+EOF_DECLARADOS
+  printf '%s\n' "$resuelto" | tr ' ' '\n' > "$lock"
+  grep -v '^DEVKIT_EXTENSIONS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
+  { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTENSIONS=%s\n' "$resuelto"; } > "$dir/.env"
+  rm -f "$dir/.env.tmp"
+}
 # Lo que new-project.sh instaló en el Mac desde el template (el compose.yaml del
 # proyecto y el propio comando devkit) no lo refresca nadie. Reemplazarlo aquí
 # no es seguro: el script se sobrescribiría a sí mismo mientras corre. Se avisa
@@ -121,14 +200,14 @@ awake() {
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
-  up)       sync_dev_template; compose up -d --build ;;
+  up)       sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
   awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate ;;
-  rebuild)  confirm && sync_toml_env && sync_dev_template && compose build --no-cache && compose up -d --force-recreate ;;
+  recreate) confirm && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
+  rebuild)  confirm && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
@@ -146,6 +225,13 @@ case "$cmd" in
       fi
       exit 0
     fi
+    # $dir/compose.yaml es del Mac: solo new-project.sh lo escribe, `update`
+    # trae devkit/ pero nunca lo toca. Si quedó de antes de DEVKIT-67, no
+    # declara el ARG EXTENSIONS y la imagen se reconstruye sin extensiones,
+    # sin aviso (`warn_host_stale` solo corre desde `sync_dev_template`, que
+    # `update` no llama). Se detiene en vez de construir un editor incompleto.
+    grep -q 'EXTENSIONS:' "$dir/compose.yaml" 2>/dev/null \
+      || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh $proj --version $target' antes de actualizar" >&2; exit 1; }
     echo "devkit: actualizando template $current -> $target"
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
     curl -fsSL "https://github.com/$REPO/archive/refs/tags/v$target.tar.gz" | tar -xz -C "$tmp"
@@ -154,7 +240,7 @@ case "$cmd" in
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
-    sync_toml_env && compose up -d --build --force-recreate
+    resolve_extensions && sync_toml_env && compose up -d --build --force-recreate
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;

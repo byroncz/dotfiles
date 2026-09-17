@@ -51,7 +51,12 @@ ti.
 
 Versiones fijadas en [`devkit/Dockerfile`](devkit/Dockerfile): uv 0.12.7,
 gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2,
-openvscode-server 1.109.5, extensión Claude Code 2.1.270.
+openvscode-server 1.109.5.
+
+Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code latest.
+La línea de arriba la genera y verifica `devkit/scripts/gen-stack.sh --check`;
+`latest` se resuelve contra Open VSX solo al construir, con `devkit
+up/recreate/rebuild/update` (ver `docs/ARCHITECTURE.md`, sección 9).
 
 ## Comandos
 
@@ -61,18 +66,39 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 
 | Comando | Qué hace |
 |---|---|
-| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). |
+| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). Resuelve las extensiones del editor antes de construir (ver más abajo). |
 | `devkit shell <proyecto>` | Abre una shell dentro del contenedor. |
 | `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador. Solo imprime la URL con el token en la terminal si `open` falta o falla. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
-| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos y `devkit.env`, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
-| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. En modo dev, también rearma el contexto de build. |
-| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
+| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos, `devkit.env` y las extensiones del editor, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
+| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea, con las extensiones resueltas de nuevo. En modo dev, también rearma el contexto de build. |
+| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo y resuelve sus extensiones. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit awake <proyecto>` | Impide que el Mac se suspenda por inactividad mientras el contenedor esté vivo: corre `caffeinate -i docker wait devkit-<proyecto>` en primer plano y suelta la aserción cuando el contenedor se detiene o con Ctrl-C. Sin eso, el reposo del Mac congela la VM de Docker y los bucles del contenedor dejan de correr. No evita el reposo al cerrar la tapa. Falla si el contenedor no corre o si falta `caffeinate` (fuera de macOS). |
 | `devkit ls` | Proyectos instanciados. |
+
+#### Versionado de extensiones del editor
+
+`devkit/vscode/extensions.toml` declara las extensiones, una por línea
+(`"<editor>.<nombre>" = "<versión>"` o `"latest"`). `devkit up`, `recreate`,
+`rebuild` y `update` resuelven cada `latest` en el Mac contra
+`https://open-vsx.org/api/<editor>/<nombre>/latest` antes de construir, guardan
+la resolución en `~/.devkit/<proyecto>/extensions.lock` y pasan versiones
+exactas a la imagen (nunca `latest`); una versión fija se instala tal cual, sin
+consultar la API. Con la misma resolución, un `devkit recreate` no reconstruye
+la capa de extensiones (sale `CACHED`); con una versión distinta, sí. Sin red
+en el Mac se usa la última resolución guardada, con el aviso `devkit: aviso:
+sin red para Open VSX; se usa la última versión resuelta de <extensión>
+(<versión>)`; sin red y sin resolución previa, el comando se detiene sin
+construir. Si Open VSX responde 404 para una extensión, `up`, `recreate`,
+`rebuild` y `update` se detienen con `devkit: extensión <id> no existe en Open
+VSX (404)` en vez de construir sin ella. `devkit update` además se detiene si
+el `compose.yaml` del proyecto no declara el build arg `EXTENSIONS` (quedó de
+antes de este versionado): pide reinstalar con `new-project.sh <proyecto>
+--version <x>` antes de actualizar. Detalle de diseño en
+`docs/ARCHITECTURE.md`, sección 9.
 
 Si el editor no abre: `docker exec devkit-<proyecto> pgrep -af server-main.js`
 para ver si el servidor está vivo, y `devkit logs <proyecto>` para el log de
@@ -133,9 +159,10 @@ workspace, `recreate` avisa y se reinstalan con
 | `/opt/devkit/scripts/slugify.sh` | Convierte un texto libre en un slug de minúsculas separado por guiones (formato de las ramas). `--test` corre su tabla de autoprueba. |
 | `/opt/devkit/scripts/image-drift.sh` | Lista qué del template solo entra por imagen y ya no coincide con ella. La usa el arranque en modo dev para avisar del `devkit recreate` pendiente. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/agents-sync.sh` | Funde el `AGENTS.md` de un proyecto con la plantilla destino: si el archivo tiene el marcador `## Reglas del proyecto`, reemplaza todo lo de arriba y conserva todo lo de abajo tal cual; si no lo tiene, no toca nada y sale con el código 2. La usa `template-update`. `--test` corre su autoprueba. |
+| `bash devkit/scripts/gen-stack.sh` | Solo en el repo del template: imprime la línea de extensiones de la sección Stack del README, generada desde `devkit/vscode/extensions.toml` (un `latest` se lista tal cual, sin resolver). `--check` sale con 1 si el README quedó viejo. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/pr-guard.sh` | Hook `PreToolUse` de `settings.json`: inspecciona el texto del comando `Bash` completo, en cualquier posición de sus argumentos, y bloquea (salida 2) aprobar un PR, mergearlo sin `--auto` o con `--admin`, empujar a `main` o una mutación de GraphQL que apruebe o mergee, aunque el comando evada el deny por prefijo (`git -C <dir> push`, `gh api` crudo). También bloquea cualquier segmento que mencione `/run/devkit/vscode-token` o `/run/devkit/notion_token`, salvo que solo compruebe que el archivo existe (`test`, `[` o `[[` con `-e`, `-f`, `-r` o `-s`): esos archivos son el token del editor y el de Notion en crudo, y no se pegan en un chat ni en una card (DEVKIT-51, DEVKIT-55). Para hablar con Notion desde bash está `notion.sh`, que lee el token sin imprimirlo. Es una inspección de texto, no una sandbox: no ve variables de shell ni alias de `gh`; la compuerta real es GitHub. Cada bloqueo queda en `/run/devkit/denials.log`, para revisar si hay que ampliar una regla. `--test` corre su autoprueba. |
 | `/opt/devkit/scripts/devkit-run.sh` (alias `devkit-run`, solo en la shell interactiva) | Único punto de lanzamiento de una skill: `devkit-run [--modelo <alias>] [--esfuerzo <low\|medium\|high\|xhigh\|max>] <skill> <Clave> [texto extra...]` la corre en segundo plano con `nohup` desde `/workspace`, sin que copies el comando largo a mano, y vuelve en cuanto confirma que arrancó. Antes de lanzar espera el marcador `/run/devkit/ready` que escribe el arranque del contenedor (hasta `DEVKIT_READY_TIMEOUT`, 120 s); si no aparece, no lanza, lo explica y sale con 69. Tras lanzar mira al worker hasta `DEVKIT_ARRANQUE_ESPERA` segundos (5): vivo, dice si su `claude -p` corre o espera el candado; muerto sin resumen `terminado`, imprime las últimas líneas del log y las alarmas, deja `ALARMA: no arrancó` en `watch.log` y sale con 70 (DEVKIT-57: un `task-start` lanzado con el editor recién abierto imprimió su PID y nunca corrió). Cada lanzamiento deja antes en `watch.log` la línea `<id> lanzando (origen=<quién>): "<prompt>" log=<log>`, donde `<id>` es el nombre del log y el origen sale de `DEVKIT_ORIGEN` (`task-close.sh` pone `task-close`, `watch.sh` pone `bucle`) o, si no viene, del primer `claude -p /<skill>` entre los procesos padre (`epic-plan`), y si no hay ninguno, `humano`. `devkit-run --estado` lee esas líneas y muestra una tabla de los últimos 20 lanzamientos (`DEVKIT_ESTADO_FILAS`): skill, card, quién lanzó, hace cuánto, estado y detalle, sin lanzar ningún agente. El estado es `en curso` (su proceso vive, se lanzó hace menos de `DEVKIT_ESTADO_GRACIA` segundos —120— aunque su `claude -p` aún no exista, o espera el candado), `terminó`, `error` (rc distinto de cero, o log escrito sin resumen ni proceso), `bloqueada` (`task-block.sh` bloqueó su card después de lanzarlo; el detalle es el motivo) o `no arrancó` (sin proceso, log ni resumen pasado el margen). `devkit-run --estado --seguir` la refresca cada 3 s (`DEVKIT_ESTADO_INTERVALO`) hasta Ctrl-C. Lo lanza con el modelo y el esfuerzo que le tocan por su papel en el flujo (resueltos en `$DEVKIT_ROLES_FILE` si se define, luego `.devkit/roles.toml` del proyecto si existe, luego `devkit/agents/roles.toml` del template, al final `/opt/devkit/template/agents/roles.toml`; ver "Qué declara cada proyecto") y el mismo candado que usa `watch.sh` para no pisarle la rama a otra skill. En `task-fix` y `task-document`, el modelo y el esfuerzo dependen además de la ronda del PR si el rol declara `rondas` (DEVKIT-61, ver "Escalera de modelos por ronda"); la ronda sale también en la línea `lanzado` y en el resumen como `ronda=<n>`. `--modelo`/`--esfuerzo` anulan el rol resuelto (y la ronda) para ese lanzamiento puntual, sin tocar `roles.toml`; la línea de resumen lo marca `(anulación manual)`. Log en `/run/devkit/<skill>-<n>.log`; al terminar, agrega a `watch.log` una línea con modelo, esfuerzo, costo y turnos, más las mismas alarmas de `watch.sh` (error, skill lenta, pregunta abierta) y, si el `result` termina en pregunta, bloquea la card con `task-block.sh` y un motivo forzado. `devkit-run task-close ...` y `devkit-run task-block ...` no lanzan modelo: corren en primer plano `task-close.sh` y `task-block.sh` (DEVKIT-55); `--sync` hace lo mismo con los prompts `/task-close` y `/task-block`, que todavía pide un `watch.sh` anterior hasta el próximo `devkit recreate`. Exporta `DEVKIT_MODEL` y `DEVKIT_EFFORT` al `claude -p` que lanza, con el modelo y el esfuerzo que recibió de verdad (rol, caída en `frontera`, `--modelo`/`--esfuerzo` o `DEVKIT_MODELO_FORZADO`), no los que traiga el entorno: de ahí sacan las skills las marcas "Implementado/Revisado/Documentado con <modelo>, esfuerzo <x>" (DEVKIT-58, ver "Modelo y esfuerzo visibles"). Exporta también `DEVKIT_SCRIPTS_DIR` (su propio directorio) y `DEVKIT_RUN_DIR` al `claude -p` que lanza (y `DEVKIT_LOCK_HELD=1` en `--worker`, que corre con el candado tomado; `watch.sh` la pasa a `--sync` por lo mismo: así `task-block.sh` guarda el `wip` sin pedir otra vez el candado; `watch.sh` pasa además `DEVKIT_LANZADOR=watch`, que un lanzamiento en segundo plano borra, para que `task-fix` sepa si lo lanzó el bucle), para que una skill que invoca otro script por ruta llegue a la misma copia y no a la de la imagen, vieja en modo dev. Arma el entorno del `claude -p` hijo con `env -i` y una lista blanca, y antes de lanzar prueba con `claude mcp list` que Notion está conectada; si no, no lanza (ver "Entorno del `claude -p` hijo y comprobación de Notion", DEVKIT-65). Si el modelo resuelto sale vacío, no lanza: sale con 65 y deja `ALARMA: modelo vacío` en `watch.log` (antes la CLI moría con un 400 en el primer turno, DEVKIT-55). `task-next.sh` y `epic-plan` lo usan para lanzar la siguiente/primera hija como proceso aparte, así corre con el rol que le toca; `epic-plan` lo llama por ruta explícita (`"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"`), no por el alias `devkit-run`, porque su `SKILL.md` corre en el Bash no interactivo de `claude -p`, que no carga `zshrc` (DEVKIT-54). `watch.sh` lo usa también (ver más abajo). `devkit-run --otros-agentes` responde si otro agente ya ocupa el workspace: imprime los procesos `claude -p` ajenos y sale 0 si está libre, 1 si no. Es lo que debe usar una skill en vez de un `pgrep -f <Clave>`, que devuelve como ajenos los cuatro procesos propios del lanzamiento (el `--worker`, su subshell, su vigilante y el `claude -p` de uno mismo) porque la Clave viaja en sus argumentos; ese falso positivo bloqueó una card sin motivo en DEVKIT-54. `devkit-run --siguiente-modelo <alias>` imprime el modelo disponible que sigue a `<alias>` en `frontera` (tras el último, el primero); lo usa `watch.sh` para relanzar un `task-fix` vacío, y `--sync` toma ese modelo de `DEVKIT_MODELO_FORZADO`. `--test` corre su autoprueba. |
-| `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con un doble de `docker`, sin Docker ni contenedores. Sale con 1 si un caso falla. |
+| `bash devkit/host/devkit-test.sh` | Solo en el repo del template: prueba el comando `devkit` del Mac con dobles de `docker` y `curl`, sin Docker, contenedores ni red real. Sale con 1 si un caso falla. |
 
 Bucles en segundo plano: `sync-sandbox.sh` (respaldo cada 60 s) y `watch.sh`
 (cada 5 min los PRs abiertos, cada 30 s los mergeados). `watch.sh` mira cada

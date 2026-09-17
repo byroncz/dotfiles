@@ -4,8 +4,9 @@
 # build. Cubre lo que arregla DEVKIT-30: en modo dev el contexto se rearma desde
 # el workspace antes de construir, fuera de modo dev no se toca, y cuando el
 # contenedor no responde se avisa y se sigue con la copia que hay. También
-# cubre `devkit code` (DEVKIT-51) y `devkit awake` con un doble de caffeinate
-# (DEVKIT-66).
+# cubre `devkit code` (DEVKIT-51), `devkit awake` con un doble de caffeinate
+# (DEVKIT-66) y, con un doble de `curl`, la resolución de
+# devkit/vscode/extensions.toml contra Open VSX (DEVKIT-67).
 # Sale con 1 si algún caso falla.
 # Uso: bash devkit-test.sh
 set -u
@@ -16,6 +17,43 @@ fail=0
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
+
+# --- Doble de curl -----------------------------------------------------------
+# Solo responde la API "latest" de Open VSX que usa resolve_extensions, con
+# `-o <archivo> -w '%{http_code}'` como el real: escribe el cuerpo en el
+# archivo y el código HTTP en stdout, para poder distinguir un 404
+# (`DEVKIT_TEST_CURL_404=1`) de un 200 (H4, DEVKIT-67). `DEVKIT_TEST_CURL_503=1`
+# simula un Open VSX caído que sí responde, distinto del Mac sin red (H8,
+# DEVKIT-67). Cualquier otra URL (por ejemplo la descarga de una etiqueta en
+# `update`, que estos escenarios no ejercitan) sale en 0 sin cuerpo.
+# `DEVKIT_TEST_CURL_DOWN=1` simula el Mac sin red: exit 7, como el curl real,
+# antes de escribir nada.
+mkdir -p "$TMP/bin"
+cat >"$TMP/bin/curl" <<'FIN'
+#!/bin/sh
+echo "curl $*" >> "$DEVKIT_TEST_LOG"
+[ "${DEVKIT_TEST_CURL_DOWN:-0}" = 1 ] && exit 7
+out=""; prev=""
+for a; do
+  [ "$prev" = -o ] && out="$a"
+  prev="$a"; url="$a"
+done
+case "$url" in
+  https://open-vsx.org/api/*/latest)
+    if [ "${DEVKIT_TEST_CURL_404:-0}" = 1 ]; then
+      [ -n "$out" ] && : > "$out"
+      printf '404'
+    elif [ "${DEVKIT_TEST_CURL_503:-0}" = 1 ]; then
+      [ -n "$out" ] && : > "$out"
+      printf '503'
+    else
+      body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\"}"
+      if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
+    fi ;;
+  *) [ -n "$out" ] && : > "$out" ;;
+esac
+FIN
+chmod +x "$TMP/bin/curl"
 
 # --- Doble de docker --------------------------------------------------------
 # Registra cada llamada en $DEVKIT_TEST_LOG y responde lo mínimo que devkit.sh
@@ -67,7 +105,8 @@ export PATH="$TMP/bin:$PATH"
 escenario() {
   rm -rf "$TMP/root" "$TMP/ws"
   mkdir -p "$TMP/root/bin" "$TMP/root/p/template/marca" "$TMP/root/p/template/host" \
-           "$TMP/ws/devkit/marca" "$TMP/ws/devkit/host"
+           "$TMP/root/p/template/vscode" "$TMP/ws/devkit/marca" "$TMP/ws/devkit/host" \
+           "$TMP/ws/devkit/vscode"
   echo MARCA-VIEJA > "$TMP/root/p/template/marca/archivo.txt"
   echo sobra       > "$TMP/root/p/template/obsoleto.txt"
   echo MARCA-NUEVA > "$TMP/ws/devkit/marca/archivo.txt"
@@ -77,6 +116,8 @@ escenario() {
   cp "$DEVKIT" "$TMP/ws/devkit/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/p/template/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/bin/devkit"
+  printf '"Anthropic.claude-code" = "latest"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+  cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
   mkdir -p "$TMP/ws/.devkit"
   printf '[devkit]\ntemplate = "%s"\nproject  = "TEST"\n' "$1" > "$TMP/ws/.devkit/devkit.toml"
   printf 'DEVKIT_PROJECT=p\nDEVKIT_VERSION=%s\n' "$1" > "$TMP/root/p/.env"
@@ -179,6 +220,23 @@ check_salida "update en dev manda a recreate" "usa 'devkit recreate p'"
 check        "update en dev no toca el contexto" MARCA-VIEJA "$(marca)"
 check_docker "update en dev no construye" no 'compose'
 
+# --- update con compose.yaml sin EXTENSIONS (H2, DEVKIT-67) -----------------
+# compose.yaml del Mac de antes de DEVKIT-67 no declara EXTENSIONS: el
+# build seguiría sin avisar y sin extensiones. `update` debe detenerse antes
+# de descargar la etiqueta.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+corre update
+check        "update con compose.yaml sin EXTENSIONS se detiene" 1 "$ESTADO"
+check_salida "update con compose.yaml sin EXTENSIONS lo explica" "no declara EXTENSIONS"
+check_docker "update con compose.yaml sin EXTENSIONS no descarga la etiqueta" no 'archive/refs/tags'
+
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check_salida "update con compose.yaml al día no se detiene por EXTENSIONS" "actualizando template"
+
 # --- Avisos de los archivos del Mac -----------------------------------------
 escenario dev; echo 'name: otro' > "$TMP/root/p/compose.yaml"; corre recreate
 check_salida "compose.yaml del Mac desincronizado" "compose.yaml difiere del template"
@@ -189,6 +247,91 @@ check_salida "comando devkit desincronizado" "el comando devkit difiere del temp
 escenario dev; corre recreate
 check        "con todo al día no se avisa de nada" no \
              "$(grep -q 'difiere del template' "$OUT" && echo si || echo no)"
+
+# --- Resolución de extensiones del editor ------------------------------------
+# resolve_extensions: "latest" se resuelve contra Open VSX y queda en .env y
+# extensions.lock; una versión fija no consulta la API; sin red se usa la
+# última resolución guardada con aviso; sin red y sin resolución previa el
+# comando se detiene sin construir.
+env_ext() { sed -n 's/^DEVKIT_EXTENSIONS=//p' "$TMP/root/p/.env" | tail -1; }
+lock_ext() { tr '\n' ' ' < "$TMP/root/p/extensions.lock" 2>/dev/null | sed 's/ *$//'; }
+
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+escenario dev; corre recreate
+check        "latest resuelto: queda en .env" "Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "latest resuelto: queda en extensions.lock" "Anthropic.claude-code=2.1.270" "$(lock_ext)"
+check_docker "latest resuelto: consulta Open VSX" si 'curl -sS -o .* -w %\{http_code\} https://open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "latest resuelto: termina bien" 0 "$ESTADO"
+
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
+corre recreate
+check        "versión fija: queda en .env tal cual" "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check_docker "versión fija: no consulta Open VSX" no 'open-vsx\.org'
+unset DEVKIT_TEST_OVX_VERSION
+
+escenario dev; printf 'Anthropic.claude-code=9.9.8\n' > "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_DOWN=1
+corre recreate
+unset DEVKIT_TEST_CURL_DOWN
+check_salida "sin red con resolución previa: avisa" \
+  'sin red para Open VSX; se usa la última versión resuelta de Anthropic\.claude-code \(9\.9\.8\)'
+check        "sin red con resolución previa: usa la versión guardada" "Anthropic.claude-code=9.9.8" "$(env_ext)"
+check_docker "sin red con resolución previa: igual construye" si 'up -d'
+check        "sin red con resolución previa: termina bien" 0 "$ESTADO"
+
+escenario dev; rm -f "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_DOWN=1
+corre recreate
+unset DEVKIT_TEST_CURL_DOWN
+check_salida "sin red sin resolución previa: lo explica" "sin red y sin resolución previa"
+check        "sin red sin resolución previa: se detiene" 1 "$ESTADO"
+check_docker "sin red sin resolución previa: no construye" no 'up -d'
+
+escenario dev
+export DEVKIT_TEST_CURL_404=1
+corre recreate
+unset DEVKIT_TEST_CURL_404
+check_salida "404 de Open VSX: lo explica" "no existe en Open VSX"
+check        "404 de Open VSX: se detiene" 1 "$ESTADO"
+check_docker "404 de Open VSX: no construye" no 'up -d'
+
+escenario dev; printf 'Anthropic.claude-code=9.9.8\n' > "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_503=1
+corre recreate
+unset DEVKIT_TEST_CURL_503
+check_salida "503 de Open VSX: lo distingue de sin red" "Open VSX respondió 503; se usa la última versión resuelta de Anthropic\.claude-code \(9\.9\.8\)"
+check        "503 de Open VSX: termina bien" 0 "$ESTADO"
+
+escenario dev; rm -f "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_503=1
+corre recreate
+unset DEVKIT_TEST_CURL_503
+check_salida "503 de Open VSX sin resolución previa: lo distingue de sin red" "Open VSX respondió 503 y sin resolución previa"
+check        "503 de Open VSX sin resolución previa: se detiene" 1 "$ESTADO"
+
+# --- Línea inválida en extensions.toml (H5, DEVKIT-67) -----------------------
+# Una línea que no calza con "id" = "versión" (comilla simple, sin comillas,
+# sangría...) se ignoraba en silencio y la extensión desaparecía sin aviso.
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"\n  '"'"'ms.otra'"'"' = '"'"'1.0.0'"'"'\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+corre recreate
+check_salida "línea inválida de extensions.toml avisa" 'no calzan con'
+check        "línea inválida no impide construir con la extensión válida" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check        "línea inválida: termina bien" 0 "$ESTADO"
+
+# --- Línea válida con comentario al final (H9, DEVKIT-67) --------------------
+# El `sed` que extrae ya toleraba un comentario al final de la línea; la
+# validación no, y avisaba "se ignoran" de una línea que sí se usaba.
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"  # fija\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+corre recreate
+check        "línea con comentario al final no avisa" no \
+             "$(grep -q 'no calzan con' "$OUT" && echo si || echo no)"
+check        "línea con comentario al final se usa igual" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
 
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
