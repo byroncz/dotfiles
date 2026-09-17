@@ -10,6 +10,10 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+- `docs/ARCHITECTURE.md`: el riesgo residual de credenciales del humano en
+  memoria del extension host queda también en la tabla de la sección 12, no
+  solo declarado en 8.2 (DEVKIT-74).
+
 ### `resolve_extensions` comprueba el motor del editor antes de construir (DEVKIT-73)
 
 - Cada extensión de `devkit/vscode/extensions.toml` (fija o `"latest"`) se

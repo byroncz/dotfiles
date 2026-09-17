@@ -789,6 +789,7 @@ proceso y aparecen en `docker inspect`.
   del alcance de esta card.
 
 Riesgo residual aceptado: el túnel por DNS. Ningún enfoque casero lo cierra.
+
 Riesgo residual aceptado: sin aislamiento de procesos entre agentes del
 mismo contenedor, cualquier credencial que un proceso sostenga en memoria
 (el token de la extensión GitHub Pull Requests, el de `gh`, el de Notion) es
@@ -1073,6 +1074,7 @@ Documentación, y los demás textos enlazan a ella.
 | Rebuild descarga Python y paquetes | Imagen preconstruida por etiqueta, fuera del mínimo viable |
 | Exfiltración por túnel DNS | Riesgo residual; ningún enfoque casero lo cierra |
 | Tokens que caducan | Fallo claro al arrancar; fechas en Bitwarden |
+| Credenciales del humano (por ejemplo el token de GitHub de la extensión Pull Requests) en memoria del extension host, legibles entre procesos del mismo contenedor | Aceptado; exigiría sandboxing por agente (ver sección 8.2) |
 
 ## 12b. Desviaciones verificadas en la construcción (2026-09-06)
 
