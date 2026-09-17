@@ -947,7 +947,7 @@ lanzamiento_duplicado() {  # lanzamiento_duplicado <prompt>
     esac
     case "$args" in *devkit-run.sh*) continue ;; esac
     case "$args" in
-      *claude*"-p $prompt"*) printf '%s\n' "$pid"; return 0 ;;
+      *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
     esac
   done
   return 1
@@ -1036,7 +1036,7 @@ claude_descendiente() {  # claude_descendiente <raíz> <prompt>
     args=${args_de[$pid]:-}
     case "$args" in
       *devkit-run.sh*) ;;
-      *claude*"-p $prompt"*) printf '%s\n' "$pid"; return 0 ;;
+      *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
     esac
     for hijo in ${hijos_de[$pid]:-}; do
       cola+=("$hijo")
@@ -1364,6 +1364,12 @@ run_tests() {
   tabla_dup2='50003 claude -p /task-start DEVKIT-9 --model opus --effort high --output-format json'
   check "lanzamiento_duplicado: encuentra el claude -p vivo del mismo prompt" 50003 \
     "$(printf '%s\n' "$tabla_dup2" | lanzamiento_duplicado '/task-start DEVKIT-9')"
+  # H1 de pr-review en el PR #56: una Clave que es prefijo de otra no debe
+  # dar falso positivo.
+  local tabla_dup3
+  tabla_dup3='50004 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
+  check "lanzamiento_duplicado: Clave prefijo de otra no da falso positivo" "" \
+    "$(printf '%s\n' "$tabla_dup3" | lanzamiento_duplicado '/task-start DEVKIT-7')"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
@@ -2440,6 +2446,14 @@ FIN
   kill "$root_pid" 2>/dev/null; wait "$root_pid" 2>/dev/null
   check "confirmar_arranque elige el claude -p del worker nuevo, no el viejo" \
     "arrancó: claude -p vivo (pid $claude_nuevo_pid)" "$salida_conf"
+
+  # H1 de pr-review en el PR #56: mismo caso que lanzamiento_duplicado, pero
+  # para claude_descendiente, que comparte el mismo patrón.
+  local tabla_desc
+  tabla_desc='90000 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-79 /run/devkit/task-start-1.log opus high 40
+90001 90000 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
+  check "claude_descendiente: Clave prefijo de otra no da falso positivo" "" \
+    "$(printf '%s\n' "$tabla_desc" | claude_descendiente 90000 '/task-start DEVKIT-7')"
 
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
