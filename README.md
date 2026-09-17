@@ -365,15 +365,17 @@ tres `UV_*` ya apuntan a rutas bajo `$HOME`, que sí viaja en la lista. Con ese 
 `stderr` y deja `ALARMA: sin Notion conectado` en `watch.log` en vez de
 gastar turnos en una skill que no va a poder leer la card. Aunque la sonda
 haya visto Notion conectada, el final del `claude -p` cuenta igual que la
-pregunta abierta (alarma y bloqueo de la card con `task-block.sh`) si el
-campo `permission_denials` del evento `result` lista una herramienta de
-Notion (`mcp__*notion*`). Como respaldo, también cuenta si el texto del
-`result` dice en la misma oración "notion" y una forma de falta de acceso
-("no tiene permiso", "no tengo acceso", "sin acceso", "no tengo/estoy
-autorizado"), o pide "autorizar mcp__…Notion". Antes de buscar se descarta
-lo que va entre comillas o backticks: un agente que termina bien suele citar
-esas frases al describir el cambio, y dos `result` reales de este PR
-bloqueaban la card por eso (H10 de `pr-review`). "No autorizado" a secas,
+pregunta abierta (`ALARMA: terminó sin acceso a Notion` y bloqueo de la card
+con `task-block.sh`) si el campo `permission_denials` del evento `result`
+lista una herramienta de Notion (`mcp__*notion*`). Es la única señal que
+bloquea. Como respaldo, si el texto del `result` dice en la misma oración
+"notion" y una forma de falta de acceso ("no tiene permiso", "no tengo
+acceso", "sin acceso", "no tengo/estoy autorizado"), o pide "autorizar
+mcp__…Notion", solo deja `ALARMA: el resultado describe falta de acceso a
+Notion (ver resultado)` en `watch.log`, sin bloquear: un agente que termina
+bien describe este mismo mecanismo con esas frases, y tres `result` reales
+de este PR habrían bloqueado la card por eso (H10 y H13 de `pr-review`).
+Antes de buscar se descarta lo que va entre comillas o backticks. "No autorizado" a secas,
 sin mencionar Notion, tampoco cuenta: coincidía con un `result` que solo
 citaba un comando bloqueado por `pr-guard` (H6 y H9, DEVKIT-65). Por si el nombre del servidor vuelve a
 cambiar con otra versión de la CLI, `--allowedTools` trae los dos nombres
