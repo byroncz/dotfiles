@@ -182,7 +182,7 @@ fi
 # watch.log en los tres casos en que no toca nada, para que ese silencio no
 # se repita.
 no_limpia() {  # no_limpia <motivo>
-  printf '%s task-close.sh %s no limpia el workspace: %s\n' "$(date -u +%FT%TZ)" "$clave" "$1" >> "$WATCH_LOG"
+  printf '%s task-close.sh %s no limpia el workspace: %s\n' "$(date +%FT%T%:z)" "$clave" "$1" >> "$WATCH_LOG"
 }
 exec 9>"$LOCK"
 if flock -n 9; then

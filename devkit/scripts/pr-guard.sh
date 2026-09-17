@@ -426,7 +426,7 @@ if [ -n "$command" ]; then
     # principio de este archivo y la entrada de Documentación de DEVKIT-45).
     # Si bloquea algo legítimo, este log dice qué ampliar en
     # `reason_for_segment`.
-    printf '%s pr-guard denegó: %s :: %s\n' "$(date -u +%FT%TZ)" "$reason" "$command" \
+    printf '%s pr-guard denegó: %s :: %s\n' "$(date +%FT%T%:z)" "$reason" "$command" \
       >> "${DEVKIT_RUN_DIR:-/run/devkit}/denials.log" 2>/dev/null
     printf 'pr-guard: %s\n' "$reason" >&2
     exit 2

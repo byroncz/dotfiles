@@ -293,11 +293,11 @@ modelo_disponible() {  # modelo_disponible <alias>
   # visible en watch.log sin tener que reproducirla (DEVKIT-54).
   if [ "$resultado" = "si" ]; then
     printf '%s devkit-run sonda de modelo: %s responde\n' \
-      "$(date -u +%FT%TZ)" "$modelo_id" >> "$WATCH_LOG" 2>/dev/null
+      "$(date +%FT%T%:z)" "$modelo_id" >> "$WATCH_LOG" 2>/dev/null
   elif [ "$rc" -eq 124 ]; then
     # 124 es el código de `timeout`: el modelo no contestó a tiempo.
     printf '%s devkit-run sonda de modelo: %s no responde en %ss; cae al siguiente de la lista\n' \
-      "$(date -u +%FT%TZ)" "$modelo_id" "$MODEL_CHECK_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+      "$(date +%FT%T%:z)" "$modelo_id" "$MODEL_CHECK_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
   else
     # Cualquier otro código es un error de la CLI (alias desconocido, cuota,
     # red), casi siempre inmediato: decir "no responde en 30s" lo confundía
@@ -305,7 +305,7 @@ modelo_disponible() {  # modelo_disponible <alias>
     local detalle
     detalle=$(grep -m1 -v '^[[:space:]]*$' "$err" 2>/dev/null | cut -c1-160)
     printf '%s devkit-run sonda de modelo: %s falló (rc=%s): %s; cae al siguiente de la lista\n' \
-      "$(date -u +%FT%TZ)" "$modelo_id" "$rc" "${detalle:-sin detalle en stderr}" >> "$WATCH_LOG" 2>/dev/null
+      "$(date +%FT%T%:z)" "$modelo_id" "$rc" "${detalle:-sin detalle en stderr}" >> "$WATCH_LOG" 2>/dev/null
   fi
   [ "$resultado" = "si" ]
 }
@@ -366,7 +366,7 @@ siguiente_modelo() {  # siguiente_modelo <alias>
 # esfuerzo toca en cada ronda. Revisión no tiene ronda: imprime "-".
 
 ronda_aviso() {  # ronda_aviso <prompt> <texto>
-  printf '%s devkit-run ronda de "%s": %s\n' "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$2" \
+  printf '%s devkit-run ronda de "%s": %s\n' "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$2" \
     >> "$WATCH_LOG" 2>/dev/null
 }
 
@@ -443,7 +443,7 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
   if [ "$role" = revision ]; then
     if [ "${#rondas[@]}" -gt 0 ] && [ -n "$avisar" ]; then
       printf '%s devkit-run "%s": revision.rondas se ignora; el revisor no escala (DEVKIT-61)\n' \
-        "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" >> "$WATCH_LOG" 2>/dev/null
+        "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" >> "$WATCH_LOG" 2>/dev/null
     fi
     ronda="-"
     modelo=$(resolver_modelo "$idx")
@@ -515,7 +515,7 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
   printf 'devkit-run: el servidor de Notion no está conectado en el entorno del lanzamiento ("%s mcp list"); no se lanza "%s".\n' \
     "$CLAUDE_BIN" "$1" >&2
   printf '%s devkit-run "%s" ALARMA: sin Notion conectado (claude mcp list); no se lanza\n' \
-    "$(date -u +%FT%TZ)" "$1" >> "$WATCH_LOG" 2>/dev/null
+    "$(date +%FT%T%:z)" "$1" >> "$WATCH_LOG" 2>/dev/null
 }
 
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
@@ -697,7 +697,7 @@ watch_long_running() {  # watch_long_running <prompt> <pid>
     waited=$((waited + SKILL_POLL))
     if [ "$alarmed" -eq 0 ] && [ "$waited" -ge "$SKILL_TIMEOUT" ]; then
       printf '%s devkit-run "%s" ALARMA: lleva %s min corriendo (límite %ss)\n' \
-        "$(date -u +%FT%TZ)" "$prompt" "$((waited / 60))" "$SKILL_TIMEOUT" >> "$WATCH_LOG"
+        "$(date +%FT%T%:z)" "$prompt" "$((waited / 60))" "$SKILL_TIMEOUT" >> "$WATCH_LOG"
       alarmed=1
     fi
   done
@@ -717,7 +717,7 @@ forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo>
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   [ -n "$clave" ] || return 0
   motivo="devkit-run: $skill $3; ver $logf"
-  printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$clave" >> "$WATCH_LOG"
+  printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
 }
 
@@ -749,7 +749,7 @@ modelo_valido() {  # modelo_valido <modelo> <prompt>
   printf 'devkit-run: no se pudo resolver un modelo para "%s" (roles.toml: %s); no se lanza. Revisa `frontera` y el rol.\n' \
     "$2" "$ROLES_FILE" >&2
   printf '%s devkit-run "%s" ALARMA: modelo vacío al resolver el rol (roles.toml: %s); no se lanza\n' \
-    "$(date -u +%FT%TZ)" "$2" "$ROLES_FILE" >> "$WATCH_LOG" 2>/dev/null
+    "$(date +%FT%T%:z)" "$2" "$ROLES_FILE" >> "$WATCH_LOG" 2>/dev/null
   return 1
 }
 
@@ -856,7 +856,7 @@ prompt_en_linea() {  # prompt_en_linea <prompt>
 
 linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log>
   printf '%s %s lanzando (origen=%s): "%s" log=%s\n' \
-    "$(date -u +%FT%TZ)" "$1" "$2" "$(prompt_en_linea "$3")" "$4"
+    "$(date +%FT%T%:z)" "$1" "$2" "$(prompt_en_linea "$3")" "$4"
 }
 
 # Espera el marcador de fin de arranque. Sin él, el contenedor todavía está
@@ -877,7 +877,7 @@ esperar_arranque() {  # esperar_arranque <prompt>
     "$READY_TIMEOUT" "$READY_FILE" "$1" >&2
   printf 'Mira qué pasó con `devkit logs <proyecto>` desde el host y vuelve a lanzar cuando termine.\n' >&2
   printf '%s devkit-run "%s" ALARMA: arranque del contenedor sin terminar tras %ss; no se lanza\n' \
-    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$READY_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
+    "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$READY_TIMEOUT" >> "$WATCH_LOG" 2>/dev/null
   return 1
 }
 
@@ -900,7 +900,7 @@ avisar_atras_de_origin() {  # avisar_atras_de_origin <prompt>
   printf 'devkit-run: el workspace está %s commit(s) detrás de origin/main; puede estar lanzando con código viejo (git switch main && git pull --ff-only).\n' \
     "$atras" >&2
   printf '%s devkit-run "%s" ALARMA: workspace %s commit(s) detrás de origin/main; puede lanzar con código viejo\n' \
-    "$(date -u +%FT%TZ)" "$(prompt_en_linea "$1")" "$atras" >> "$WATCH_LOG" 2>/dev/null
+    "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$atras" >> "$WATCH_LOG" 2>/dev/null
 }
 
 # Confirma que el lanzamiento en segundo plano arrancó. Espera hasta
@@ -950,7 +950,7 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
   # mismo evento (rc=67, candado ya liberado).
   if ! grep -qE "falló \(rc=67\) \[$id\]:" "$WATCH_LOG" 2>/dev/null; then
     printf '%s devkit-run "%s" ALARMA: no arrancó; el worker murió en %ss sin resumen [%s]\n' \
-      "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
+      "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" "$ARRANQUE_ESPERA" "$id" >> "$WATCH_LOG" 2>/dev/null
   fi
   return 1
 }
@@ -2361,7 +2361,7 @@ case "${1:-}" in
     modelo_valido "$modelo" "$prompt" || exit 65
     exec 9>"$LOCK"
     if ! flock -n 9; then
-      printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+      printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
       flock 9
     fi
     # El candado queda tomado durante todo el `claude -p`: task-block.sh lo
@@ -2381,13 +2381,13 @@ case "${1:-}" in
     [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
     # `[<id>]` une el resumen con su línea "lanzando" para `--estado`: dos
     # lanzamientos del mismo prompt solo se distinguen por el log.
-    printf '%s devkit-run "%s" %s [%s]: %s\n' "$(date -u +%FT%TZ)" "$(prompt_en_linea "$prompt")" "$estado" \
+    printf '%s devkit-run "%s" %s [%s]: %s\n' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" "$estado" \
       "$(basename "$logf" .log)" "$resumen_txt" >> "$WATCH_LOG"
     if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
-          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+          "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf" \
           "terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44)"
       elif notion_denegado "$logf"; then
@@ -2397,20 +2397,20 @@ case "${1:-}" in
         # su propio motivo, para que el humano no busque una pregunta que no
         # existe.
         printf '%s devkit-run "%s" ALARMA: terminó sin acceso a Notion (permission_denials)\n' \
-          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+          "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf" \
           "terminó sin acceso a Notion pese a que \`claude mcp list\` la vio conectada (DEVKIT-65)"
       elif result_sin_notion "$logf"; then
         # H13 de pr-review: el texto solo avisa; el humano mira el resultado.
         printf '%s devkit-run "%s" ALARMA: el resultado describe falta de acceso a Notion (ver resultado)\n' \
-          "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
+          "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
       fi
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
       # segunda alarma por el mismo evento (H5 de pr-review, DEVKIT-65).
       printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
-        "$(date -u +%FT%TZ)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
+        "$(date +%FT%T%:z)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
     fi
     exit $rc
     ;;

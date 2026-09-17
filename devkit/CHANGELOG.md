@@ -14,6 +14,35 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### Hora local del Mac en todo el contenedor (DEVKIT-64)
+
+- `devkit/host/devkit.sh` detecta la zona horaria del Mac con `readlink
+  /etc/localtime` (macOS la enlaza a `/var/db/timezone/zoneinfo/<Zona>`), la
+  escribe como `DEVKIT_TZ` en `~/.devkit/<proyecto>/.env` en `up`,
+  `recreate`, `rebuild` y `update`, y `devkit/compose.yaml` la pasa al
+  contenedor `dev` como `TZ` (`${DEVKIT_TZ:-UTC}`). Sin zona detectable: UTC
+  y un aviso en la consola del Mac; el comando no se detiene por esto.
+- `devkit/Dockerfile` instala `tzdata`, la base de zonas que `TZ` necesita
+  para resolver un nombre como `America/Bogota` (un offset fijo no la
+  necesita, pero un nombre sí).
+- `watch.sh`, `devkit-run.sh`, `task-close.sh`, `task-block.sh`,
+  `sync-sandbox.sh`, `entrypoint.sh` y `pr-guard.sh` dejan de escribir marcas
+  legibles con `date -u +%FT%TZ` y escriben `date +%FT%T%:z`: la hora del Mac,
+  con desplazamiento. Ninguna línea nueva de `watch.log` termina en `Z`. Las
+  comparaciones por hora (`launched`, ventana de PRs mergeados, hora de
+  reinicio de cuota) siguen en epoch (`date +%s`, `date -d "<marca>" +%s`),
+  que interpreta igual una marca vieja en `Z` y una nueva con desplazamiento.
+  `dropbox-setup.sh` queda igual: su `expiry` lo parsea `rclone` como token
+  OAuth, no es una marca que lea un humano.
+- `docs/ARCHITECTURE.md` (4.8 y 6.3) y el README dicen qué queda en hora
+  local y qué sigue en UTC (`mergedAt`, `submittedAt` y `createdAt` de
+  GitHub; `Creado` y `Cierre` de Notion).
+- Cambios requeridos: `devkit recreate` (el `Dockerfile` con `tzdata` entra
+  por imagen) y reinstalar el comando del Mac y `compose.yaml`
+  (`new-project.sh <proyecto> --ref <rama>` o copiar
+  `template/host/devkit.sh` y `template/compose.yaml`), para que `devkit up`
+  vuelva a escribir `DEVKIT_TZ`.
+
 ### Prompt de una línea, y `task-close.sh` deja de callar al limpiar (DEVKIT-63)
 
 - `devkit/zsh/starship.toml` deja el preset de símbolos de texto plano por un

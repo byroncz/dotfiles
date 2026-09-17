@@ -226,7 +226,7 @@ if [ -n "${DEVKIT_SANDBOX_REMOTE:-}" ] && [ -r "$HOME/.config/rclone/rclone.conf
   if [ ! -f "$SANDBOX/.restored" ]; then
     log "restaurando sandbox desde $DEVKIT_SANDBOX_REMOTE"
     if rclone mkdir "$DEVKIT_SANDBOX_REMOTE" && rclone copy --quiet "$DEVKIT_SANDBOX_REMOTE" "$SANDBOX"; then
-      date -u +%FT%TZ > "$SANDBOX/.restored"
+      date +%FT%T%:z > "$SANDBOX/.restored"
     else
       warn "restauración falló; NO se iniciará el sync para proteger el respaldo"
     fi
@@ -298,5 +298,5 @@ fi
 
 log "listo. Proyecto: ${DEVKIT_PROJECT:-?}  Template: ${DEVKIT_VERSION:-dev}"
 # Marcador que espera el comando devkit del host antes de abrir la sesión.
-date -u +%FT%TZ > "$RUN_DIR/ready"
+date +%FT%T%:z > "$RUN_DIR/ready"
 exec "$@"

@@ -155,7 +155,7 @@ run_tests() {
     "devkit:dev ${VERDE}feat/DEVKIT-63${RESET} ${AZUL}agentes:3${RESET}" "$(linea "$tmp/ws")"
   echo 0 >"$doble_agentes_n"
 
-  printf '%s ALARMA: uno\n%s ALARMA: dos\n' "$(date -u +%FT%TZ)" "$(date -u +%FT%TZ)" >"$tmp/run/watch.log"
+  printf '%s ALARMA: uno\n%s ALARMA: dos\n' "$(date +%FT%T%:z)" "$(date +%FT%T%:z)" >"$tmp/run/watch.log"
   check "!k cuenta las ALARMA sin marcador de vistas" \
     "devkit:dev ${VERDE}feat/DEVKIT-63${RESET} ${ROJO_NEGRITA}!2${RESET}" "$(linea "$tmp/ws")"
   echo 1 >"$tmp/run/alarmas-vistas"

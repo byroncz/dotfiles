@@ -89,6 +89,16 @@ case "$url" in
       body="{\"version\":\"$ver\",\"engines\":{\"vscode\":\"$engine\"}}"
       if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
     fi ;;
+  # `devkit update` descarga la etiqueta destino con `curl -fsSL ... | tar
+  # -xz`, sin `-o`: el doble arma al vuelo un tarball mínimo con un `devkit/`
+  # (Dockerfile y vscode/extensions.toml) y lo imprime a stdout.
+  https://github.com/*/archive/refs/tags/*.tar.gz)
+    work="$(mktemp -d)"
+    mkdir -p "$work/repo/devkit/vscode"
+    printf 'ARG OPENVSCODE_VERSION=1.109.5\n' > "$work/repo/devkit/Dockerfile"
+    printf '"Anthropic.claude-code" = "latest"\n' > "$work/repo/devkit/vscode/extensions.toml"
+    tar -C "$work" -czf - repo
+    rm -rf "$work" ;;
   *) [ -n "$out" ] && : > "$out" ;;
 esac
 FIN
@@ -217,6 +227,42 @@ FIN
     chmod +x "$TMP/bin/open"
   fi
 }
+
+# --- Zona horaria del Mac (DEVKIT-64) ----------------------------------------
+# detectar_tz lee DEVKIT_LOCALTIME_FILE en vez de /etc/localtime real (que en
+# esta máquina no es un Mac): un symlink a `.../zoneinfo/<Zona>` como el que
+# arma macOS, y su ausencia, que es lo que ve un Linux sin ese enlace.
+env_tz() { sed -n 's/^DEVKIT_TZ=//p' "$TMP/root/p/.env" | tail -1; }
+
+escenario dev
+ln -sfn /var/db/timezone/zoneinfo/America/Bogota "$TMP/localtime-mac"
+DEVKIT_LOCALTIME_FILE="$TMP/localtime-mac" corre up
+check        "up detecta la zona del Mac" America/Bogota "$(env_tz)"
+check        "up detecta la zona del Mac: no avisa" no \
+             "$(grep -q 'no se pudo detectar la zona' "$OUT" && echo si || echo no)"
+
+escenario dev
+DEVKIT_LOCALTIME_FILE="$TMP/no-existe" corre up
+check        "sin zona detectable: usa UTC" UTC "$(env_tz)"
+check_salida "sin zona detectable: avisa en la consola del Mac" "no se pudo detectar la zona horaria"
+
+escenario dev
+ln -sfn /var/db/timezone/zoneinfo/America/Bogota "$TMP/localtime-mac"
+DEVKIT_LOCALTIME_FILE="$TMP/localtime-mac" corre recreate
+check        "recreate también escribe DEVKIT_TZ" America/Bogota "$(env_tz)"
+
+escenario dev
+ln -sfn /var/db/timezone/zoneinfo/America/Bogota "$TMP/localtime-mac"
+DEVKIT_LOCALTIME_FILE="$TMP/localtime-mac" corre rebuild
+check        "rebuild también escribe DEVKIT_TZ" America/Bogota "$(env_tz)"
+
+escenario dev
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+ln -sfn /var/db/timezone/zoneinfo/America/Bogota "$TMP/localtime-mac"
+DEVKIT_LOCALTIME_FILE="$TMP/localtime-mac" corre update
+check        "update también escribe DEVKIT_TZ" America/Bogota "$(env_tz)"
+check        "update también escribe DEVKIT_TZ: termina bien" 0 "$ESTADO"
 
 # --- Modo dev, contenedor arriba --------------------------------------------
 escenario dev; corre recreate
