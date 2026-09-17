@@ -22,7 +22,7 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    La única comprobación válida de si hay otro agente trabajando el mismo
    workspace es `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
    --otros-agentes`: sale 0 si está libre y 1 si lo ocupa otro, e imprime los
-   procesos ajenos y, si corrés dentro de un agente, una línea
+   procesos ajenos y, si corres dentro de un agente, una línea
    `propio: <pid> claude -p "<prompt>"` con tu propio proceso ya identificado.
    Tu propio `claude -p` aparece en cualquier `ps` con el mismo prompt de esta
    card y `PPID` 1 (el efecto del `nohup` de quien te lanzó, no un indicio de
