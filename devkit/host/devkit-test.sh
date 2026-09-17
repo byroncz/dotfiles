@@ -5,8 +5,10 @@
 # el workspace antes de construir, fuera de modo dev no se toca, y cuando el
 # contenedor no responde se avisa y se sigue con la copia que hay. También
 # cubre `devkit code` (DEVKIT-51), `devkit awake` con un doble de caffeinate
-# (DEVKIT-66) y, con un doble de `curl`, la resolución de
-# devkit/vscode/extensions.toml contra Open VSX (DEVKIT-67).
+# (DEVKIT-66), con un doble de `curl`, la resolución de
+# devkit/vscode/extensions.toml contra Open VSX (DEVKIT-67), y el chequeo de
+# engines.vscode contra la versión de openvscode-server del Dockerfile, con
+# reintentos ante un 5xx (DEVKIT-73).
 # Sale con 1 si algún caso falla.
 # Uso: bash devkit-test.sh
 set -u
@@ -19,7 +21,7 @@ trap 'rm -rf "$TMP"' EXIT
 export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
 
 # --- Doble de curl -----------------------------------------------------------
-# Solo responde la API "latest" de Open VSX que usa resolve_extensions, con
+# Solo responde la API de Open VSX que usa resolve_extensions, con
 # `-o <archivo> -w '%{http_code}'` como el real: escribe el cuerpo en el
 # archivo y el código HTTP en stdout, para poder distinguir un 404
 # (`DEVKIT_TEST_CURL_404=1`) de un 200 (H4, DEVKIT-67). `DEVKIT_TEST_CURL_503=1`
@@ -28,14 +30,29 @@ export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
 # `update`, que estos escenarios no ejercitan) sale en 0 sin cuerpo.
 # `DEVKIT_TEST_CURL_DOWN=1` simula el Mac sin red: exit 7, como el curl real,
 # antes de escribir nada.
+#
+# DEVKIT-73: el cuerpo de "/latest" también lleva "engines.vscode"
+# (`DEVKIT_TEST_OVX_ENGINE`, por defecto compatible) y, si se declara,
+# "allVersions" (`DEVKIT_TEST_OVX_ALLVERSIONS`, el contenido de ese objeto
+# JSON) para el recorrido de `ultima_compatible`. Una URL de versión exacta
+# (no "/latest") responde con el motor de `DEVKIT_TEST_OVX_ENGINE_<versión>`
+# (puntos por guiones bajos) o 404 si no se declaró ninguno para esa versión,
+# así una prueba solo declara los motores que espera que se consulten.
+# `DEVKIT_TEST_CURL_503_COUNT=<n>` simula un Open VSX que se recupera: cuenta
+# los intentos que --retry haría (1 + el valor de --retry) y responde 503
+# mientras no los supere, 200 en cuanto los supera; sirve para probar tanto
+# la recuperación (falla menos veces de las que se reintenta) como que se
+# rinde (falla siempre, igual que `DEVKIT_TEST_CURL_503`, con la ventaja de
+# demostrar que el número de intentos sí importa).
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'FIN'
 #!/bin/sh
 echo "curl $*" >> "$DEVKIT_TEST_LOG"
 [ "${DEVKIT_TEST_CURL_DOWN:-0}" = 1 ] && exit 7
-out=""; prev=""
+out=""; prev=""; retry=0
 for a; do
   [ "$prev" = -o ] && out="$a"
+  [ "$prev" = --retry ] && retry="$a"
   prev="$a"; url="$a"
 done
 case "$url" in
@@ -43,11 +60,32 @@ case "$url" in
     if [ "${DEVKIT_TEST_CURL_404:-0}" = 1 ]; then
       [ -n "$out" ] && : > "$out"
       printf '404'
+    elif [ -n "${DEVKIT_TEST_CURL_503_COUNT:-}" ]; then
+      intentos=$((retry + 1))
+      if [ "$intentos" -gt "$DEVKIT_TEST_CURL_503_COUNT" ]; then
+        body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\",\"engines\":{\"vscode\":\"${DEVKIT_TEST_OVX_ENGINE:-^1.0.0}\"}}"
+        if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
+      else
+        [ -n "$out" ] && : > "$out"
+        printf '503'
+      fi
     elif [ "${DEVKIT_TEST_CURL_503:-0}" = 1 ]; then
       [ -n "$out" ] && : > "$out"
       printf '503'
     else
-      body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\"}"
+      allv="${DEVKIT_TEST_OVX_ALLVERSIONS:-}"
+      body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\",\"engines\":{\"vscode\":\"${DEVKIT_TEST_OVX_ENGINE:-^1.0.0}\"}${allv:+,\"allVersions\":{$allv}}}"
+      if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
+    fi ;;
+  https://open-vsx.org/api/*)
+    ver="${url##*/}"
+    clave="$(printf '%s' "$ver" | tr '.' '_')"
+    eval "engine=\"\${DEVKIT_TEST_OVX_ENGINE_${clave}:-}\""
+    if [ -z "$engine" ]; then
+      [ -n "$out" ] && : > "$out"
+      printf '404'
+    else
+      body="{\"version\":\"$ver\",\"engines\":{\"vscode\":\"$engine\"}}"
       if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
     fi ;;
   *) [ -n "$out" ] && : > "$out" ;;
@@ -116,6 +154,10 @@ escenario() {
   cp "$DEVKIT" "$TMP/ws/devkit/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/p/template/host/devkit.sh"
   cp "$DEVKIT" "$TMP/root/bin/devkit"
+  # DEVKIT-73: resolve_extensions lee la versión del editor de este ARG, la
+  # misma fuente que el Dockerfile de verdad.
+  printf 'ARG OPENVSCODE_VERSION=1.109.5\n' > "$TMP/ws/devkit/Dockerfile"
+  cp "$TMP/ws/devkit/Dockerfile" "$TMP/root/p/template/Dockerfile"
   printf '"Anthropic.claude-code" = "latest"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
   cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
   mkdir -p "$TMP/ws/.devkit"
@@ -250,9 +292,10 @@ check        "con todo al día no se avisa de nada" no \
 
 # --- Resolución de extensiones del editor ------------------------------------
 # resolve_extensions: "latest" se resuelve contra Open VSX y queda en .env y
-# extensions.lock; una versión fija no consulta la API; sin red se usa la
-# última resolución guardada con aviso; sin red y sin resolución previa el
-# comando se detiene sin construir.
+# extensions.lock; una versión fija no vuelve a resolverse contra la API,
+# pero desde DEVKIT-73 sí se consulta para comprobar engines.vscode contra el
+# editor; sin red se usa la última resolución guardada con aviso; sin red y
+# sin resolución previa el comando se detiene sin construir.
 env_ext() { sed -n 's/^DEVKIT_EXTENSIONS=//p' "$TMP/root/p/.env" | tail -1; }
 lock_ext() { tr '\n' ' ' < "$TMP/root/p/extensions.lock" 2>/dev/null | sed 's/ *$//'; }
 
@@ -260,16 +303,22 @@ export DEVKIT_TEST_OVX_VERSION=2.1.270
 escenario dev; corre recreate
 check        "latest resuelto: queda en .env" "Anthropic.claude-code=2.1.270" "$(env_ext)"
 check        "latest resuelto: queda en extensions.lock" "Anthropic.claude-code=2.1.270" "$(lock_ext)"
-check_docker "latest resuelto: consulta Open VSX" si 'curl -sS -o .* -w %\{http_code\} https://open-vsx\.org/api/Anthropic/claude-code/latest'
+check_docker "latest resuelto: consulta Open VSX" si 'curl -sS -o .* -w %\{http_code\} .*https://open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "latest resuelto: motor compatible no avisa" no \
+             "$(grep -q 'exige VS Code' "$OUT" && echo si || echo no)"
 check        "latest resuelto: termina bien" 0 "$ESTADO"
+unset DEVKIT_TEST_OVX_VERSION
 
 escenario dev
 printf '"Anthropic.claude-code" = "1.2.3"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
 cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
 corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
 check        "versión fija: queda en .env tal cual" "Anthropic.claude-code=1.2.3" "$(env_ext)"
-check_docker "versión fija: no consulta Open VSX" no 'open-vsx\.org'
-unset DEVKIT_TEST_OVX_VERSION
+check_docker "versión fija: sí consulta Open VSX para comprobar el motor" si \
+  'curl -sS -o .* -w %\{http_code\} .*https://open-vsx\.org/api/Anthropic/claude-code/1\.2\.3'
+check        "versión fija compatible: termina bien" 0 "$ESTADO"
 
 escenario dev; printf 'Anthropic.claude-code=9.9.8\n' > "$TMP/root/p/extensions.lock"
 export DEVKIT_TEST_CURL_DOWN=1
@@ -311,12 +360,96 @@ unset DEVKIT_TEST_CURL_503
 check_salida "503 de Open VSX sin resolución previa: lo distingue de sin red" "Open VSX respondió 503 y sin resolución previa"
 check        "503 de Open VSX sin resolución previa: se detiene" 1 "$ESTADO"
 
+# --- Chequeo de motor (engines.vscode) contra el editor (DEVKIT-73) ---------
+# La imagen de prueba trae openvscode-server 1.109.5 (ARG del Dockerfile que
+# escribe `escenario`). "^2.0.0" no lo admite; "^1.0.0" sí.
+escenario dev
+export DEVKIT_TEST_OVX_ENGINE="^2.0.0"
+export DEVKIT_TEST_OVX_ALLVERSIONS='"9.9.9":"https://open-vsx.org/api/Anthropic/claude-code/9.9.9","9.9.8":"https://open-vsx.org/api/Anthropic/claude-code/9.9.8"'
+export DEVKIT_TEST_OVX_ENGINE_9_9_9="^2.0.0"
+export DEVKIT_TEST_OVX_ENGINE_9_9_8="^1.0.0"
+corre recreate
+check_salida "latest incompatible con fallback: avisa y dice cuál usa" \
+  'exige VS Code \^2\.0\.0; la imagen lleva 1\.109\.5; se usa 9\.9\.8 \(VS Code \^1\.0\.0\)'
+check        "latest incompatible con fallback: usa la versión que sí calza" \
+  "Anthropic.claude-code=9.9.8" "$(env_ext)"
+check        "latest incompatible con fallback: termina bien" 0 "$ESTADO"
+unset DEVKIT_TEST_OVX_ENGINE_9_9_9 DEVKIT_TEST_OVX_ENGINE_9_9_8
+
+escenario dev
+export DEVKIT_TEST_OVX_ENGINE="^2.0.0"
+export DEVKIT_TEST_OVX_ALLVERSIONS='"9.9.9":"https://open-vsx.org/api/Anthropic/claude-code/9.9.9"'
+export DEVKIT_TEST_OVX_ENGINE_9_9_9="^2.0.0"
+corre recreate
+check_salida "latest incompatible sin ninguna que calce: lo explica" \
+  "exige VS Code \^2\.0\.0; la imagen lleva 1\.109\.5 y no hay ninguna versión publicada que calce"
+check        "latest incompatible sin ninguna que calce: se detiene" 1 "$ESTADO"
+check_docker "latest incompatible sin ninguna que calce: no construye" no 'up -d'
+unset DEVKIT_TEST_OVX_ENGINE_9_9_9 DEVKIT_TEST_OVX_ENGINE DEVKIT_TEST_OVX_ALLVERSIONS
+
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^2.0.0"
+export DEVKIT_TEST_OVX_ENGINE="^1.0.0"
+export DEVKIT_TEST_OVX_ALLVERSIONS='"1.2.3":"https://open-vsx.org/api/Anthropic/claude-code/1.2.3","1.2.2":"https://open-vsx.org/api/Anthropic/claude-code/1.2.2"'
+export DEVKIT_TEST_OVX_ENGINE_1_2_2="^1.0.0"
+corre recreate
+check_salida "versión fija incompatible: se detiene antes del build" \
+  'Anthropic\.claude-code 1\.2\.3 exige VS Code \^2\.0\.0; la imagen lleva 1\.109\.5'
+check_salida "versión fija incompatible: sugiere una que sí calza" \
+  "sugerencia: 1\.2\.2 sí calza con VS Code 1\.109\.5"
+check        "versión fija incompatible: se detiene" 1 "$ESTADO"
+check_docker "versión fija incompatible: no construye" no 'up -d'
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3 DEVKIT_TEST_OVX_ENGINE DEVKIT_TEST_OVX_ALLVERSIONS DEVKIT_TEST_OVX_ENGINE_1_2_2
+
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+cp "$TMP/ws/devkit/vscode/extensions.toml" "$TMP/root/p/template/vscode/extensions.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="~1.2.3"
+corre recreate
+check_salida "rango de motor desconocido: avisa y no rechaza" \
+  'declara engines\.vscode "~1\.2\.3", un formato que no reconozco; se instala sin verificar'
+check        "rango de motor desconocido: igual se instala" \
+  "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check        "rango de motor desconocido: termina bien" 0 "$ESTADO"
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+
+# --- Reintentos ante un 5xx de Open VSX (DEVKIT-73) --------------------------
+# Con --retry 5 (6 intentos en total), un Open VSX que solo falla en el
+# primero se recupera solo; devkit.sh no ve más que el 200 final.
+escenario dev; export DEVKIT_TEST_CURL_503_COUNT=1
+corre recreate
+unset DEVKIT_TEST_CURL_503_COUNT
+check        "503 una vez y luego 200: se recupera sin avisar de sin red" no \
+             "$(grep -qE 'sin red|Open VSX respondió' "$OUT" && echo si || echo no)"
+check        "503 una vez y luego 200: resuelve normal" "Anthropic.claude-code=9.9.9" "$(env_ext)"
+check        "503 una vez y luego 200: termina bien" 0 "$ESTADO"
+check_docker "503 una vez y luego 200: construye" si 'up -d'
+
+# Si el número de intentos de --retry no alcanza a que Open VSX se recupere,
+# se comporta como un 503 persistente (H8, DEVKIT-67): se distingue de "sin
+# red" y, sin resolución previa, se detiene nombrando a Open VSX.
+escenario dev; export DEVKIT_TEST_CURL_503_COUNT=999
+corre recreate
+unset DEVKIT_TEST_CURL_503_COUNT
+check_salida "503 persistente tras reintentar: nombra a Open VSX" "Open VSX respondió 503"
+check        "503 persistente tras reintentar: se detiene" 1 "$ESTADO"
+
+# --- ARG OPENVSCODE_VERSION ausente del Dockerfile ---------------------------
+escenario dev; printf '' > "$TMP/ws/devkit/Dockerfile"; cp "$TMP/ws/devkit/Dockerfile" "$TMP/root/p/template/Dockerfile"
+corre recreate
+check_salida "sin ARG OPENVSCODE_VERSION: lo explica" "no se encontró ARG OPENVSCODE_VERSION"
+check        "sin ARG OPENVSCODE_VERSION: se detiene" 1 "$ESTADO"
+
 # --- Línea inválida en extensions.toml (H5, DEVKIT-67) -----------------------
 # Una línea que no calza con "id" = "versión" (comilla simple, sin comillas,
 # sangría...) se ignoraba en silencio y la extensión desaparecía sin aviso.
 escenario dev
 printf '"Anthropic.claude-code" = "1.2.3"\n  '"'"'ms.otra'"'"' = '"'"'1.0.0'"'"'\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
 corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
 check_salida "línea inválida de extensions.toml avisa" 'no calzan con'
 check        "línea inválida no impide construir con la extensión válida" \
              "Anthropic.claude-code=1.2.3" "$(env_ext)"
@@ -327,7 +460,9 @@ check        "línea inválida: termina bien" 0 "$ESTADO"
 # validación no, y avisaba "se ignoran" de una línea que sí se usaba.
 escenario dev
 printf '"Anthropic.claude-code" = "1.2.3"  # fija\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
 corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
 check        "línea con comentario al final no avisa" no \
              "$(grep -q 'no calzan con' "$OUT" && echo si || echo no)"
 check        "línea con comentario al final se usa igual" \

@@ -2,7 +2,9 @@
 # Formato: "<editor>.<nombre>" = "<versión>" o "latest".
 # "latest" se resuelve contra Open VSX al construir (devkit.sh,
 # resolve_extensions); la resolución queda en ~/.devkit/<proyecto>/ y se pasa
-# a la imagen ya fija, nunca como "latest". Una versión fija se instala tal
-# cual, sin consultar la API.
+# a la imagen ya fija, nunca como "latest". Una versión fija no vuelve a
+# resolverse, pero sí se comprueba contra engines.vscode (DEVKIT-73): una
+# que exige un VS Code más nuevo del que trae la imagen detiene el comando
+# antes de construir, en vez de tumbar el build a mitad del Dockerfile.
 "Anthropic.claude-code" = "latest"
 "GitHub.vscode-pull-request-github" = "0.128.0"
