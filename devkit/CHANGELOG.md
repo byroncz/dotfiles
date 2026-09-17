@@ -27,6 +27,12 @@ versión que usa un proyecto y la destino.
   Notion está conectada en ese mismo entorno; si no, dejar `ALARMA: sin
   Notion conectado` en `watch.log` y no lanza. `DEVKIT_NOTION_CHECK=0`
   apaga la sonda.
+- Si el `claude -p` termina sin acceso a Notion pese a la sonda, la card
+  queda bloqueada sin intervención: `devkit-run` deja `ALARMA: terminó sin
+  acceso a Notion` en `watch.log` y llama a `task-block.sh` con ese motivo.
+  El disparador es una herramienta de Notion en `permission_denials` del
+  evento `result` o, como respaldo, el texto del `result` que lo dice en
+  una misma oración (sin contar lo citado entre comillas o backticks).
 - `--allowedTools` trae los dos nombres conocidos del conector de Notion
   (`mcp__plugin_Notion_notion` y `mcp__claude_ai_Notion`), y
   `devkit/agents/settings.json` los autoriza también para la sesión
