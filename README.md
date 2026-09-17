@@ -53,7 +53,7 @@ Versiones fijadas en [`devkit/Dockerfile`](devkit/Dockerfile): uv 0.12.7,
 gh 2.100.0, rclone 1.75.1, bws 2.1.0, starship 1.24.2,
 openvscode-server 1.109.5.
 
-Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code latest.
+Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code latest, GitHub.vscode-pull-request-github latest.
 La línea de arriba la genera y verifica `devkit/scripts/gen-stack.sh --check`;
 `latest` se resuelve contra Open VSX solo al construir, con `devkit
 up/recreate/rebuild/update` (ver `docs/ARCHITECTURE.md`, sección 9).
