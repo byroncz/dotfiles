@@ -10,6 +10,22 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Ajustes rápidos del editor y del shell (DEVKIT-66)
+
+- Alias `c` para `clear` en `zshrc`.
+- `"chat.disableAIFeatures": true` en los ajustes del editor, con la
+  intención de apagar el chat integrado de VS Code. En esta build de
+  openvscode-server (1.109.5) el comando `Chat: Open Chat` sigue en la
+  paleta: limitación conocida, sin arreglo aquí (ver DEVKIT-71). La
+  extensión Claude Code no cambia.
+- `devkit awake <proyecto>` en el Mac: `caffeinate -i docker wait
+  devkit-<proyecto>` evita el reposo por inactividad mientras el contenedor
+  vive. No evita el reposo al cerrar la tapa. Cubierto en
+  `devkit/host/devkit-test.sh` con un doble de `caffeinate`.
+- Cambios requeridos: `devkit recreate <proyecto>` para el alias y el ajuste
+  del editor; reinstalar el comando `devkit` con `new-project.sh` para tener
+  `awake`.
+
 ### Escalera de modelos por ronda: la implementación escala y el revisor no (DEVKIT-61)
 
 - `roles.toml` admite `implementacion.rondas`, una lista de

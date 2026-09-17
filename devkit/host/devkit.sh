@@ -14,12 +14,14 @@
 #   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
+#   devkit awake <proyecto>     impedir el reposo del Mac mientras el contenedor esté vivo
+#                               (caffeinate -i; no evita el reposo al cerrar la tapa)
 #   devkit ls                   proyectos instanciados
 set -eu
 ROOT="${DEVKIT_HOME:-$HOME/.devkit}"
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,17p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,19p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -105,11 +107,24 @@ code() {
   echo "$url"
   return 0
 }
+# macOS suspende el Mac por inactividad y con él la VM de Docker: los bucles del
+# contenedor dejan de correr. `caffeinate -i` sostiene una aserción contra ese
+# reposo mientras vive el proceso que envuelve; `docker wait` vive lo mismo que
+# el contenedor, así que la aserción se suelta sola cuando el contenedor se
+# detiene. No impide el reposo al cerrar la tapa (DEVKIT-66).
+awake() {
+  command -v caffeinate >/dev/null 2>&1 || { echo "falta caffeinate: 'devkit awake' solo funciona en macOS" >&2; return 1; }
+  [ "$(docker inspect -f '{{.State.Running}}' "devkit-$proj" 2>/dev/null)" = true ] \
+    || { echo "el contenedor devkit-$proj no está corriendo; arráncalo con 'devkit up $proj'" >&2; return 1; }
+  echo "devkit: el Mac no se suspende por inactividad mientras devkit-$proj esté vivo (Ctrl-C para soltar)"
+  caffeinate -i docker wait "devkit-$proj" >/dev/null
+}
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
 case "$cmd" in
   up)       sync_dev_template; compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
+  awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
   recreate) confirm && sync_toml_env && sync_dev_template && compose up -d --build --force-recreate ;;

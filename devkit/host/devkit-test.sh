@@ -3,7 +3,9 @@
 # responde por el contenedor y la prueba comprueba qué queda en el contexto de
 # build. Cubre lo que arregla DEVKIT-30: en modo dev el contexto se rearma desde
 # el workspace antes de construir, fuera de modo dev no se toca, y cuando el
-# contenedor no responde se avisa y se sigue con la copia que hay.
+# contenedor no responde se avisa y se sigue con la copia que hay. También
+# cubre `devkit code` (DEVKIT-51) y `devkit awake` con un doble de caffeinate
+# (DEVKIT-66).
 # Sale con 1 si algún caso falla.
 # Uso: bash devkit-test.sh
 set -u
@@ -25,6 +27,10 @@ cat >"$TMP/bin/docker" <<'FIN'
 echo "docker $*" >> "$DEVKIT_TEST_LOG"
 case "${1:-}" in
   compose) exit 0 ;;
+  inspect)
+    [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && { echo false; exit 0; }
+    echo true; exit 0 ;;
+  wait) echo 0; exit 0 ;;
   cp)
     [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && exit 1
     case "$2" in
@@ -206,5 +212,44 @@ check        "code con open que falla termina en 0" 0 "$ESTADO"
 check_salida "code con open que falla igual imprime la URL" "http://127\.0\.0\.1:3000/\?tkn=secreto123"
 
 open_doble ausente
+
+# --- devkit awake ------------------------------------------------------------
+# caffeinate_doble <presente|ausente>: el doble registra la llamada y ejecuta lo
+# que envuelve, como el de verdad; así se ve que `docker wait` corre dentro de
+# la aserción y no antes ni después (DEVKIT-66).
+caffeinate_doble() {
+  if [ "$1" = "ausente" ]; then
+    rm -f "$TMP/bin/caffeinate"
+  else
+    cat >"$TMP/bin/caffeinate" <<'FIN'
+#!/bin/sh
+echo "caffeinate $*" >> "$DEVKIT_TEST_LOG"
+[ "$1" = -i ] && shift
+exec "$@"
+FIN
+    chmod +x "$TMP/bin/caffeinate"
+  fi
+}
+
+caffeinate_doble presente
+escenario dev; corre awake
+check        "awake con contenedor vivo termina bien" 0 "$ESTADO"
+check_docker "awake envuelve docker wait en caffeinate -i" si '^caffeinate -i docker wait devkit-p$'
+check_docker "awake espera al contenedor" si '^docker wait devkit-p$'
+check_salida "awake dice cómo soltarlo" "Ctrl-C para soltar"
+
+escenario dev; corre awake 1
+check        "awake sin contenedor falla" 1 "$ESTADO"
+check_salida "awake sin contenedor lo explica" "no está corriendo"
+check_docker "awake sin contenedor no llama a caffeinate" no '^caffeinate'
+
+caffeinate_doble ausente
+escenario dev; corre awake
+check        "awake sin caffeinate falla" 1 "$ESTADO"
+check_salida "awake sin caffeinate lo explica" "solo funciona en macOS"
+check_docker "awake sin caffeinate no espera al contenedor" no 'docker wait'
+
+corre nada
+check_salida "la ayuda lista awake" "devkit awake <proyecto>"
 
 exit $fail
