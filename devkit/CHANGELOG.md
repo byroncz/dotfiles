@@ -10,6 +10,22 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Extensión GitHub Pull Requests en el editor, con compuerta de login (DEVKIT-68)
+
+- `devkit/vscode/extensions.toml` suma `"GitHub.vscode-pull-request-github" =
+  "0.128.0"`: deja revisar, comentar y aprobar PRs desde el editor sin
+  cambiar de pestaña. Versión fija, sin `"latest"`: la 0.166.0 que resuelve
+  Open VSX hoy exige VS Code `^1.137.0` y la imagen trae openvscode-server
+  1.109.5; 0.128.0 es la más nueva compatible con `^1.109.0`. Subir el
+  editor para usar una versión más nueva queda para otra card.
+- Compuerta verificada por el humano el 2026-09-17: el login por el
+  proveedor de autenticación de GitHub de VS Code cierra al primer intento
+  contra `127.0.0.1:3000`; el token no queda en claro en el disco del
+  contenedor (vive en el almacén de secretos del navegador); `github.com` y
+  `api.github.com` ya estaban en la lista blanca, sin dominios nuevos.
+  Detalle de amenaza y mitigación en `docs/ARCHITECTURE.md` 8.2.
+- Cambios requeridos: ninguno, `devkit recreate` alcanza.
+
 ### Extensiones del editor versionadas en `extensions.toml` y resueltas contra Open VSX (DEVKIT-67)
 
 - `devkit/vscode/extensions.toml` reemplaza el `ARG CLAUDE_CODE_EXT_VERSION`

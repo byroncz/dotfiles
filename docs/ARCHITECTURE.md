@@ -763,6 +763,20 @@ proceso y aparecen en `docker inspect`.
   rechaza igual que desde cualquier shell del contenedor), y una extensión de
   terceros instalada ahí corre con los mismos permisos del contenedor, sin
   escalar privilegios: no hay `sudo` en la imagen.
+- Extensión `GitHub.vscode-pull-request-github` en el editor (DEVKIT-68):
+  deja al humano revisar, comentar y aprobar PRs desde `127.0.0.1:3000` sin
+  cambiar de pestaña. Amenaza: si su token de GitHub quedara legible en el
+  disco del contenedor, un `claude -p` de ese mismo contenedor podría
+  aprobar PRs con la identidad del humano y saltarse la compuerta humana.
+  Verificado el 2026-09-17: `grep -rIl -e 'gh[opsu]_' -e
+  'github-authentication' ~/.openvscode-server/` no encuentra el token en
+  claro (solo coincide con el nombre del proveedor en código de extensión y
+  en `remoteexthost.log`); no existe ningún `*.vscdb` ni archivo
+  `*secret*`/`*token*` bajo ese directorio. El token vive en el almacén de
+  secretos del navegador, fuera del contenedor. Login por el proveedor de
+  autenticación de GitHub de VS Code, no por el `gh` de la imagen;
+  `github.com` y `api.github.com` ya estaban en la lista blanca del proxy,
+  sin dominios nuevos.
 
 Riesgo residual aceptado: el túnel por DNS. Ningún enfoque casero lo cierra.
 
