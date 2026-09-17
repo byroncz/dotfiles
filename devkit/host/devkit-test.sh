@@ -292,6 +292,17 @@ check_salida "404 de Open VSX: lo explica" "no existe en Open VSX"
 check        "404 de Open VSX: se detiene" 1 "$ESTADO"
 check_docker "404 de Open VSX: no construye" no 'up -d'
 
+# --- Línea inválida en extensions.toml (H5, DEVKIT-67) -----------------------
+# Una línea que no calza con "id" = "versión" (comilla simple, sin comillas,
+# sangría...) se ignoraba en silencio y la extensión desaparecía sin aviso.
+escenario dev
+printf '"Anthropic.claude-code" = "1.2.3"\n  '"'"'ms.otra'"'"' = '"'"'1.0.0'"'"'\n' > "$TMP/ws/devkit/vscode/extensions.toml"
+corre recreate
+check_salida "línea inválida de extensions.toml avisa" 'no calzan con'
+check        "línea inválida no impide construir con la extensión válida" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check        "línea inválida: termina bien" 0 "$ESTADO"
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"
