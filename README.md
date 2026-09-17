@@ -197,17 +197,25 @@ por `Tipo` de DEVKIT-45): `roles.toml` declara una lista `frontera` ordenada
 de alias de modelo (hoy `fable, opus, sonnet`) y cada rol un `model_index`,
 la posición desde la que empieza a buscar el primero disponible.
 `revisión` (`pr-review` y `epic-plan`, desde DEVKIT-50: un mal desglose de
-Épica cuesta más que cualquier card) usa el primer modelo de la lista;
+Épica cuesta más que cualquier card) usa el segundo modelo de la lista
+(`revision.model_index = 2`, hoy `opus`: la mitad de costo por token de
+entrada/salida que el primero, `fable`, y sin ciclos de corrección de sobra
+como implementador -- los PR 39 a 43 necesitaron 1, 1, 0, 0 y 0, DEVKIT-72);
 `implementación` (`task-start`, `task-fix`, `task-submit`, `task-document`)
-el segundo, salvo que el rol declare `rondas` (ver "Escalera de modelos por
-ronda" más abajo), que manda sobre `model_index` mientras esté activa. Cerrar
-y bloquear no tienen rol: desde DEVKIT-55 son bash (`task-close.sh`,
-`task-block.sh`) y no lanzan modelo, así que el rol `contabilidad` que los
-agrupaba se retiró. El esfuerzo es `high` en todos los roles salvo
-`epic-plan`, que sube a `max`, y salvo que `rondas` fije uno distinto por
-ronda: un mal desglose se paga en todas sus hijas. El `Tipo` de la card
-(`feature`, `bug`, `chore`) ya no elige modelo ni esfuerzo; sigue eligiendo el
-prefijo de rama y la sección del CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
+también el segundo, salvo que el rol declare `rondas` (ver "Escalera de
+modelos por ronda" más abajo), que manda sobre `model_index` mientras esté
+activa. Tanto el modelo (`model_index`) como el esfuerzo (`effort`) admiten
+además una anulación por skill sobre el valor del rol: `epic-plan` declara
+`epic-plan.model_index = 1` para quedarse en el primer modelo de frontera
+-un mal desglose de Épica se paga en todas sus hijas, así que no baja de
+calidad- igual que ya declaraba `epic-plan.effort = "max"`. Cerrar y bloquear
+no tienen rol: desde DEVKIT-55 son bash (`task-close.sh`, `task-block.sh`) y
+no lanzan modelo, así que el rol `contabilidad` que los agrupaba se retiró.
+El esfuerzo es `high` en todos los roles salvo `epic-plan`, que sube a `max`,
+y salvo que `rondas` fije uno distinto por ronda: un mal desglose se paga en
+todas sus hijas. El `Tipo` de la card (`feature`, `bug`, `chore`) ya no elige
+modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
+CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
 arranque del contenedor y el resultado queda cacheado en
 `/run/devkit/frontera/<alias>` (tmpfs: se vuelve a comprobar en cada `devkit
 recreate`). Un `si` vale todo el arranque; un `no` caduca a los 600 s
@@ -240,7 +248,7 @@ contra ese número y avisa en el log si se excede. La línea de resumen queda
 así:
 
 ```
-pr-review-31-a1b2c3d terminado: modelo=fable esfuerzo=high ronda=- costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
+pr-review-31-a1b2c3d terminado: modelo=opus esfuerzo=high ronda=- costo=0.42 turnos=12 tokens: ... :: PR #31: veredicto OK...
 task-fix-31-e4f5g6h terminado: modelo=opus esfuerzo=high ronda=3 costo=0.61 turnos=18 tokens: ... :: H1 | atendido | 1234abc
 ```
 
@@ -282,8 +290,9 @@ El alias de la ronda pasa por la misma sonda que `frontera` (caché en
 `task-fix` vacío) siguen mandando por encima de la ronda.
 
 `revision.rondas` se ignora a propósito, con una línea en `watch.log`:
-`pr-review` y `epic-plan` siguen con el primer modelo disponible de
-`frontera` en esfuerzo `high` (`max` para `epic-plan`). El revisor es la
+`pr-review` sigue con el modelo de `revision.model_index` (hoy el segundo de
+`frontera`, `opus`) y `epic-plan` con el primero (`epic-plan.model_index`),
+los dos en esfuerzo `high` (`max` para `epic-plan`). El revisor es la
 compuerta de calidad, y uno más débil da OK falsos que nadie detecta.
 
 Para desactivar la escalera, quita la línea `implementacion.rondas` (del

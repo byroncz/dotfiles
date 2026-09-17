@@ -10,6 +10,23 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `pr-review` corre en Opus; `epic-plan` conserva el primer modelo de frontera (DEVKIT-72)
+
+- `roles.toml`: `revision.model_index = 2`. Con `frontera = ["fable", "opus",
+  "sonnet"]`, la revisión pasa de `fable` a `opus`: la mitad de costo por
+  token de entrada/salida (USD 5/25 frente a 10/50 por millón) y sin ciclos
+  de corrección de sobra como implementador (PR 39 a 43: 1, 1, 0, 0 y 0
+  ciclos, evidencia de DEVKIT-54). Si `opus` no responde, la sonda de
+  `frontera` cae a `sonnet`, no a `fable`.
+- `devkit-run.sh`: `model_effort_of` admite `<skill>.model_index` como
+  anulación por skill sobre `model_index` del rol, igual que ya admitía
+  `<skill>.effort`. `epic-plan.model_index = 1` en `roles.toml` usa esa
+  anulación para quedarse en el primer modelo de frontera: un mal desglose
+  de Épica se paga en todas sus hijas.
+- `revision.rondas` sigue sin existir: el revisor no escala (DEVKIT-61), y
+  esta card cambia qué modelo revisa, no esa regla.
+- Cambios requeridos: ninguno, `devkit recreate` alcanza.
+
 ### Entorno limpio y comprobación de Notion en el `claude -p` hijo (DEVKIT-65)
 
 - `run_claude` (en `devkit-run.sh`) arma el entorno de cada `claude -p` con

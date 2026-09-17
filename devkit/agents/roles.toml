@@ -20,16 +20,23 @@
 # (1-based) en esta lista desde la que empieza a buscar.
 frontera = ["fable", "opus", "sonnet"]
 
-# revisión: pr-review y epic-plan, siempre el primer modelo de la lista.
-# `max_turns` es un presupuesto, no un límite: la CLI instalada (2.1.270) no
-# expone `--max-turns`, así que devkit-run compara `num_turns` del resultado
-# contra este número y solo avisa en el log si se excede.
-revision.model_index = 1
+# revisión: pr-review corre en el segundo modelo de la lista, no en el
+# primero (DEVKIT-72). Con `frontera = ["fable", "opus", "sonnet"]`, Fable
+# cuesta el doble por token que Opus (USD 10/50 frente a 5/25 por millón de
+# tokens de entrada/salida) y la evidencia de Opus como implementador ya
+# está: los PR 39 a 43 necesitaron 1, 1, 0, 0 y 0 ciclos de corrección
+# (DEVKIT-54). `max_turns` es un presupuesto, no un límite: la CLI instalada
+# (2.1.270) no expone `--max-turns`, así que devkit-run compara `num_turns`
+# del resultado contra este número y solo avisa en el log si se excede.
+revision.model_index = 2
 revision.effort = "high"
 revision.max_turns = 50
 
 # epic-plan pesa más que pr-review dentro de revisión: un mal desglose se
-# paga en todas sus hijas, así que sube a esfuerzo máximo.
+# paga en todas sus hijas, así que se queda en el primer modelo de frontera
+# (anulación por skill sobre revision.model_index, DEVKIT-72) y sube a
+# esfuerzo máximo.
+epic-plan.model_index = 1
 epic-plan.effort = "max"
 
 # implementación: task-start, task-fix, task-submit y task-document.

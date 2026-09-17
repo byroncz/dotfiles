@@ -397,8 +397,9 @@ ronda_de() {  # ronda_de <prompt>
 # con su alias por la misma sonda de `frontera`; si el alias no responde, el
 # modelo de `model_index` y una línea en watch.log. Sin `rondas`,
 # `model_index` y `effort` del rol, como antes de DEVKIT-61. `revision` no
-# escala: su `rondas` se ignora con aviso. El esfuerzo admite además una
-# anulación por skill (por ejemplo `epic-plan.effort`), que manda sobre todo.
+# escala: su `rondas` se ignora con aviso. Tanto el modelo como el esfuerzo
+# admiten además una anulación por skill (por ejemplo `epic-plan.model_index`
+# o `epic-plan.effort`, DEVKIT-72), que manda sobre el valor del rol.
 #
 # [ronda] viene cuando quien llama ya la resolvió (watch.sh la pasa de `--rol`
 # a `--sync` en DEVKIT_RONDA): no se vuelve a consultar el PR ni se repiten
@@ -410,6 +411,8 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
   role=$(role_of "$1")
   if [ -n "${2:-}" ]; then ronda=$2; avisar=""; else ronda=$(ronda_de "$1"); fi
   idx=$(role_field "$role" model_index)
+  i=$(role_field "$skill" model_index)
+  [ -z "$i" ] || idx=$i
   esfuerzo=$(role_field "$role" effort)
   while IFS= read -r elem; do rondas+=("$elem"); done < <(toml_lista "$role.rondas")
   if [ "$role" = revision ]; then
@@ -1165,6 +1168,49 @@ FIN
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
   check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-barato low 15 1" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
+  # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
+  # `epic-plan.effort`: con la tabla real del template, pr-review sube al
+  # segundo modelo de frontera (opus) y epic-plan se queda en el primero
+  # (fable).
+  cat >"$tmp/roles-anulacion-modelo.toml" <<'FIN'
+frontera = ["fable", "opus", "sonnet"]
+revision.model_index = 2
+revision.effort = "high"
+revision.max_turns = 50
+epic-plan.model_index = 1
+epic-plan.effort = "max"
+FIN
+  check "pr-review sube al segundo modelo de frontera (revision.model_index)" "opus high 50 -" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-anulacion-modelo.toml" FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
+  check "epic-plan anula model_index a 1: primer modelo de frontera" "fable max 50 -" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-anulacion-modelo.toml" FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
+  # De punta a punta, no solo en `model_effort_of` aislado: el doble de
+  # `claude` recibe de verdad `--model opus` para pr-review y `--model fable`
+  # para epic-plan. La ruta del log queda fija en el script del doble, no en
+  # una variable de entorno: `run_claude` lanza con `env -i` y una lista
+  # blanca que no incluye variables de esta prueba.
+  local registra
+  registra="$tmp/claude-registra"
+  cat >"$registra" <<FIN
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$tmp/claude-llamadas"
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
+FIN
+  chmod +x "$registra"
+  : >"$tmp/claude-llamadas"
+  DEVKIT_CLAUDE_BIN="$registra" DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" \
+    DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 9' >/dev/null 2>&1
+  check "el claude -p de pr-review recibe --model opus" 1 \
+    "$(grep -c -- '--model opus' "$tmp/claude-llamadas")"
+  : >"$tmp/claude-llamadas"
+  DEVKIT_CLAUDE_BIN="$registra" DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" \
+    DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/epic-plan DEVKIT-1' >/dev/null 2>&1
+  check "el claude -p de epic-plan recibe --model fable" 1 \
+    "$(grep -c -- '--model fable' "$tmp/claude-llamadas")"
 
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
