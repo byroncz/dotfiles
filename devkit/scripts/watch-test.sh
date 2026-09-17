@@ -323,11 +323,11 @@ check_igual "no pasa del tope" 2 "$LLAMADAS"
 
 # --- devkit-run como único punto de lanzamiento (DEVKIT-45/DEVKIT-54) ------
 # run_skill delega en devkit-run.sh, que resuelve modelo y esfuerzo por rol
-# desde roles.toml; pr-review siempre cae en el rol "revision" (el primer
-# modelo de la lista `frontera`), sin importar el Tipo de la card.
+# desde roles.toml; pr-review siempre cae en el rol "revision" (el segundo
+# modelo de la lista `frontera`, DEVKIT-72), sin importar el Tipo de la card.
 corre_doble 0
 check_log "la línea de resumen trae el modelo del rol de revisión" \
-  'modelo=fable esfuerzo=high'
+  'modelo=opus esfuerzo=high'
 # DEVKIT-57: la línea "lanzando" con origen, prompt y log, que lee
 # `devkit-run --estado`.
 check_log "run_skill deja la línea lanzando con origen bucle" \
