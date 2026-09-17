@@ -201,6 +201,23 @@ check_salida "update en dev manda a recreate" "usa 'devkit recreate p'"
 check        "update en dev no toca el contexto" MARCA-VIEJA "$(marca)"
 check_docker "update en dev no construye" no 'compose'
 
+# --- update con compose.yaml sin EXTENSIONS (H2, DEVKIT-67) -----------------
+# compose.yaml del Mac de antes de DEVKIT-67 no declara EXTENSIONS: el
+# build seguiría sin avisar y sin extensiones. `update` debe detenerse antes
+# de descargar la etiqueta.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+corre update
+check        "update con compose.yaml sin EXTENSIONS se detiene" 1 "$ESTADO"
+check_salida "update con compose.yaml sin EXTENSIONS lo explica" "no declara EXTENSIONS"
+check_docker "update con compose.yaml sin EXTENSIONS no descarga la etiqueta" no 'archive/refs/tags'
+
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check_salida "update con compose.yaml al día no se detiene por EXTENSIONS" "actualizando template"
+
 # --- Avisos de los archivos del Mac -----------------------------------------
 escenario dev; echo 'name: otro' > "$TMP/root/p/compose.yaml"; corre recreate
 check_salida "compose.yaml del Mac desincronizado" "compose.yaml difiere del template"

@@ -194,6 +194,13 @@ case "$cmd" in
       fi
       exit 0
     fi
+    # $dir/compose.yaml es del Mac: solo new-project.sh lo escribe, `update`
+    # trae devkit/ pero nunca lo toca. Si quedó de antes de DEVKIT-67, no
+    # declara el ARG EXTENSIONS y la imagen se reconstruye sin extensiones,
+    # sin aviso (`warn_host_stale` solo corre desde `sync_dev_template`, que
+    # `update` no llama). Se detiene en vez de construir un editor incompleto.
+    grep -q 'EXTENSIONS:' "$dir/compose.yaml" 2>/dev/null \
+      || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh --ref v$target' antes de actualizar" >&2; exit 1; }
     echo "devkit: actualizando template $current -> $target"
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
     curl -fsSL "https://github.com/$REPO/archive/refs/tags/v$target.tar.gz" | tar -xz -C "$tmp"
