@@ -481,6 +481,7 @@ run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
     "DEVKIT_SCRIPTS_DIR=$HERE" "DEVKIT_RUN_DIR=$RUN_DIR"
   )
   [ -z "${DEVKIT_LOCK_HELD:-}" ] || extra+=("DEVKIT_LOCK_HELD=$DEVKIT_LOCK_HELD")
+  [ -z "${DEVKIT_LANZADOR:-}" ] || extra+=("DEVKIT_LANZADOR=$DEVKIT_LANZADOR")
 
   local -a lanzador
   if [ "$ENV_LIMPIO" = 0 ]; then
@@ -1477,6 +1478,22 @@ FIN
   check "--sync con modelo forzado exporta el forzado" '{"result":"modelo-forzado low","total_cost_usd":0,"num_turns":1}' \
     "$(DEVKIT_MODELO_FORZADO=modelo-forzado DEVKIT_CLAUDE_BIN="$espejo_modelo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
        DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-modelo" \
+       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
+
+  # H1 de pr-review (DEVKIT-65): DEVKIT_LANZADOR=watch, que watch.sh fija al
+  # llamar a --sync para que task-fix sepa que lo lanzó el bucle y no firme
+  # manual=1, debe llegar al `claude -p` hijo pese a ENV_LIMPIO=1 y su lista
+  # blanca de `env -i` (no está en ENV_HEREDABLE: la copia run_claude aparte).
+  local espejo_lanzador
+  espejo_lanzador="$tmp/claude-espejo-lanzador"
+  cat >"$espejo_lanzador" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"%s","total_cost_usd":0,"num_turns":1}\n' "${DEVKIT_LANZADOR:-vacío}"
+FIN
+  chmod +x "$espejo_lanzador"
+  check "--sync con DEVKIT_LANZADOR=watch lo pasa al claude -p pese a env -i" '{"result":"watch","total_cost_usd":0,"num_turns":1}' \
+    "$(DEVKIT_LANZADOR=watch DEVKIT_ENV_LIMPIO=1 DEVKIT_CLAUDE_BIN="$espejo_lanzador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-lanzador" \
        bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
 
   # DEVKIT-65: un `claude -p` lanzado por otro (`epic-plan` corriendo dentro
