@@ -86,19 +86,34 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 `rebuild` y `update` resuelven cada `latest` en el Mac contra
 `https://open-vsx.org/api/<editor>/<nombre>/latest` antes de construir, guardan
 la resolución en `~/.devkit/<proyecto>/extensions.lock` y pasan versiones
-exactas a la imagen (nunca `latest`); una versión fija se instala tal cual, sin
-consultar la API. Con la misma resolución, un `devkit recreate` no reconstruye
-la capa de extensiones (sale `CACHED`); con una versión distinta, sí. Sin red
-en el Mac se usa la última resolución guardada, con el aviso `devkit: aviso:
-sin red para Open VSX; se usa la última versión resuelta de <extensión>
-(<versión>)`; sin red y sin resolución previa, el comando se detiene sin
-construir. Si Open VSX responde 404 para una extensión, `up`, `recreate`,
-`rebuild` y `update` se detienen con `devkit: extensión <id> no existe en Open
-VSX (404)` en vez de construir sin ella. `devkit update` además se detiene si
-el `compose.yaml` del proyecto no declara el build arg `EXTENSIONS` (quedó de
-antes de este versionado): pide reinstalar con `new-project.sh <proyecto>
---version <x>` antes de actualizar. Detalle de diseño en
-`docs/ARCHITECTURE.md`, sección 9.
+exactas a la imagen (nunca `latest`); una versión fija no vuelve a resolverse.
+Con la misma resolución, un `devkit recreate` no reconstruye la capa de
+extensiones (sale `CACHED`); con una versión distinta, sí. Sin red en el Mac se
+usa la última resolución guardada, con el aviso `devkit: aviso: sin red para
+Open VSX; se usa la última versión resuelta de <extensión> (<versión>)`; sin
+red y sin resolución previa, el comando se detiene sin construir. Si Open VSX
+responde 404 para una extensión, `up`, `recreate`, `rebuild` y `update` se
+detienen con `devkit: extensión <id> no existe en Open VSX (404)` en vez de
+construir sin ella. Un 5xx de Open VSX se reintenta (`--retry 5 --retry-delay
+3`) antes de rendirse; si se agota, se trata igual que un 404 recién descrito
+para efectos de red caída o resolución previa.
+
+Además, cada extensión (fija o `latest`) se comprueba contra `engines.vscode`
+en Open VSX frente a la versión de openvscode-server que trae la imagen (`ARG
+OPENVSCODE_VERSION` del `Dockerfile`, única fuente): instalar una que exige un
+VS Code más nuevo tumbaba el build a mitad del `Dockerfile`, con el error de
+`openvscode-server --install-extension`, no antes. Si `latest` no calza,
+`devkit` recorre las versiones publicadas de la más nueva a la más vieja y usa
+la primera compatible, con el aviso `devkit: aviso: <id> <versión> exige VS
+Code <rango>; la imagen lleva <versión>; se usa <otra> (VS Code <rango>)`. Si
+una versión fija no calza, el comando se detiene con `devkit: <id> <versión>
+exige VS Code <rango>; la imagen lleva <versión>` y una sugerencia de cuál sí
+calza, en vez de construir a ciegas. Sin red para este chequeo, una versión
+fija se instala sin comprobar, igual que antes de este chequeo.
+`devkit update` además se detiene si el `compose.yaml` del proyecto no declara
+el build arg `EXTENSIONS` (quedó de antes de este versionado): pide reinstalar
+con `new-project.sh <proyecto> --version <x>` antes de actualizar. Detalle de
+diseño en `docs/ARCHITECTURE.md`, sección 9.
 
 Si el editor no abre: `docker exec devkit-<proyecto> pgrep -af server-main.js`
 para ver si el servidor está vivo, y `devkit logs <proyecto>` para el log de
