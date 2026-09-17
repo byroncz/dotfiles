@@ -42,8 +42,8 @@ versión que usa un proyecto y la destino.
 - Ampliación de la card: `devkit-run --estado` suma "bloquea a: <Claves>" a
   la fila de una card en `Lista para merge`, con las cards en `Lista` que la
   tienen en `Depende de` (`notion.sh bloqueos`, una consulta por refresco,
-  cacheada 30 s). Queda pendiente agrupar la tabla por Épica de origen
-  cuando hay más de una Épica `En progreso`.
+  cacheada 30 s). Agrupar la tabla por Épica de origen cuando hay más de una
+  Épica `En progreso` queda en DEVKIT-80.
 - `±n` cuenta ahora con `git status --porcelain --untracked-files=all`: antes
   un directorio nuevo sin seguimiento con varios archivos salía como una sola
   línea y `±n` los subcontaba (hallazgo de `pr-review`, PR #53).
