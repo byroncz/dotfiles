@@ -798,4 +798,86 @@ check_log "rondas: watch.log dice ronda=3 con modelo y esfuerzo" \
 check_igual "rondas: cycle_cost suma la línea con ronda=" "0.0100" \
   "$(bash "$WATCH" --cycle-cost 45 "$OUT")"
 
+# --- Limpieza local de task-close.sh: los tres silencios pasan a una línea de
+# watch.log (DEVKIT-63). Repositorio real (origin bare + clon), porque el
+# bug -el candado ocupado por el `task-start` de la siguiente hija, que la
+# "Limpieza local" toma sin que el bucle de merges lo sepa, ver el comentario
+# junto a `no_limpia` en task-close.sh- solo se ve con `git` de verdad.
+LIMP="$TMP/limpieza"
+mkdir -p "$LIMP"
+git init -q --bare "$LIMP/origin.git"
+git init -q "$LIMP/seed"
+git -C "$LIMP/seed" config user.email t@t.com
+git -C "$LIMP/seed" config user.name t
+git -C "$LIMP/seed" commit -q --allow-empty -m base
+git -C "$LIMP/seed" branch -M main
+git -C "$LIMP/seed" remote add origin "$LIMP/origin.git"
+git -C "$LIMP/seed" push -q origin main
+git clone -q "$LIMP/origin.git" "$LIMP/ws"
+git -C "$LIMP/ws" config user.email t@t.com
+git -C "$LIMP/ws" config user.name t
+git -C "$LIMP/ws" switch -q -c feat/DEVKIT-3-algo
+git -C "$LIMP/ws" commit -q --allow-empty -m rama
+git -C "$LIMP/ws" push -q origin feat/DEVKIT-3-algo
+LIMP_SHA=$(git -C "$LIMP/ws" rev-parse HEAD)
+
+# Card ya Hecha y marcador `devkit-closed` ya publicado: task-close.sh entra
+# directo a la sección de Limpieza local sin tocar Notion ni GitHub de nuevo.
+tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
+jq -nc --arg sha "$LIMP_SHA" '{state:"MERGED", number:40, url:"https://github.com/o/r/pull/40",
+    headRefOid:$sha, mergeCommit:{oid:"f9"}, comments:[{body:"<!-- devkit-closed sha=f9 -->"}],
+    body:"", reviews:[]}' >"$CICLO/gh/pr.json"
+
+limp_run() {  # limp_run <run-dir>
+  env FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH" \
+      DEVKIT_NOTION_BIN="$CICLO/notion.sh" DEVKIT_RUN_BIN="$CICLO/devkit-run.sh" \
+      DEVKIT_PS_BIN="$CICLO/ps-vacio" DEVKIT_WS="$LIMP/ws" DEVKIT_RUN_DIR="$1" DEVKIT_HOY=2026-09-16 \
+      bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+}
+limp_sin_linea() {  # limp_sin_linea <watch.log>
+  [ -f "$1" ] && grep -c 'no limpia el workspace' "$1" || echo 0
+}
+
+# 1. Árbol sucio: no toca nada, la rama sigue viva y el motivo queda en
+#    watch.log.
+echo cambio >"$LIMP/ws/sucio.txt"
+R1="$TMP/limp-sucio"; mkdir -p "$R1"
+limp_run "$R1"
+OUT="$R1/watch.log"
+check_log "limpieza: árbol sucio queda en watch.log" \
+  'task-close\.sh DEVKIT-3 no limpia el workspace: árbol sucio'
+check_igual "limpieza: árbol sucio no cambia de rama" feat/DEVKIT-3-algo \
+  "$(git -C "$LIMP/ws" rev-parse --abbrev-ref HEAD)"
+rm -f "$LIMP/ws/sucio.txt"
+
+# 2. Candado ocupado por otra skill (el caso real del 2026-09-16): tampoco
+#    toca nada, y también queda dicho.
+R2="$TMP/limp-candado"; mkdir -p "$R2"
+(
+  exec 9>"$R2/skill.lock"
+  flock 9
+  touch "$R2/tomado"
+  sleep 3
+) &
+holder=$!
+i=0
+while [ ! -e "$R2/tomado" ] && [ "$i" -lt 50 ]; do sleep 0.05; i=$((i + 1)); done
+limp_run "$R2"
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+OUT="$R2/watch.log"
+check_log "limpieza: candado ocupado queda en watch.log" \
+  'task-close\.sh DEVKIT-3 no limpia el workspace: candado ocupado'
+check_igual "limpieza: candado ocupado no cambia de rama" feat/DEVKIT-3-algo \
+  "$(git -C "$LIMP/ws" rev-parse --abbrev-ref HEAD)"
+
+# 3. Árbol limpio y candado libre: el caso feliz, sin ninguna línea de aviso.
+R3="$TMP/limp-limpio"; mkdir -p "$R3"
+limp_run "$R3"
+check_igual "limpieza: árbol limpio vuelve a main" main \
+  "$(git -C "$LIMP/ws" rev-parse --abbrev-ref HEAD)"
+check_igual "limpieza: árbol limpio borra la rama local" "" \
+  "$(git -C "$LIMP/ws" branch --list feat/DEVKIT-3-algo)"
+check_igual "limpieza: árbol limpio no deja línea de no-limpia" 0 \
+  "$(limp_sin_linea "$R3/watch.log")"
+
 exit $fail
