@@ -388,6 +388,21 @@ pr_de_clave() {  # pr_de_clave <Clave>
   printf '%s' "$pr"
 }
 
+# ¿Terminó un `task-start` sin entregar ni bloquear? (DEVKIT-77). Un buen
+# final deja la card en `Revisión automática` (task-submit corrió) o
+# `Bloqueada` (task-block.sh corrió, por esta u otra barrera); cualquier otra
+# cosa con `task-start` de por medio y la card todavía `En progreso` es el
+# corte silencioso que dejó DEVKIT-63. Solo mira `task-start`: es la única
+# skill de este grupo que puede terminar "bien" sin haber tocado el Estado.
+task_start_sin_entregar() {  # task_start_sin_entregar <prompt> <clave>
+  local prompt=$1 clave=$2 skill estado
+  skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  [ "$skill" = task-start ] || return 1
+  [ -n "$clave" ] || return 1
+  estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
+  [ "$estado" = "En progreso" ]
+}
+
 ronda_de() {  # ronda_de <prompt>
   local prompt=$1 skill clave pr n
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
@@ -703,6 +718,32 @@ watch_long_running() {  # watch_long_running <prompt> <pid>
   done
 }
 
+# ¿El `result` de una skill es una pregunta abierta al humano, que nadie va a
+# contestar en modo headless? La forma original (DEVKIT-50) solo miraba si el
+# texto terminaba en "?". DEVKIT-77 mostró un cierre real que no la cumplía:
+# "¿Cómo quieres que siga? Opciones: 1. [...] 2. [...] 3. [...] antes de
+# decidir.", una pregunta con opciones que el agente cierra con una frase que
+# no termina en "?". Puro, para poder probarlo con el texto real del
+# incidente sin lanzar nada.
+pregunta_abierta() {  # pregunta_abierta <resultado>
+  local resultado=$1 parrafo
+  # Regla original: el texto entero termina en pregunta.
+  printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$' && return 0
+  # Último párrafo (el texto tras la última línea en blanco, o todo el
+  # resultado si no hay ninguna): ahí es donde el agente suele dejar la
+  # pregunta, aunque después la explique o la cierre sin "?".
+  parrafo=$(printf '%s' "$resultado" | awk 'BEGIN{RS=""} {p=$0} END{print p}')
+  [ -n "$parrafo" ] || parrafo=$resultado
+  # Una línea que empieza por "¿" en ese párrafo.
+  printf '%s\n' "$parrafo" | grep -qE '^¿' && return 0
+  # Frases fijas del incidente, en cualquier parte del párrafo.
+  printf '%s' "$parrafo" | grep -qiE '¿Cómo quieres que siga|¿Qué prefieres' && return 0
+  # "Opciones:" seguida de líneas numeradas.
+  printf '%s\n' "$parrafo" | grep -qE '^Opciones:' \
+    && printf '%s\n' "$parrafo" | grep -qE '^[0-9]+\.' && return 0
+  return 1
+}
+
 # Barrera mecánica de DEVKIT-50 sobre la regla de cierre de DEVKIT-44: un
 # `result` que termina en pregunta es una card `En progreso` cortando en seco
 # en vez de resolver en un estado observable (AGENTS.md), y DEVKIT-48 mostró
@@ -793,11 +834,44 @@ filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
   done
 }
 
+# El propio `claude -p` de quien llama, entre sus ancestros (DEVKIT-77): el
+# mismo criterio de `filtrar_agentes` (descarta `devkit-run.sh`, se queda con
+# `claude ... -p ...`), pero sobre la ascendencia propia en vez del `ps`
+# completo, y devuelve el primero que encuentra en vez de filtrarlos todos.
+# Puro, para probarlo con una tabla fija: recibe "<pid> <args>" por línea.
+propio_de() {
+  local pid args prompt
+  while read -r pid args; do
+    [ -n "$pid" ] || continue
+    case "$args" in *devkit-run.sh*) continue ;; esac
+    case "$args" in
+      *claude*" -p "*)
+        # Solo el argumento de `-p` (el prompt), sin las banderas que siguen
+        # (`--model`, `--effort`, ...): así se lee de un vistazo.
+        prompt=$(printf '%s' "$args" | sed -E 's/^.*-p ([^-].*)$/\1/; s/ --.*$//')
+        printf '%s claude -p "%s"' "$pid" "$prompt"
+        return 0 ;;
+    esac
+  done
+  return 1
+}
+
 # Imprime un proceso ajeno por línea. Sale 0 si el workspace está libre y 1 si
-# lo ocupa otro agente, para usarlo directo en un `if`.
+# lo ocupa otro agente, para usarlo directo en un `if`. Antes de esa lista,
+# si corre dentro de un agente, imprime `propio: <pid> claude -p "<prompt>"`
+# (DEVKIT-77): así el agente ve su propio proceso ya identificado -el mismo
+# que le hace desconfiar y correr su propio `ps`, como en DEVKIT-63- en vez
+# de tener que buscarlo aparte.
 otros_agentes() {
-  local encontrados
+  local encontrados propio
   encontrados=$(ps -eo pid=,args= 2>/dev/null | filtrar_agentes "$(ancestros_propios)")
+  if propio=$(
+    for pid in $(ancestros_propios); do
+      printf '%s %s\n' "$pid" "$(ps -o args= -p "$pid" 2>/dev/null)"
+    done | propio_de
+  ); then
+    printf 'propio: %s\n' "$propio"
+  fi
   [ -z "$encontrados" ] && return 0
   printf '%s\n' "$encontrados"
   return 1
@@ -1045,6 +1119,19 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
         detalle=${detalle:0:100}
       fi
     fi
+    # Respaldo de DEVKIT-77: un `task-start` que "terminó" bien según la
+    # línea de resumen, pero dejó su card `En progreso` sin PR y sin
+    # bloquear, no es un avance real (DEVKIT-63). Mismo corte por el
+    # siguiente lanzamiento de la misma Clave que usa `bloqueo`, para no
+    # confundir esta alarma con la de un lanzamiento posterior.
+    if [ "$skill" = task-start ] && [ "$estado" = terminó ] && [ -n "$clave" ] \
+       && printf '%s\n' "$resto" | awk -v c="$clave" '
+            / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { found=0; exit }
+            index($0, "ALARMA: terminó sin entregar ni bloquear (" c "):") { found=1; exit }
+            END { exit (found ? 0 : 1) }'; then
+      estado=error
+      detalle="terminó sin entregar ni bloquear; card $clave sigue En progreso"
+    fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}"
   done 3< <(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
 }
@@ -1186,6 +1273,16 @@ run_tests() {
   # lanzamiento se vería a sí mismo como agente ajeno.
   check "concurrencia: sin ajenos, el workspace está libre" "" \
     "$(printf '%s\n' "$tabla" | grep -v '^40001 ' | filtrar_agentes "$propios")"
+  # DEVKIT-77: `--otros-agentes` identifica su propio `claude -p` entre los
+  # ancestros (37794), no el vigilante (37793, argumentos de devkit-run.sh) ni
+  # el `claude -p` ajeno (40001, ni siquiera está en la lista de ancestros).
+  check "concurrencia: identifica el propio claude -p entre los ancestros" \
+    '37794 claude -p "/task-start DEVKIT-54"' \
+    "$(printf '%s\n' "$tabla" | grep -E '^(37786|37792|37793|37794) ' | propio_de)"
+  local propio_rc=0 propio_sin
+  propio_sin=$(printf '%s\n' "$tabla" | grep -E '^(37786|37792|37793) ' | propio_de) || propio_rc=$?
+  check "concurrencia: sin un claude -p propio entre los ancestros, no hay salida" "" "$propio_sin"
+  check "concurrencia: sin un claude -p propio entre los ancestros, sale con error" 1 "$propio_rc"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
@@ -1667,6 +1764,24 @@ FIN
   check "anulación manual queda marcada en el resumen" 'anulación manual' \
     "$(grep -oE 'anulación manual' "$tmp/run/watch.log" | head -1)"
 
+  # DEVKIT-77: `pregunta_abierta` reconoce más formas que "termina en ?". El
+  # incidente real de DEVKIT-63 cerraba con "antes de decidir.", sin "?" al
+  # final, y la regla original de DEVKIT-50 no lo veía.
+  check "pregunta_abierta: regla original, termina en ?" si \
+    "$(pregunta_abierta '¿qué credencial uso?' && echo si || echo no)"
+  check "pregunta_abierta: un cierre normal no dispara la barrera" no \
+    "$(pregunta_abierta 'Completé DEVKIT-40: cambios en el Dockerfile y el CHANGELOG. PR #25 abierto y en Revisión automática.' && echo si || echo no)"
+  local resultado_linea resultado_frase resultado_opciones
+  resultado_linea=$'Reuní el contexto necesario.\n\n¿Prefieres que continúe con el plan A o el plan B?\nDime cuál y sigo enseguida.'
+  check "pregunta_abierta: línea que empieza por ¿ en el último párrafo, sin terminar en ?" si \
+    "$(pregunta_abierta "$resultado_linea" && echo si || echo no)"
+  resultado_frase="Terminé de revisar el conflicto. ¿Cómo quieres que siga? Antes de tocar nada, prefiero confirmarlo contigo."
+  check "pregunta_abierta: frase fija ¿Cómo quieres que siga, sin terminar en ?" si \
+    "$(pregunta_abierta "$resultado_frase" && echo si || echo no)"
+  resultado_opciones=$'Quedan tres caminos posibles antes de seguir.\nOpciones:\n1. Seguir de todas formas\n2. Esperar al humano\n3. Bloquear la card\nAvísame antes de decidir.'
+  check "pregunta_abierta: Opciones: con líneas numeradas, sin terminar en ?" si \
+    "$(pregunta_abierta "$resultado_opciones" && echo si || echo no)"
+
   # Barrera mecánica DEVKIT-50/DEVKIT-44: un result que termina en pregunta
   # bloquea la card con task-block.sh (DEVKIT-55). Un doble del script anota
   # los argumentos que recibe, así la prueba no toca Notion.
@@ -1696,6 +1811,61 @@ FIN
     "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
   check "el motivo de la pregunta abierta la nombra" 'pregunta abierta' \
     "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'pregunta abierta|sin acceso a Notion' | head -1)"
+
+  # DEVKIT-77, extremo a extremo: el texto real del incidente de DEVKIT-63
+  # ("¿Cómo quieres que siga? Opciones: 1. [...] 2. [...] 3. [...] antes de
+  # decidir.") no termina en "?", y antes de esta card no bloqueaba la card.
+  local pregunton_opciones
+  pregunton_opciones="$tmp/claude-pregunton-opciones"
+  cat >"$pregunton_opciones" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"Encontré un conflicto real de concurrencia con DEVKIT-63; el chequeo dio libre dos veces.\\n¿Cómo quieres que siga?\\nOpciones:\\n1. Seguir de todas formas\\n2. Esperar al humano\\n3. Bloquear la card\\nAvísame antes de decidir.","total_cost_usd":0.01,"num_turns":2}\n'
+FIN
+  chmod +x "$pregunton_opciones"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$pregunton_opciones" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "pregunta abierta sin '?' final (texto real de DEVKIT-63) también bloquea" \
+    'bloquea la card con task-block.sh: DEVKIT-3' \
+    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+
+  # DEVKIT-77: `task_start_sin_entregar` usa el mismo doble de notion.sh
+  # (`card <Clave>`) para decidir si un task-start dejó la card sin resolver.
+  printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
+  check "task_start_sin_entregar: card sigue En progreso" si \
+    "$(task_start_sin_entregar '/task-start DEVKIT-63' DEVKIT-63 && echo si || echo no)"
+  printf '{"estado":"Revisión automática"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
+  check "task_start_sin_entregar: card ya en Revisión automática, no hay corte" no \
+    "$(task_start_sin_entregar '/task-start DEVKIT-63' DEVKIT-63 && echo si || echo no)"
+  printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
+  check "task_start_sin_entregar: solo aplica a task-start, no a task-fix" no \
+    "$(task_start_sin_entregar '/task-fix DEVKIT-63' DEVKIT-63 && echo si || echo no)"
+
+  # Extremo a extremo: un task-start "limpio" (sin pregunta abierta, con el
+  # doble genérico "listo") que deja la card En progreso sin PR ni bloqueo
+  # también deja su propia ALARMA en watch.log (DEVKIT-77).
+  printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-63 >/dev/null 2>&1
+  espera=0
+  while ! grep -q 'ALARMA: terminó sin entregar ni bloquear (DEVKIT-63):' "$tmp/run/watch.log" 2>/dev/null \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "task-start limpio pero sin entregar deja su propia ALARMA" \
+    'ALARMA: terminó sin entregar ni bloquear (DEVKIT-63): card sigue En progreso, sin PR ni bloqueo' \
+    "$(grep -oE 'ALARMA: terminó sin entregar ni bloquear \(DEVKIT-63\): card sigue En progreso, sin PR ni bloqueo' "$tmp/run/watch.log" | head -1)"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
   # bash, en primer plano y con los argumentos tal cual (DEVKIT-55).
@@ -2105,6 +2275,9 @@ FIN
 2026-09-16T11:31:00Z task-block.sh DEVKIT-59 Bloqueada desde En progreso: Qué intenté: X. Qué necesito: el token de Y.
 2026-09-16T11:31:05Z devkit-run "/task-start DEVKIT-59" terminado [task-start-3]: modelo=opus esfuerzo=high :: bloqueada
 2026-09-16T11:40:00Z task-start-2 lanzando (origen=humano): "/task-start DEVKIT-60" log=$est/task-start-2.log
+2026-09-16T11:45:00Z task-start-4 lanzando (origen=task-close): "/task-start DEVKIT-63" log=$est/task-start-4.log
+2026-09-16T11:46:00Z devkit-run "/task-start DEVKIT-63" terminado [task-start-4]: modelo=sonnet esfuerzo=high ronda=1 :: dejo la decisión a tu criterio
+2026-09-16T11:46:00Z devkit-run "/task-start DEVKIT-63" ALARMA: terminó sin entregar ni bloquear (DEVKIT-63): card sigue En progreso, sin PR ni bloqueo
 2026-09-16T11:59:58Z task-fix-2 lanzando (origen=humano): "/task-fix DEVKIT-61" log=$est/task-fix-2.log
 FIN
   pslist="$tmp/ps-estado"
@@ -2123,6 +2296,12 @@ FIN
   # la Clave se compara completa, no como prefijo.
   check "estado bloqueada con otra Clave que la extiende en medio" "bloqueada|humano" "$(fila DEVKIT-5)"
   check "estado no arrancó (sin proceso, log vacío, pasado el margen)" "no arrancó|humano" "$(fila DEVKIT-60)"
+  # DEVKIT-77: un task-start que "terminó" pero dejó su card En progreso sin
+  # PR ni bloqueo (DEVKIT-63) cuenta como error, no como avance.
+  check "estado error: task-start terminó sin entregar ni bloquear" "error|task-close" "$(fila DEVKIT-63)"
+  check "detalle: task-start terminó sin entregar ni bloquear" \
+    "terminó sin entregar ni bloquear; card DEVKIT-63 sigue En progreso" \
+    "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-63" {print $6}')"
   # Evidencia del 2026-09-16: dos segundos después de "lanzando", sin ningún
   # proceso todavía, el lanzamiento ya cuenta como en curso.
   check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
@@ -2385,7 +2564,7 @@ case "${1:-}" in
       "$(basename "$logf" .log)" "$resumen_txt" >> "$WATCH_LOG"
     if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
-      if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
+      if pregunta_abierta "$resultado"; then
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
           "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf" \
@@ -2404,6 +2583,18 @@ case "${1:-}" in
         # H13 de pr-review: el texto solo avisa; el humano mira el resultado.
         printf '%s devkit-run "%s" ALARMA: el resultado describe falta de acceso a Notion (ver resultado)\n' \
           "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
+      fi
+      # Respaldo de DEVKIT-77: ninguna barrera de arriba se disparó, pero eso
+      # no prueba que `task-start` haya entregado. DEVKIT-63 dejó una rama
+      # vacía, sin comentar el plan y sin PR, con la card `En progreso` y sin
+      # bloquear -un corte silencioso que el humano descubrió por `--estado`
+      # mostrando "terminó". Solo aplica a `task-start`: `task-fix`,
+      # `task-submit` y `task-document` actúan sobre una card que ya tiene PR
+      # o no le cambian el Estado.
+      clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+      if task_start_sin_entregar "$prompt" "$clave"; then
+        printf '%s devkit-run "%s" ALARMA: terminó sin entregar ni bloquear (%s): card sigue En progreso, sin PR ni bloqueo\n' \
+          "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
       fi
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
