@@ -10,6 +10,34 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### `resolve_extensions` comprueba el motor del editor antes de construir (DEVKIT-73)
+
+- Cada extensión de `devkit/vscode/extensions.toml` (fija o `"latest"`) se
+  comprueba contra `engines.vscode` en Open VSX frente a `ARG
+  OPENVSCODE_VERSION` del `Dockerfile` (única fuente, `resolve_extensions` la
+  lee de ahí). Antes de esta card, una versión incompatible tumbaba el build
+  a mitad del `Dockerfile`, con el error de `openvscode-server
+  --install-extension`, no antes: así falló DEVKIT-68 la primera vez, con
+  `GitHub.vscode-pull-request-github` resolviendo 0.166.0 (exige
+  `^1.137.0`) contra un editor 1.109.5.
+- Si `latest` no calza, se recorre `allVersions` de Open VSX (de la más nueva
+  a la más vieja) y se usa la primera versión compatible, con aviso. Si una
+  versión fija no calza, el comando se detiene con el rango exigido y una
+  sugerencia de cuál sí calza. Un rango de `engines.vscode` que no sea
+  `^X.Y.Z` o `>=X.Y.Z` se acepta con aviso, no se rechaza.
+- `curl` hacia Open VSX (en `devkit.sh` y en las descargas de `.vsix` del
+  `Dockerfile`) reintenta un 5xx (`--retry 5 --retry-delay 3`) antes de
+  rendirse: un segundo `devkit recreate` de DEVKIT-68 se topó con Open VSX
+  devolviendo 503 intermitentes toda una tarde y el build murió a medias.
+  Un 404 del paquete por plataforma (esperado, no todas las extensiones lo
+  publican) sigue cayendo al universal sin reintentar.
+- Medición del 2026-09-17: la última release estable de
+  `gitpod-io/openvscode-server` es la 1.109.5, la misma que ya trae la
+  imagen; no existe todavía una que satisfaga `^1.137.0` (lo que exige el
+  `latest` de `GitHub.vscode-pull-request-github`). DEVKIT-75 (Backlog) sube
+  el editor en el `Dockerfile` cuando eso cambie.
+- Cambios requeridos: ninguno, `devkit recreate` alcanza.
+
 ### Extensión GitHub Pull Requests en el editor, con compuerta de login (DEVKIT-68)
 
 - `devkit/vscode/extensions.toml` suma `"GitHub.vscode-pull-request-github" =

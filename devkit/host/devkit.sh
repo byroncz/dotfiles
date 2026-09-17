@@ -68,6 +68,67 @@ sync_dev_template() {
     echo "devkit: aviso: no se pudo copiar devkit/ del workspace; se construye con la copia de $dir/template" >&2
   fi
 }
+# curl_ovx <url> <archivo-salida>: imprime el código HTTP; 000 si no hubo
+# forma de conectar. --retry reintenta un 5xx de Open VSX antes de rendirse
+# (curl trata un 5xx como error transitorio y lo reintenta aunque no se pida
+# -f); un 000 solo ocurre si el propio curl no pudo ni conectar (sin red),
+# igual que antes de DEVKIT-73.
+curl_ovx() {
+  code="$(curl -sS -o "$2" -w '%{http_code}' --retry 5 --retry-delay 3 "$1" 2>/dev/null)" || code=000
+  printf '%s' "${code:-000}"
+}
+# json_field <clave> <archivo>: valor de "<clave>":"<valor>" en un JSON de
+# Open VSX (una línea, sin anidar objetos salvo "engines").
+json_field() {
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$2" | head -1 | sed -E 's/.*"([^"]*)"$/\1/'
+}
+# json_engine_vscode <archivo>: "vscode" dentro del objeto "engines" de la
+# respuesta de Open VSX, p. ej. de {"engines":{"node":">=20","vscode":"^1.137.0"}}.
+json_engine_vscode() {
+  grep -o '"engines"[[:space:]]*:[[:space:]]*{[^}]*}' "$1" | head -1 \
+    | grep -o '"vscode"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"$/\1/'
+}
+# engine_check <rango-engines.vscode> <versión-editor>: "ok", "no" o
+# "desconocido". Open VSX solo usa "^X.Y.Z" (semver de npm: compatible desde
+# X.Y.Z hasta antes de (X+1).0.0) y ">=X.Y.Z" para engines.vscode; cualquier
+# otro formato se acepta con aviso, no se rechaza (DEVKIT-73).
+engine_check() {
+  awk -v range="$1" -v ed="$2" '
+    function parte(v,   n, a) { n = split(v, a, "."); return (a[1]+0)*1000000 + (a[2]+0)*1000 + (a[3]+0) }
+    BEGIN {
+      e = parte(ed)
+      if (range ~ /^\^[0-9]+\.[0-9]+\.[0-9]+$/) {
+        split(substr(range, 2), p, ".")
+        print (e >= parte(substr(range, 2)) && e < (p[1] + 1) * 1000000) ? "ok" : "no"
+      } else if (range ~ /^>=[0-9]+\.[0-9]+\.[0-9]+$/) {
+        print (e >= parte(substr(range, 3))) ? "ok" : "no"
+      } else {
+        print "desconocido"
+      }
+    }'
+}
+# ultima_compatible <ns> <ext> <archivo-de-/latest>: recorre "allVersions" del
+# JSON de /latest (solo versiones estables X.Y.Z, ordenadas aquí mismo de la
+# más nueva a la más vieja, sin depender del orden en que las entregue Open
+# VSX) y consulta cada una hasta encontrar la primera cuyo engines.vscode
+# admite $editor. Imprime "versión motor"; sale en 1 si ninguna calza o si
+# Open VSX no responde.
+ultima_compatible() {
+  ns="$1"; ext="$2"; archivo="$3"
+  versiones="$(grep -o '"[0-9][0-9.]*"[[:space:]]*:[[:space:]]*"https://open-vsx\.org/api/[^"]*"' "$archivo" \
+    | sed -E 's/^"([0-9.]+)".*/\1/' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -t. -k1,1nr -k2,2nr -k3,3nr)"
+  for v in $versiones; do
+    resp="$(mktemp)"
+    http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/$v" "$resp")"
+    motor=""
+    [ "$http_code" = 200 ] && motor="$(json_engine_vscode "$resp")"
+    rm -f "$resp"
+    [ -n "$motor" ] || continue
+    [ "$(engine_check "$motor" "$editor")" != no ] && { printf '%s %s\n' "$v" "$motor"; return 0; }
+  done
+  return 1
+}
 # devkit/vscode/extensions.toml declara las extensiones del editor: una
 # versión fija se instala tal cual, "latest" se resuelve aquí contra Open VSX
 # antes de construir. La resolución queda en $dir/extensions.lock (una por
@@ -75,6 +136,13 @@ sync_dev_template() {
 # DEVKIT_EXTENSIONS, igual que DEVKIT_EXTRA_APT. Corre después de
 # sync_dev_template (o de bajar la etiqueta destino en `update`), así que
 # $dir/template/vscode/extensions.toml ya está al día.
+#
+# Además, cada extensión (fija o "latest") se comprueba contra engines.vscode
+# en Open VSX frente a $editor, la versión de openvscode-server que trae la
+# imagen: instalar una que exige un VS Code más nuevo tumbaba el build a
+# mitad del Dockerfile, con el error de openvscode-server, no antes
+# (DEVKIT-73). Sin red para esa comprobación, una versión fija se instala sin
+# verificar, igual que antes de DEVKIT-73.
 resolve_extensions() {
   toml="$dir/template/vscode/extensions.toml"
   if [ ! -f "$toml" ]; then
@@ -83,6 +151,12 @@ resolve_extensions() {
     mv "$dir/.env.tmp" "$dir/.env"
     return 0
   fi
+  # $dir/template/Dockerfile es la única fuente de la versión del editor: si
+  # se duplicara a mano aquí, subir OPENVSCODE_VERSION en el Dockerfile y
+  # olvidar este archivo dejaría el chequeo comparando contra una versión
+  # vieja sin avisar (DEVKIT-73).
+  editor="$(sed -n 's/^ARG OPENVSCODE_VERSION=\([0-9.]*\).*/\1/p' "$dir/template/Dockerfile" | head -1)"
+  [ -n "$editor" ] || { echo "devkit: no se encontró ARG OPENVSCODE_VERSION en $dir/template/Dockerfile" >&2; return 1; }
   lock="$dir/extensions.lock"
   # Una línea no vacía y sin comentario que no calce con "id" = "versión" se
   # ignoraba en silencio y la extensión desaparecía de la imagen sin aviso
@@ -100,26 +174,44 @@ resolve_extensions() {
   while IFS= read -r linea; do
     [ -n "$linea" ] || continue
     id="${linea%% *}"; version="${linea#* }"
+    ns="${id%%.*}"; ext="${id#*.}"
     if [ "$version" = latest ]; then
-      ns="${id%%.*}"; ext="${id#*.}"
       resp="$(mktemp)"
-      # -w separa el código HTTP del cuerpo: un 404 (id mal escrito) o un 5xx
-      # de Open VSX ya no se confunden con "sin red" (H4). "|| http_code=000"
-      # evita que un curl caído (rc 7, sin red) corte el script por `set -e`.
-      http_code="$(curl -sS -o "$resp" -w '%{http_code}' "https://open-vsx.org/api/$ns/$ext/latest" 2>/dev/null)" \
-        || http_code=000
+      http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/latest" "$resp")"
       if [ "$http_code" = 404 ]; then
         rm -f "$resp"
         echo "devkit: extensión $id no existe en Open VSX (404)" >&2
         return 1
       fi
-      fetched=""
-      [ "$http_code" = 200 ] && fetched="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$resp" | head -1 \
-        | sed -E 's/.*"([^"]+)"$/\1/')"
-      rm -f "$resp"
+      fetched=""; motor=""
+      if [ "$http_code" = 200 ]; then
+        fetched="$(json_field version "$resp")"
+        motor="$(json_engine_vscode "$resp")"
+      fi
       if [ -n "$fetched" ]; then
+        if [ -z "$motor" ]; then
+          echo "devkit: aviso: $id no declara engines.vscode; se instala sin verificar" >&2
+        else
+          estado="$(engine_check "$motor" "$editor")"
+          if [ "$estado" = no ]; then
+            if alt="$(ultima_compatible "$ns" "$ext" "$resp")"; then
+              echo "devkit: aviso: $id $fetched exige VS Code $motor; la imagen lleva $editor; se usa ${alt% *} (VS Code ${alt#* })" >&2
+              [ "$(engine_check "${alt#* }" "$editor")" = desconocido ] && \
+                echo "devkit: aviso: ${alt% *} trae engines.vscode \"${alt#* }\", un formato que no reconozco; no se verificó del todo" >&2
+              fetched="${alt% *}"
+            else
+              rm -f "$resp"
+              echo "devkit: $id $fetched exige VS Code $motor; la imagen lleva $editor y no hay ninguna versión publicada que calce" >&2
+              return 1
+            fi
+          elif [ "$estado" = desconocido ]; then
+            echo "devkit: aviso: $id declara engines.vscode \"$motor\", un formato que no reconozco; se instala sin verificar" >&2
+          fi
+        fi
+        rm -f "$resp"
         version="$fetched"
       else
+        rm -f "$resp"
         cached="$(awk -F= -v id="$id" '$1==id{print substr($0, length(id)+2); exit}' "$lock" 2>/dev/null)"
         # 000 es curl sin poder ni conectar (sin red); cualquier otro código
         # (5xx, 429) sí llegó a Open VSX, así que el aviso lo distingue de un
@@ -136,6 +228,38 @@ resolve_extensions() {
           echo "devkit: $razon_seco y sin resolución previa para $id; construye una vez con red o fija su versión en extensions.toml" >&2
           return 1
         fi
+      fi
+    else
+      resp="$(mktemp)"
+      http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/$version" "$resp")"
+      if [ "$http_code" = 404 ]; then
+        rm -f "$resp"
+        echo "devkit: extensión $id $version no existe en Open VSX (404)" >&2
+        return 1
+      fi
+      if [ "$http_code" = 200 ]; then
+        motor="$(json_engine_vscode "$resp")"
+        rm -f "$resp"
+        if [ -z "$motor" ]; then
+          echo "devkit: aviso: $id no declara engines.vscode; se instala sin verificar" >&2
+        else
+          estado="$(engine_check "$motor" "$editor")"
+          if [ "$estado" = no ]; then
+            echo "devkit: $id $version exige VS Code $motor; la imagen lleva $editor" >&2
+            resp2="$(mktemp)"
+            if lhttp="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/latest" "$resp2")" && [ "$lhttp" = 200 ] \
+               && alt="$(ultima_compatible "$ns" "$ext" "$resp2")"; then
+              echo "devkit: sugerencia: ${alt% *} sí calza con VS Code $editor" >&2
+            fi
+            rm -f "$resp2"
+            return 1
+          elif [ "$estado" = desconocido ]; then
+            echo "devkit: aviso: $id declara engines.vscode \"$motor\", un formato que no reconozco; se instala sin verificar" >&2
+          fi
+        fi
+      else
+        rm -f "$resp"
+        echo "devkit: aviso: no se pudo verificar el motor de $id $version ($http_code); se instala sin comprobar" >&2
       fi
     fi
     resuelto="$resuelto${resuelto:+ }$id=$version"

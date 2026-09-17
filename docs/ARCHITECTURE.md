@@ -202,7 +202,7 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 |---|---|
 | Terminal en el Mac | Terminal.app, macOS 26. Corre solo el comando `devkit`: el trabajo real pasa por el editor en el navegador o por `devkit shell` |
 | Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
-| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensiones versionadas en `devkit/vscode/extensions.toml` (nace con `Anthropic.claude-code`), resueltas contra Open VSX al construir (sección 9) e instaladas por el `Dockerfile` con `ruff` y `basedpyright` desde `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. `chat.disableAIFeatures` en los ajustes desde DEVKIT-66, con la intención de apagar el chat integrado de VS Code porque el agente del devkit es Claude Code y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. En esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta: limitación conocida, sin arreglo. Claude Code es una extensión aparte y no depende de él. `extensions.autoUpdate` y `extensions.autoCheckUpdates` en `false`: una actualización en caliente muere en cada `recreate` (el directorio de extensiones no está en un volumen) y rompería la reproducibilidad de la imagen, que es la que fija la versión exacta que corre |
+| Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensiones versionadas en `devkit/vscode/extensions.toml` (nace con `Anthropic.claude-code`), resueltas contra Open VSX al construir y comprobadas contra `engines.vscode` frente a este mismo editor antes de instalarlas (sección 9.2) e instaladas por el `Dockerfile` con `ruff` y `basedpyright` desde `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. `chat.disableAIFeatures` en los ajustes desde DEVKIT-66, con la intención de apagar el chat integrado de VS Code porque el agente del devkit es Claude Code y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. En esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta: limitación conocida, sin arreglo. Claude Code es una extensión aparte y no depende de él. `extensions.autoUpdate` y `extensions.autoCheckUpdates` en `false`: una actualización en caliente muere en cada `recreate` (el directorio de extensiones no está en un volumen) y rompería la reproducibilidad de la imagen, que es la que fija la versión exacta que corre |
 
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
@@ -893,7 +893,7 @@ la reemplaza como fuente: una línea por extensión, con versión fija o
   `https://open-vsx.org/api/<ns>/<ext>/latest` (campo `version`) antes de
   construir, después de que el contexto de build ya tiene la versión correcta
   de `extensions.toml` (tras `sync_dev_template` en modo dev, o tras bajar la
-  etiqueta destino en `update`). Una versión fija no consulta la API.
+  etiqueta destino en `update`). Una versión fija no vuelve a resolverse.
 - La resolución queda en `~/.devkit/<proyecto>/extensions.lock` (una entrada
   `ns.ext=versión` por línea) y se pasa a Compose como `DEVKIT_EXTENSIONS`, el
   mismo mecanismo que `DEVKIT_EXTRA_APT`: el `Dockerfile` la recibe como
@@ -908,16 +908,44 @@ la reemplaza como fuente: una línea por extensión, con versión fija o
   entera.
 - Sin red en el Mac, se usa la última resolución guardada en `extensions.lock`
   y se avisa; sin red y sin resolución previa, el comando se detiene con un
-  mensaje claro en vez de construir a ciegas o con una versión implícita.
+  mensaje claro en vez de construir a ciegas o con una versión implícita. Un
+  5xx de Open VSX se reintenta (`curl --retry 5 --retry-delay 3`, que ya
+  trata un 5xx como error transitorio sin necesitar `-f`) antes de rendirse;
+  agotados los reintentos se distingue igual de "sin red", porque si llegó a
+  responder con un código sí hay red hasta Open VSX (H8, DEVKIT-67).
 - El `Dockerfile` prueba primero el paquete de la plataforma del build
   (`linux-x64` o `linux-arm64`, que Open VSX no publica para todas las
   extensiones) y si no existe instala el universal, en un solo paso para
-  todas las extensiones del argumento.
+  todas las extensiones del argumento. Solo el `curl` del paquete universal
+  suma `--retry-all-errors` a `--retry 5 --retry-delay 3 -f`: ahí un corte de
+  conexión a mitad de descarga debe reintentarse porque no hay más
+  alternativas (DEVKIT-73: un 503 intermitente de Open VSX tumbó un build a
+  medias). El `curl` del paquete de plataforma se queda solo con `--retry 5
+  --retry-delay 3 -f`, así que un 404 (esperado, no lo publican todas) cae al
+  universal sin reintentar y un 5xx sí reintenta antes de rendirse; con
+  `--retry-all-errors` ahí también, el 404 esperado se habría reintentado en
+  vano.
 - La lista de extensiones y versiones del README y de la entrada "Stack y
   comandos del devkit" en Notion sale de `extensions.toml` con
   `devkit/scripts/gen-stack.sh`, que también verifica el README (`--check`):
   un `"latest"` se lista tal cual, sin resolver, porque esa resolución solo
   existe en el Mac de quien construye, no en el repo.
+- DEVKIT-73: cada extensión (fija o `latest`) se comprueba además contra
+  `engines.vscode` en Open VSX frente a `ARG OPENVSCODE_VERSION` del
+  `Dockerfile`, la única fuente de la versión del editor (`resolve_extensions`
+  la lee de ahí, no la duplica). Antes de esta card, una versión que exigía un
+  VS Code más nuevo del que trae la imagen tumbaba el build a mitad del
+  `Dockerfile`, con el error de `openvscode-server --install-extension`, no
+  antes de empezar. `engines.vscode` en Open VSX solo usa dos formatos:
+  `^X.Y.Z` (semver de npm: admite desde X.Y.Z hasta antes de (X+1).0.0) y
+  `>=X.Y.Z`; cualquier otro se acepta con aviso, no se rechaza. Si `latest` no
+  calza, se recorre `allVersions` de la respuesta de `/latest` (solo
+  versiones estables `X.Y.Z`, de la más nueva a la más vieja) consultando
+  `/api/<ns>/<ext>/<versión>` hasta encontrar la primera compatible, con un
+  aviso de cuál se usó en su lugar; si ninguna calza, se detiene. Si una
+  versión fija no calza, se detiene con el rango exigido y una sugerencia de
+  cuál sí calza, sin construir a ciegas. Sin red para este chequeo, una
+  versión fija se instala sin comprobar, igual que antes de esta card.
 
 ## 10. Mínimo viable
 
