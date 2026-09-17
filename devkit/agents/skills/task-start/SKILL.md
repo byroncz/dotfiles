@@ -19,13 +19,20 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 
 1. Verifica que el workspace está limpio: `git status --porcelain` vacío. Si
    hay cambios sin commit, detente y explica; no mezcles trabajo de dos cards.
-   Si necesitas comprobar que no hay otro agente trabajando el mismo
-   workspace, usa `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
+   La única comprobación válida de si hay otro agente trabajando el mismo
+   workspace es `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
    --otros-agentes`: sale 0 si está libre y 1 si lo ocupa otro, e imprime los
-   procesos ajenos. Nunca uses `pgrep -f <Clave>` a secas: la Clave viaja en
-   los argumentos de tu propio lanzador, así que te encuentras a ti mismo
-   cuatro veces (el `devkit-run.sh --worker`, su subshell, su vigilante y tu
-   `claude -p`). Eso bloqueó DEVKIT-54 sin motivo.
+   procesos ajenos y, si corres dentro de un agente, una línea
+   `propio: <pid> claude -p "<prompt>"` con tu propio proceso ya identificado.
+   Tu propio `claude -p` aparece en cualquier `ps` con el mismo prompt de esta
+   card y `PPID` 1 (el efecto del `nohup` de quien te lanzó, no un indicio de
+   que sea otro agente): nunca corras tu propio `ps`/`pgrep` para desconfiar
+   del resultado de `--otros-agentes`, ni interpretes ese proceso como ajeno.
+   Nunca uses `pgrep -f <Clave>` a secas: la Clave viaja en los argumentos de
+   tu propio lanzador, así que te encuentras a ti mismo cuatro veces (el
+   `devkit-run.sh --worker`, su subshell, su vigilante y tu `claude -p`). Eso
+   bloqueó DEVKIT-54 sin motivo, y desconfiar del resultado y correr un `ps`
+   aparte cortó DEVKIT-63 sin PR y sin bloquear (DEVKIT-77).
 2. Verifica que la card está en `Lista`. Si está en `En progreso` con `Rama`
    asignada, cámbiate a esa rama y continúa: es una reanudación.
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.

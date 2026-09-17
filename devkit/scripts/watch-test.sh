@@ -382,6 +382,13 @@ DEVKIT_TEST_RESULT='¿Sigo con esto?' corre_doble 0
 check_log "alarma por result que termina en pregunta" \
   'ALARMA: pr-review-9-abc1234 terminó con una pregunta abierta'
 
+# 3b. DEVKIT-77: el mismo camino (`--sync` -> `pregunta_abierta` vía
+# `devkit-run --pregunta-abierta`) también alarma un cierre que no termina en
+# "?", como el incidente real de DEVKIT-63.
+DEVKIT_TEST_RESULT='Terminé de revisar el conflicto. ¿Cómo quieres que siga? Antes de tocar nada, prefiero confirmarlo contigo.' corre_doble 0
+check_log "alarma por result con pregunta que no termina en ?" \
+  'ALARMA: pr-review-9-abc1234 terminó con una pregunta abierta'
+
 # 4. Rama de una card sin PR y sin skill viva hace más de
 # DEVKIT_WATCH_ORPHAN_AGE segundos (1800 por defecto, sin sobreescribir aquí).
 # check_orphan <nombre> <esperado si|no> <edad> <tiene PR> <skill viva>

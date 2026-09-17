@@ -14,6 +14,38 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### task-start no confunde su propio claude -p con otro agente, y la barrera de pregunta abierta detecta preguntas con opciones (DEVKIT-77)
+
+- `devkit-run --otros-agentes` imprime, antes de la lista de ajenos, una
+  línea `propio: <pid> claude -p "<prompt>"` cuando corre dentro de un
+  agente: el proceso que un `ps` propio ve con `PPID` 1 (el `nohup` de quien
+  lo lanzó), no un segundo agente. La skill `task-start` ya no corre su
+  propio `ps`/`pgrep` para desconfiar de `--otros-agentes` ni interpreta ese
+  proceso como ajeno.
+- `pregunta_abierta` (la barrera de `devkit-run.sh` que fuerza un
+  `task-block.sh` cuando el `result` es una pregunta sin contestar) ya no
+  solo mira si el texto entero termina en "?" (DEVKIT-50): también reconoce,
+  en el último párrafo, una línea que empieza por "¿", "Opciones:" seguida
+  de líneas numeradas, y las frases fijas "¿Cómo quieres que siga"/"¿Qué
+  prefieres".
+- Un `task-start` que "terminó" sin pregunta abierta ni bloqueo, pero dejó su
+  card `En progreso` sin PR, deja `ALARMA: terminó sin entregar ni bloquear`
+  en `watch.log` y `devkit-run --estado` lo muestra como `error`, no como
+  `terminó`.
+- `devkit-run --pregunta-abierta <resultado>` expone la misma
+  `pregunta_abierta` de arriba como subcomando puro, igual que `--resumen`/
+  `--rol`. `watch.sh` lo usa en el camino `--sync` (el que lanza `pr-review`,
+  `task-fix` y `task-document`), que se había quedado con el `grep` viejo de
+  DEVKIT-50: solo `--worker` veía las formas nuevas.
+- Motivo: el 2026-09-17, un `task-start DEVKIT-63` lanzado por `task-close`
+  encontró su propio `claude -p` en `ps` (PPID 1, efecto del `nohup` de su
+  lanzador), desconfió del resultado ya correcto de `--otros-agentes` y
+  terminó preguntando "¿Cómo quieres que siga? Opciones: 1. [...] 2. [...]
+  3. [...] antes de decidir.", que no termina en "?": la barrera de
+  DEVKIT-50 no lo vio, la card quedó `En progreso` con una rama vacía y sin
+  plan comentado, y el humano lo descubrió por `--estado` mostrando
+  `terminó`.
+
 ### Hora local del Mac en todo el contenedor (DEVKIT-64)
 
 - `devkit/host/devkit.sh` detecta la zona horaria del Mac con `readlink
