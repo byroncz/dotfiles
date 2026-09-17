@@ -118,11 +118,19 @@ resolve_extensions() {
         version="$fetched"
       else
         cached="$(awk -F= -v id="$id" '$1==id{print substr($0, length(id)+2); exit}' "$lock" 2>/dev/null)"
+        # 000 es curl sin poder ni conectar (sin red); cualquier otro código
+        # (5xx, 429) sí llegó a Open VSX, así que el aviso lo distingue de un
+        # Mac sin red (H8, DEVKIT-67).
+        if [ "$http_code" = 000 ]; then
+          razon_aviso="sin red para Open VSX"; razon_seco="sin red"
+        else
+          razon_aviso="Open VSX respondió $http_code"; razon_seco="$razon_aviso"
+        fi
         if [ -n "$cached" ]; then
-          echo "devkit: aviso: sin red para Open VSX; se usa la última versión resuelta de $id ($cached)" >&2
+          echo "devkit: aviso: $razon_aviso; se usa la última versión resuelta de $id ($cached)" >&2
           version="$cached"
         else
-          echo "devkit: sin red y sin resolución previa para $id; construye una vez con red o fija su versión en extensions.toml" >&2
+          echo "devkit: $razon_seco y sin resolución previa para $id; construye una vez con red o fija su versión en extensions.toml" >&2
           return 1
         fi
       fi

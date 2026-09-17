@@ -22,10 +22,12 @@ export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
 # Solo responde la API "latest" de Open VSX que usa resolve_extensions, con
 # `-o <archivo> -w '%{http_code}'` como el real: escribe el cuerpo en el
 # archivo y el código HTTP en stdout, para poder distinguir un 404
-# (`DEVKIT_TEST_CURL_404=1`) de un 200 (H4, DEVKIT-67). Cualquier otra URL
-# (por ejemplo la descarga de una etiqueta en `update`, que estos escenarios
-# no ejercitan) sale en 0 sin cuerpo. `DEVKIT_TEST_CURL_DOWN=1` simula el Mac
-# sin red: exit 7, como el curl real, antes de escribir nada.
+# (`DEVKIT_TEST_CURL_404=1`) de un 200 (H4, DEVKIT-67). `DEVKIT_TEST_CURL_503=1`
+# simula un Open VSX caído que sí responde, distinto del Mac sin red (H8,
+# DEVKIT-67). Cualquier otra URL (por ejemplo la descarga de una etiqueta en
+# `update`, que estos escenarios no ejercitan) sale en 0 sin cuerpo.
+# `DEVKIT_TEST_CURL_DOWN=1` simula el Mac sin red: exit 7, como el curl real,
+# antes de escribir nada.
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'FIN'
 #!/bin/sh
@@ -41,6 +43,9 @@ case "$url" in
     if [ "${DEVKIT_TEST_CURL_404:-0}" = 1 ]; then
       [ -n "$out" ] && : > "$out"
       printf '404'
+    elif [ "${DEVKIT_TEST_CURL_503:-0}" = 1 ]; then
+      [ -n "$out" ] && : > "$out"
+      printf '503'
     else
       body="{\"version\":\"${DEVKIT_TEST_OVX_VERSION:-9.9.9}\"}"
       if [ -n "$out" ]; then printf '%s' "$body" > "$out"; printf '200'; else printf '%s' "$body"; fi
@@ -291,6 +296,20 @@ unset DEVKIT_TEST_CURL_404
 check_salida "404 de Open VSX: lo explica" "no existe en Open VSX"
 check        "404 de Open VSX: se detiene" 1 "$ESTADO"
 check_docker "404 de Open VSX: no construye" no 'up -d'
+
+escenario dev; printf 'Anthropic.claude-code=9.9.8\n' > "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_503=1
+corre recreate
+unset DEVKIT_TEST_CURL_503
+check_salida "503 de Open VSX: lo distingue de sin red" "Open VSX respondió 503; se usa la última versión resuelta de Anthropic\.claude-code \(9\.9\.8\)"
+check        "503 de Open VSX: termina bien" 0 "$ESTADO"
+
+escenario dev; rm -f "$TMP/root/p/extensions.lock"
+export DEVKIT_TEST_CURL_503=1
+corre recreate
+unset DEVKIT_TEST_CURL_503
+check_salida "503 de Open VSX sin resolución previa: lo distingue de sin red" "Open VSX respondió 503 y sin resolución previa"
+check        "503 de Open VSX sin resolución previa: se detiene" 1 "$ESTADO"
 
 # --- Línea inválida en extensions.toml (H5, DEVKIT-67) -----------------------
 # Una línea que no calza con "id" = "versión" (comilla simple, sin comillas,
