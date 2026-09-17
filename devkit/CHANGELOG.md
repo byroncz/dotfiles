@@ -44,6 +44,9 @@ versión que usa un proyecto y la destino.
   tienen en `Depende de` (`notion.sh bloqueos`, una consulta por refresco,
   cacheada 30 s). Queda pendiente agrupar la tabla por Épica de origen
   cuando hay más de una Épica `En progreso`.
+- `±n` cuenta ahora con `git status --porcelain --untracked-files=all`: antes
+  un directorio nuevo sin seguimiento con varios archivos salía como una sola
+  línea y `±n` los subcontaba (hallazgo de `pr-review`, PR #53).
 - Cambios requeridos: `devkit recreate` (el `starship.toml` nuevo entra por
   imagen).
 

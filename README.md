@@ -191,7 +191,7 @@ Cada segmento entre corchetes se omite cuando vale 0. De dónde sale cada uno:
 | `arrancando` | No existe `/run/devkit/ready` todavía: el arranque del contenedor sigue en curso. |
 | `<proyecto>:<template>` | `DEVKIT_PROJECT` y `DEVKIT_VERSION` del entorno, sin leer archivos. |
 | `<rama>` | `git symbolic-ref --short HEAD`, acortada a `<tipo>/<Clave>` sin el slug (`feat/DEVKIT-57`); `main` tal cual. Color por prefijo: `feat/` verde, `fix/` rojo, `chore/` amarillo, `main` cian. |
-| `±n` | Archivos con cambios sin commit (`git status --porcelain`, preparados + sin preparar + sin seguimiento). |
+| `±n` | Archivos con cambios sin commit (`git status --porcelain --untracked-files=all`, preparados + sin preparar + sin seguimiento; sin `--untracked-files=all` un directorio nuevo entero cuenta como un solo archivo). |
 | `↑m` | Commits de la rama que no están en `main` (`git rev-list --count main..HEAD`); nunca en `main`. |
 | `agentes:a` | `devkit-run --agentes`: mismo conteo que las filas `en curso` de `--estado`, sin su tabla ni el bloque Consumo. |
 | `!k` | Líneas `ALARMA:` de `watch.log` posteriores al marcador que deja `devkit-run --estado` en `/run/devkit/alarmas-vistas`. |

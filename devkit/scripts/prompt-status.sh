@@ -54,7 +54,7 @@ linea() {
       out+="${corta} "
     fi
 
-    cambios=$(git -C "$ws" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    cambios=$(git -C "$ws" status --porcelain --untracked-files=all 2>/dev/null | wc -l | tr -d ' ')
     [ "${cambios:-0}" -gt 0 ] 2>/dev/null && out+="${AMARILLO}±${cambios}${RESET} "
 
     if [ "$rama" != main ]; then
@@ -130,6 +130,17 @@ run_tests() {
   echo cambio >"$tmp/ws/archivo.txt"
   check "±n cuenta los cambios sin commit" "devkit:dev ${VERDE}feat/DEVKIT-63${RESET} ${AMARILLO}±1${RESET}" \
     "$(linea "$tmp/ws")"
+  # H3 del PR #53: un directorio nuevo sin seguimiento sale como una sola
+  # línea en `git status --porcelain` por defecto; con `--untracked-files=all`
+  # cuenta cada archivo suyo.
+  mkdir -p "$tmp/ws/dir_nuevo"
+  echo a >"$tmp/ws/dir_nuevo/a"
+  echo b >"$tmp/ws/dir_nuevo/b"
+  echo c >"$tmp/ws/dir_nuevo/c"
+  check "±n cuenta cada archivo de un directorio nuevo sin seguimiento" \
+    "devkit:dev ${VERDE}feat/DEVKIT-63${RESET} ${AMARILLO}±4${RESET}" \
+    "$(linea "$tmp/ws")"
+  rm -rf "$tmp/ws/dir_nuevo"
   git -C "$tmp/ws" add archivo.txt
   git -C "$tmp/ws" commit -q -m uno
   check "↑m cuenta los commits sobre main" \
