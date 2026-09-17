@@ -47,7 +47,7 @@ fi
 # `bloqueada` con este motivo, sin consultar Notion. En una sola línea, cortada
 # por caracteres y no por bytes (`cut -c`), para no partir un acento.
 motivo_en_linea=$(printf '%s' "$motivo" | tr '\n' ' ')
-printf '%s task-block.sh %s Bloqueada desde %s: %s\n' "$(date -u +%FT%TZ)" "$clave" "$anterior" \
+printf '%s task-block.sh %s Bloqueada desde %s: %s\n' "$(date +%FT%T%:z)" "$clave" "$anterior" \
   "${motivo_en_linea:0:300}" \
   >>"${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}" 2>/dev/null
 "$NOTION" comentar "$id" "Bloqueada desde $anterior.

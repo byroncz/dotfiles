@@ -230,7 +230,7 @@ fi
 cd "$WS" 2>/dev/null || exit 0
 mkdir -p "$RUN_DIR"
 touch "$LAUNCHED"
-log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+log() { printf '%s %s\n' "$(date +%FT%T%:z)" "$*"; }
 
 # `cuota:<clave>` es la misma entrada, reescrita mientras la skill espera a que
 # se reinicie la cuota (DEVKIT-27): para el bucle cuenta como lanzada, así que
@@ -383,7 +383,7 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
   fi
   [ "$wait" -lt "$QUOTA_MIN_WAIT" ] && wait=$QUOTA_MIN_WAIT
   [ "$wait" -gt "$QUOTA_MAX_WAIT" ] && wait=$QUOTA_MAX_WAIT
-  until=$(date -u -d "@$((now + wait))" +%FT%TZ)
+  until=$(date -d "@$((now + wait))" +%FT%T%:z)
   if [ "$key" != "-" ]; then unmark "$key"; mark "cuota:$key"; fi
   log "cuota agotada: $name en pausa hasta $until (intento $((attempt + 1)) de $QUOTA_RETRIES)"
   (
@@ -428,7 +428,7 @@ run_skill() {
   # por caracteres, como `prompt_en_linea` de devkit-run.sh: `cut -c` corta
   # por bytes y partiría un acento, y --estado ya no reconocería la línea.
   en_linea=$(printf '%s' "$prompt" | tr '\n"' '  ')
-  printf '%s %s lanzando (origen=bucle): "%s" log=%s\n' "$(date -u +%FT%TZ)" "$name" \
+  printf '%s %s lanzando (origen=bucle): "%s" log=%s\n' "$(date +%FT%T%:z)" "$name" \
     "${en_linea:0:120}" "$logf"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el

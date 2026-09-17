@@ -295,7 +295,7 @@ check_igual() {
 
 # Caso normal: muere por cuota, espera a la hora del aviso y vuelve a correr.
 corre_doble 1
-check_log "línea de pausa por cuota" 'cuota agotada: pr-review-9-abc1234 en pausa hasta [0-9T:-]+Z'
+check_log "línea de pausa por cuota" 'cuota agotada: pr-review-9-abc1234 en pausa hasta [0-9T:+-]+'
 check_log "línea de reanudación" 'cuota reanudada: relanzando pr-review-9-abc1234'
 check_log "la skill relanzada terminó bien" 'pr-review-9-abc1234 terminado'
 check_igual "la skill se lanzó dos veces" 2 "$LLAMADAS"
