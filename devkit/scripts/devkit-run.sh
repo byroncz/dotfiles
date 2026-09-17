@@ -566,12 +566,12 @@ watch_long_running() {  # watch_long_running <prompt> <pid>
 # bloqueo es `task-block.sh`, bash contra la API de Notion: no gasta modelo
 # y no puede, a su vez, terminar en pregunta, así que ya no hace falta
 # excluir a nadie para evitar un bucle.
-forzar_task_block() {  # forzar_task_block <prompt> <logf>
-  local prompt=$1 logf=$2 skill clave motivo
+forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo>
+  local prompt=$1 logf=$2 motivo skill clave
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   [ -n "$clave" ] || return 0
-  motivo="devkit-run: $skill terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44); ver $logf"
+  motivo="devkit-run: $skill $3; ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date -u +%FT%TZ)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
 }
@@ -1430,6 +1430,8 @@ FIN
     "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
   check "task-block.sh recibe la Clave como primer argumento" 'DEVKIT-3' \
     "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+  check "el motivo de la pregunta abierta la nombra" 'pregunta abierta' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'pregunta abierta|sin acceso a Notion' | head -1)"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
   # bash, en primer plano y con los argumentos tal cual (DEVKIT-55).
@@ -1638,6 +1640,8 @@ FIN
     "$(grep -oE 'ALARMA: terminó sin acceso a Notion' "$tmp/run/watch.log" | head -1)"
   check "un result sin acceso a Notion bloquea la card" 'DEVKIT-9' \
     "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+  check "el motivo del bloqueo dice sin acceso a Notion, no pregunta abierta" 'sin acceso a Notion|' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'sin acceso a Notion|pregunta abierta' | tr '\n' '|')"
 
   # H6 de pr-review (DEVKIT-65): un `result` que solo cita un comando
   # bloqueado por pr-guard, sin decir que el propio agente carece de acceso
@@ -1980,15 +1984,19 @@ case "${1:-}" in
       if printf '%s' "$resultado" | grep -qE '\?[[:space:]]*$'; then
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
-        forzar_task_block "$prompt" "$logf"
+        forzar_task_block "$prompt" "$logf" \
+          "terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44)"
       elif sin_acceso_notion "$logf"; then
         # H6, H9 y H10 de pr-review (DEVKIT-65): la detección vive en
-        # `sin_acceso_notion`, con sus casos reales. La sonda de arriba vio Notion conectado, pero el propio agente dice
-        # lo contrario al terminar (DEVKIT-65): mismo remedio que la pregunta
-        # abierta, la card queda sin resolver y necesita al humano.
+        # `sin_acceso_notion`, con sus casos reales. La sonda de arriba vio
+        # Notion conectado, pero el propio agente dice lo contrario al
+        # terminar (DEVKIT-65): mismo remedio que la pregunta abierta, la
+        # card queda sin resolver y necesita al humano. H11: con su propio
+        # motivo, para que el humano no busque una pregunta que no existe.
         printf '%s devkit-run "%s" ALARMA: terminó sin acceso a Notion (ver resultado)\n' \
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
-        forzar_task_block "$prompt" "$logf"
+        forzar_task_block "$prompt" "$logf" \
+          "terminó sin acceso a Notion pese a que \`claude mcp list\` la vio conectada (DEVKIT-65)"
       fi
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
