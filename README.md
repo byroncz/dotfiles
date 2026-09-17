@@ -666,7 +666,8 @@ Las cuatro primeras alarmas del monitoreo mínimo tienen un caso cada una: el do
 `claude` de `--run-skill` cubre el error genérico (sin relación con la
 cuota, para no confundirla con el relanzamiento), la skill lenta (con
 `DEVKIT_WATCH_SKILL_TIMEOUT`/`DEVKIT_WATCH_SKILL_POLL` acortados para la
-prueba) y el `result` que termina en pregunta; la alarma de rama huérfana se
+prueba) y el `result` que es una pregunta abierta, con y sin "?" al final (el
+cierre real de DEVKIT-63); la alarma de rama huérfana se
 prueba aparte con el hook `--orphan-branch <edad> <tiene PR: si|no> <skill
 viva: si|no>`, que llama a la decisión pura sin tocar git ni `gh`. El comando
 `--agentes-vivos` se prueba contra un doble con la misma forma de línea de
