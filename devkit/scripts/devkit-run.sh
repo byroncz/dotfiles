@@ -1640,6 +1640,49 @@ FIN
   check "un comando no autorizado por pr-guard no se confunde con sin acceso a Notion" "no 0" \
     "$([ -e "$tmp/bloqueo.args" ] && echo si || echo no) $(grep -c 'ALARMA: terminó sin acceso a Notion' "$tmp/run/watch.log")"
 
+  # H9 de pr-review (DEVKIT-65): las dos frases reales con las que la card
+  # describe los cuatro incidentes, ninguna igual a "no tengo acceso a
+  # Notion" que ya cubría el caso de arriba.
+  local notion_sin_permiso
+  notion_sin_permiso="$tmp/claude-notion-sin-permiso"
+  cat >"$notion_sin_permiso" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1 $2" = "mcp list" ]; then
+  printf 'plugin:Notion:notion: https://mcp.notion.com/mcp (HTTP) - Connected\n'
+  exit 0
+fi
+printf '{"result":"el plugin de Notion no tiene permiso en esta sesión headless","total_cost_usd":0.01,"num_turns":2}\n'
+FIN
+  chmod +x "$notion_sin_permiso"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$notion_sin_permiso" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "un result 'el plugin de Notion no tiene permiso' bloquea la card" 'DEVKIT-9' \
+    "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+
+  local notion_otro_nombre
+  notion_otro_nombre="$tmp/claude-notion-otro-nombre"
+  cat >"$notion_otro_nombre" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1 $2" = "mcp list" ]; then
+  printf 'plugin:Notion:notion: https://mcp.notion.com/mcp (HTTP) - Connected\n'
+  exit 0
+fi
+printf '{"result":"pidió autorizar mcp__claude_ai_Notion__* en permissions.allow","total_cost_usd":0.01,"num_turns":2}\n'
+FIN
+  chmod +x "$notion_otro_nombre"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$notion_otro_nombre" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "un result que pide autorizar mcp__claude_ai_Notion__* bloquea la card" 'DEVKIT-9' \
+    "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+
   # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
   # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
   # lanzar la siguiente hija porque sus SKILL.md invocaban el alias). La
@@ -1866,12 +1909,17 @@ case "${1:-}" in
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf"
-      elif printf '%s' "$resultado" | grep -qiE 'no tengo acceso a notion|no (tengo|estoy) autorizad[oa]'; then
+      elif printf '%s' "$resultado" | grep -qiE 'notion' \
+        && printf '%s' "$resultado" | grep -qiE 'no tiene permiso|no tengo acceso|sin acceso|no (tengo|estoy) autorizad[oa]|autorizar mcp__|permissions\.allow'; then
         # H6 de pr-review (DEVKIT-65): "no autorizado" a secas también
         # coincidía con un `result` que solo citara un comando bloqueado por
         # `pr-guard` ("... no autorizado por pr-guard"), una card que terminó
-        # bien. Anclada al sujeto ("no tengo/estoy autorizado"), que es como
-        # el agente describe su propia falta de acceso a Notion.
+        # bien. H9 de pr-review (DEVKIT-65): esa ancla al sujeto no cubría las
+        # frases con las que la card describe los cuatro incidentes reales
+        # ("el plugin de Notion no tiene permiso en esta sesión headless",
+        # "autorizar mcp__claude_ai_Notion__* en permissions.allow"), así que
+        # además de la forma se exige que el `result` mencione "notion": eso
+        # sigue dejando fuera "no autorizado por pr-guard", que no la nombra.
         # La sonda de arriba vio Notion conectado, pero el propio agente dice
         # lo contrario al terminar (DEVKIT-65): mismo remedio que la pregunta
         # abierta, la card queda sin resolver y necesita al humano.
