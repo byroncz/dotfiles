@@ -364,9 +364,14 @@ tres `UV_*` ya apuntan a rutas bajo `$HOME`, que sí viaja en la lista. Con ese 
 `claude mcp list` que Notion está conectada; si no, no lanza, lo dice por
 `stderr` y deja `ALARMA: sin Notion conectado` en `watch.log` en vez de
 gastar turnos en una skill que no va a poder leer la card. Si el `result`
-final dice "no tengo acceso a Notion" o "no autorizado" aunque la sonda haya
-visto Notion conectada, cuenta igual que la pregunta abierta: alarma y
-bloquea la card con `task-block.sh`. Por si el nombre del servidor vuelve a
+final menciona "notion" junto con alguna de las formas con las que un agente
+describe la falta de acceso ("no tiene permiso", "no tengo acceso", "sin
+acceso", "no tengo/estoy autorizado", "autorizar mcp__", "permissions.allow")
+aunque la sonda haya visto Notion conectada, cuenta igual que la pregunta
+abierta: alarma y bloquea la card con `task-block.sh`. "No autorizado" a
+secas, sin mencionar Notion, no cuenta: coincidía con un `result` que solo
+citaba un comando bloqueado por `pr-guard`, una card que terminó bien (H6 y
+H9 de `pr-review`, DEVKIT-65). Por si el nombre del servidor vuelve a
 cambiar con otra versión de la CLI, `--allowedTools` trae los dos nombres
 conocidos (`mcp__plugin_Notion_notion` y `mcp__claude_ai_Notion`), y
 `devkit/agents/settings.json` los autoriza también para la sesión
