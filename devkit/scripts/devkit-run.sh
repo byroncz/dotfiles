@@ -1617,6 +1617,29 @@ FIN
   check "un result sin acceso a Notion bloquea la card" 'DEVKIT-9' \
     "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
 
+  # H6 de pr-review (DEVKIT-65): un `result` que solo cita un comando
+  # bloqueado por pr-guard, sin decir que el propio agente carece de acceso
+  # a Notion, no debe bloquear la card.
+  local notion_falso_positivo
+  notion_falso_positivo="$tmp/claude-notion-falso-positivo"
+  cat >"$notion_falso_positivo" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1 $2" = "mcp list" ]; then
+  printf 'plugin:Notion:notion: https://mcp.notion.com/mcp (HTTP) - Connected\n'
+  exit 0
+fi
+printf '{"result":"el comando gh pr merge no autorizado por pr-guard; card en Revisión automática","total_cost_usd":0.01,"num_turns":2}\n'
+FIN
+  chmod +x "$notion_falso_positivo"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_NOTION_CHECK=1 DEVKIT_CLAUDE_BIN="$notion_falso_positivo" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "un comando no autorizado por pr-guard no se confunde con sin acceso a Notion" "no 0" \
+    "$([ -e "$tmp/bloqueo.args" ] && echo si || echo no) $(grep -c 'ALARMA: terminó sin acceso a Notion' "$tmp/run/watch.log")"
+
   # El alias `devkit-run` de zshrc no existe en el Bash no interactivo con el
   # que corre `claude -p` (DEVKIT-54: epic-plan y task-close quedaron sin
   # lanzar la siguiente hija porque sus SKILL.md invocaban el alias). La
@@ -1843,7 +1866,12 @@ case "${1:-}" in
         printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
           "$(date -u +%FT%TZ)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf"
-      elif printf '%s' "$resultado" | grep -qiE 'no tengo acceso a notion|no autorizado'; then
+      elif printf '%s' "$resultado" | grep -qiE 'no tengo acceso a notion|no (tengo|estoy) autorizad[oa]'; then
+        # H6 de pr-review (DEVKIT-65): "no autorizado" a secas también
+        # coincidía con un `result` que solo citara un comando bloqueado por
+        # `pr-guard` ("... no autorizado por pr-guard"), una card que terminó
+        # bien. Anclada al sujeto ("no tengo/estoy autorizado"), que es como
+        # el agente describe su propia falta de acceso a Notion.
         # La sonda de arriba vio Notion conectado, pero el propio agente dice
         # lo contrario al terminar (DEVKIT-65): mismo remedio que la pregunta
         # abierta, la card queda sin resolver y necesita al humano.
