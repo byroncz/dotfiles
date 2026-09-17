@@ -95,8 +95,9 @@ red y sin resolución previa, el comando se detiene sin construir. Si Open VSX
 responde 404 para una extensión, `up`, `recreate`, `rebuild` y `update` se
 detienen con `devkit: extensión <id> no existe en Open VSX (404)` en vez de
 construir sin ella. Un 5xx de Open VSX se reintenta (`--retry 5 --retry-delay
-3`) antes de rendirse; si se agota, se trata igual que un 404 recién descrito
-para efectos de red caída o resolución previa.
+3`) antes de rendirse; agotados los reintentos, un 5xx se comporta como la
+falta de red salvo en el aviso, que nombra el código (`Open VSX respondió
+<código>`), y el 404 se detiene siempre.
 
 Además, cada extensión (fija o `latest`) se comprueba contra `engines.vscode`
 en Open VSX frente a la versión de openvscode-server que trae la imagen (`ARG
