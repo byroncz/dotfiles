@@ -28,6 +28,12 @@ frontera = ["fable", "opus", "sonnet"]
 # (DEVKIT-54). `max_turns` es un presupuesto, no un límite: la CLI instalada
 # (2.1.270) no expone `--max-turns`, así que devkit-run compara `num_turns`
 # del resultado contra este número y solo avisa en el log si se excede.
+#
+# `resolver_modelo` solo avanza desde `model_index` hacia el final de la
+# lista, nunca hacia atrás: si Opus no responde, cae a Sonnet y ahí se queda,
+# sin volver a probar Fable. Subir a Fable en ese momento anularía el ahorro
+# que justifica el índice 2, y la caída ya queda registrada en watch.log
+# (`resumen`, DEVKIT-72).
 revision.model_index = 2
 revision.effort = "high"
 revision.max_turns = 50
