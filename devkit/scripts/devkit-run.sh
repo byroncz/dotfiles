@@ -1518,12 +1518,14 @@ FIN
        DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-lanzador" \
        bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
 
-  # DEVKIT-65: un `claude -p` lanzado por otro (`epic-plan` corriendo dentro
-  # de un `claude -p`) hereda del padre las marcas de sesión anidada
-  # (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...), que le cambian a la CLI hija
-  # el nombre con el que monta el conector de Notion y rompen
-  # `--allowedTools`. `run_claude` arranca con `env -i` y la lista blanca de
-  # ENV_HEREDABLE: aunque el padre las meta, no llegan.
+  # DEVKIT-65: hipótesis no confirmada (ver el comentario de ENV_HEREDABLE
+  # más arriba, H4 de pr-review) de que un `claude -p` lanzado por otro
+  # (`epic-plan` corriendo dentro de un `claude -p`) hereda del padre las
+  # marcas de sesión anidada (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...), que le
+  # cambiarían a la CLI hija el nombre con el que monta el conector de Notion
+  # y romperían `--allowedTools`. Confirmada o no, `run_claude` arranca con
+  # `env -i` y la lista blanca de ENV_HEREDABLE como medida defensiva: aunque
+  # el padre las meta, no llegan.
   local espejo_anidado
   espejo_anidado="$tmp/claude-espejo-anidado"
   cat >"$espejo_anidado" <<'FIN'
