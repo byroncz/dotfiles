@@ -532,6 +532,13 @@ $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
     '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Épica 50"}]' \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas DEVKIT)"
 
+  # El uso (sed -n '9,30p') debe llegar hasta la línea de --test: si el
+  # bloque crece y el rango no se actualiza, un subcomando inválido corta la
+  # ayuda a media frase (DEVKIT-80).
+  check "uso: el rango impreso llega hasta la línea de --test" \
+    "#   notion.sh --test                          autoprueba, sin red" \
+    "$(bash "$HERE/notion.sh" no-existe 2>&1 >/dev/null | tail -1)"
+
   return $fail
 }
 
@@ -547,7 +554,7 @@ case "${1:-}" in
   epicas) cmd_epicas "${2:?código}" ;;
   --test) run_tests ;;
   *)
-    sed -n '9,25p' "$0" >&2
+    sed -n '9,30p' "$0" >&2
     exit 64
     ;;
 esac
