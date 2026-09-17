@@ -201,8 +201,52 @@ Costo aceptado: cada rebuild vuelve a descargar Python y los paquetes.
 | Capa | Decisión |
 |---|---|
 | Terminal en el Mac | Terminal.app, macOS 26. Corre solo el comando `devkit`: el trabajo real pasa por el editor en el navegador o por `devkit shell` |
-| Shell | zsh con `starship` en preset de símbolos de texto plano, `zsh-autosuggestions`, `zsh-syntax-highlighting` |
+| Shell | zsh con `starship`, `zsh-autosuggestions`, `zsh-syntax-highlighting`. Desde DEVKIT-63, un único módulo `custom` de starship reemplaza el preset de símbolos de texto plano: `format` solo nombra ese módulo y `$character`, así que el resto del preset (git, el lenguaje del directorio, `container`) queda sin efecto aunque `starship.toml` lo trajera |
 | Editor | openvscode-server (VS Code en el navegador), único editor del devkit desde DEVKIT-40. Extensiones versionadas en `devkit/vscode/extensions.toml` (nace con `Anthropic.claude-code`), resueltas contra Open VSX al construir y comprobadas contra `engines.vscode` frente a este mismo editor antes de instalarlas (sección 9.2) e instaladas por el `Dockerfile` con `ruff` y `basedpyright` desde `uv tool`. `devkit code <proyecto>` abre la URL con el token ya puesto; amenazas y mitigaciones en la sección 8.2. `chat.disableAIFeatures` en los ajustes desde DEVKIT-66, con la intención de apagar el chat integrado de VS Code porque el agente del devkit es Claude Code y dos paneles de chat compiten por la atención y por memoria del proceso de extensiones sin aportar nada. En esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta: limitación conocida, sin arreglo. Claude Code es una extensión aparte y no depende de él. `extensions.autoUpdate` y `extensions.autoCheckUpdates` en `false`: una actualización en caliente muere en cada `recreate` (el directorio de extensiones no está en un volumen) y rompería la reproducibilidad de la imagen, que es la que fija la versión exacta que corre |
+
+**Prompt de una línea (DEVKIT-63).** El preset de símbolos que traía el
+template mostraba el lenguaje del directorio (irrelevante: este workspace no
+es un proyecto de un lenguaje) y repetía en `git`/`container` lo que ya sabe
+quien trabaja adentro. Lo que sí falta en un prompt genérico es propio del
+devkit: cuántos agentes corren y si hay alarmas nuevas en `watch.log`, sin
+salir a mirar `devkit-run --estado`. `devkit/scripts/prompt-status.sh` arma
+esa línea completa en un solo proceso, con un único módulo `custom` de
+starship (`[custom.devkit]`), en vez de un módulo por dato:
+
+- **Presupuesto de 50 ms por módulo.** Es lo que `starship timings` acepta
+  sin que el prompt se sienta lento al apretar Enter. Un módulo por segmento
+  multiplicaría el costo de spawn de `sh -c` que paga cada uno; un solo
+  proceso bash que calcula todo junto, con builtins en vez de un fork por
+  dato, mide bajo 50 ms incluso sumando `git status`, `git rev-list` y
+  `devkit-run --agentes`. `estado_filas`, la función completa detrás de
+  `devkit-run --estado`, mide sobre 90 ms con ~15 lanzamientos en
+  `watch.log` (un fork de `date`/`grep`/`tail` por fila): muy por encima del
+  presupuesto, así que el segmento `agentes:<a>` no la reusa. En su lugar,
+  `agentes_en_curso_rapido` (en `devkit-run.sh`) hace una sola pasada del log
+  con bash puro y un único `grep` combinado para la evidencia de fin,
+  bajando a menos de 20 ms; a cambio, no distingue un `--sync` anidado del
+  bucle como "en curso" hasta que aparece en `ps`, algo que `estado_filas`
+  sí hace. Simplificación a propósito: ese caso es raro (un `claude -p`
+  lanzado dentro de otro) y el prompt es decorativo, no la fuente de verdad.
+- **`when = "true"` obligatorio.** Un módulo `custom` sin `when` (ni
+  `files`/`extensions`/`directories`) nunca corre: starship lo trata como
+  "no aplica" y no ejecuta el comando. Con un valor booleano (`when = true`)
+  tampoco corre; tiene que ser el string `"true"`, un comando de shell real.
+- **`shell` sin `-c` explícito.** `starship` ya agrega `-c` y el comando
+  como último argumento; declarar `shell = ["bash", "--noprofile",
+  "--norc", "-c"]` duplica el flag y el módulo queda mudo sin ningún error
+  visible (`starship module custom.devkit` no imprime nada, ni con
+  `STARSHIP_LOG=trace`). El único rastro es `STARSHIP_LOG=debug`, que sí
+  confirma que el módulo se parseó y se intentó computar.
+- **`style = ""` obligatorio.** Sin él, starship envuelve toda la salida del
+  módulo con su propio estilo (negrita verde de forma predeterminada) y pisa
+  los colores por prefijo que el script ya deja en ANSI crudo (`\033[32m` …
+  `\033[0m`) para la rama. Con `style = ""`, la salida cruda pasa intacta.
+- **Alarmas por marcador, no por conteo desde el inicio.** `!<k>` cuenta
+  solo las líneas `ALARMA:` de `watch.log` posteriores a la última vez que
+  `devkit-run --estado` las mostró (marcador en
+  `/run/devkit/alarmas-vistas`): así el número baja a cero al mirarlo, en
+  vez de acumular para siempre lo que ya se atendió.
 
 Contexto portable entre agentes: `AGENTS.md` como fuente, skills en formato
 Agent Skills, un servidor MCP de Notion cuya configuración se genera por
