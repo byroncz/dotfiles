@@ -299,22 +299,26 @@ cmd_bloqueos() {  # cmd_bloqueos <código>
 # quedó pendiente en el PR #53): una sola consulta -las Épicas En progreso
 # del proyecto y sus Tareas que no están Hecha- porque `estado_filas` no
 # sabe de antemano cuáles Épicas están activas, y acotar el Estado evita
-# traer las cards ya cerradas en cada refresco. El cruce Tarea → Padre →
-# Épica se hace en jq, mismo patrón que `bloqueos` con "Depende de". Cada
-# Épica En progreso también sale como entrada de sí misma (epica ==
-# epica_titulo de su propia Clave): un lanzamiento sobre la Épica (por
-# ejemplo `epic-plan`) se agrupa bajo su propio encabezado, no en
+# traer las cards ya cerradas en cada refresco. El filtro repite la rama de
+# Proyecto en cada lado del "or" para no anidar tres niveles: la API de
+# Notion solo acepta dos (hallazgo H5 de `pr-review` sobre este PR; con tres
+# niveles responde 400 y `epicas.cache` nunca se escribe). El cruce
+# Tarea → Padre → Épica se hace en jq, mismo patrón que `bloqueos` con
+# "Depende de". Cada Épica En progreso también sale como entrada de sí misma
+# (epica == epica_titulo de su propia Clave): un lanzamiento sobre la Épica
+# (por ejemplo `epic-plan`) se agrupa bajo su propio encabezado, no en
 # "(sin Épica)".
 cmd_epicas() {  # cmd_epicas <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
   [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
   filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
-    '{and: [{property: "Proyecto", relation: {contains: $p}},
-            {or: [{and: [{property: "Nivel", select: {equals: "Épica"}},
-                         {property: "Estado", select: {equals: "En progreso"}}]},
-                  {and: [{property: "Nivel", select: {equals: "Tarea"}},
-                         {property: "Estado", select: {does_not_equal: "Hecha"}}]}]}]}')") || return
+    '{or: [{and: [{property: "Proyecto", relation: {contains: $p}},
+                  {property: "Nivel", select: {equals: "Épica"}},
+                  {property: "Estado", select: {equals: "En progreso"}}]},
+           {and: [{property: "Proyecto", relation: {contains: $p}},
+                  {property: "Nivel", select: {equals: "Tarea"}},
+                  {property: "Estado", select: {does_not_equal: "Hecha"}}]}]}')") || return
   jq -c --arg codigo "$codigo" '
     def clave($n): "\($codigo)-\($n)";
     def titulo: (.properties["Título"].title // []) | map(.plain_text) | join("");
@@ -543,6 +547,13 @@ $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
   check "epicas: Tareas de una Épica En progreso, con Clave y título, y la Épica misma" \
     '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-58","epica":"DEVKIT-50","epica_titulo":"Épica 50"},{"clave":"DEVKIT-50","epica":"DEVKIT-50","epica_titulo":"Épica 50"}]' \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas DEVKIT)"
+  # El filtro repite la rama de Proyecto en cada lado del "or" para no
+  # anidar tres niveles: la API de Notion solo acepta dos y con tres
+  # responde 400 sin que el doble de curl -que no valida el cuerpo- lo note
+  # (hallazgo H5 de `pr-review` sobre el PR #57).
+  check "epicas: el filtro no anida tres niveles" \
+    '{"or":[{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Épica"}},{"property":"Estado","select":{"equals":"En progreso"}}]},{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"does_not_equal":"Hecha"}}]}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
   # El uso (sed -n '9,30p') debe llegar hasta la línea de --test: si el
   # bloque crece y el rango no se actualiza, un subcomando inválido corta la
