@@ -303,6 +303,29 @@ PRs con auto-merge y documentan al cerrar.
   Apple Silicon.
 - `new-project.sh` se descarga con `curl` y ejecuta todo lo demás dentro de
   contenedores.
+- Zona horaria del Mac dentro del contenedor (DEVKIT-64): `devkit.sh` detecta
+  la zona con `readlink /etc/localtime` (macOS enlaza esa ruta a
+  `/var/db/timezone/zoneinfo/<Zona>`) y la escribe como `DEVKIT_TZ` en
+  `~/.devkit/<proyecto>/.env` en `up`, `recreate`, `rebuild` y `update`;
+  `compose.yaml` la pasa al contenedor `dev` como `TZ` (`${DEVKIT_TZ:-UTC}`) y
+  el `Dockerfile` instala `tzdata`, que trae la base de zonas que `TZ`
+  necesita para resolver un nombre como `America/Bogota` (un offset fijo no
+  la necesita, pero un nombre sí). Sin zona detectable (Linux, o el enlace
+  ausente): `UTC` y un aviso en la consola del Mac; nunca se detiene el
+  comando por esto. Con `TZ` puesta, `date` dentro del contenedor coincide
+  con `date` en el Mac, y los scripts que dejan marcas legibles en
+  `watch.log` (`watch.sh`, `devkit-run.sh`, `task-close.sh`, `task-block.sh`,
+  `sync-sandbox.sh`, `entrypoint.sh`, `pr-guard.sh`) escriben
+  `date +%FT%T%:z` en vez de `date -u +%FT%TZ`: la hora del Mac, con
+  desplazamiento (`-05:00`), para seguir siendo comparable con GitHub y
+  Notion, que quedan en UTC (`mergedAt`, `submittedAt`, `createdAt` de
+  GitHub; `Creado` y `Cierre` de Notion) y no cambian. Las comparaciones por
+  hora (edad de un lanzamiento, ventana de PRs mergeados, hora de reinicio de
+  cuota) siguen en epoch (`date +%s`, `date -d "<marca>" +%s`), que
+  interpreta igual una marca vieja en `Z` y una nueva con desplazamiento, así
+  que conviven sin migración. `dropbox-setup.sh` es la excepción: su
+  `expiry` es un campo que `rclone` mismo parsea como token OAuth (contrato
+  externo, no una marca que lea un humano), así que se queda en UTC.
 
 ### 4.9 Seguridad
 
@@ -723,6 +746,15 @@ tmpfs y se pierde en cada `devkit recreate`: la marca en el PR y en Notion es
 la que queda para decidir si un modelo más barato alcanza para un papel del
 flujo. `task-close.sh` es bash y no tiene marca propia: copia las ajenas y
 dice "sin marca" cuando faltan, en vez de deducirlas.
+
+Las marcas de tiempo que un humano lee (`watch.log`, `devkit-run --estado`,
+los marcadores de arranque y de restauración del sandbox) quedan en la hora
+del Mac, con desplazamiento (`date +%FT%T%:z`, DEVKIT-64): comparan a ojo con
+la pantalla del Mac sin restar zonas. Lo que ya es de por sí UTC en su
+sistema de origen -`mergedAt`, `submittedAt` y `createdAt` de GitHub;
+`Creado` y `Cierre` de Notion- se queda en UTC: no son marcas que este devkit
+escriba, y forzarlas a la zona del Mac las desacoplaría de lo que esos dos
+sistemas muestran en su propia interfaz.
 
 `devkit-run --estado` suma un bloque `Consumo` (DEVKIT-62) con el porcentaje
 de cuota del plan en vivo, sesión y semana, y la hora de la lectura. Antes de

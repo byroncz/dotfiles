@@ -34,7 +34,7 @@ ti.
 | | Herramienta | Para qué se usa aquí |
 |---|---|---|
 | ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) | **Docker + Compose** | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa a internet) y `proxy` (única salida, con lista blanca). |
-| ![Debian](https://img.shields.io/badge/Debian_trixie--slim-A81D33?logo=debian&logoColor=white) | **Debian trixie-slim** | Imagen base sin lenguaje preinstalado. Usuario `dev` sin `sudo`. |
+| ![Debian](https://img.shields.io/badge/Debian_trixie--slim-A81D33?logo=debian&logoColor=white) | **Debian trixie-slim** | Imagen base sin lenguaje preinstalado. Usuario `dev` sin `sudo`. Trae `tzdata`, la base de zonas horarias que usa `TZ` (la zona del Mac, ver más abajo) para resolver un nombre como `America/Bogota`. |
 | ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `.devkit/devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
 | ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `.devkit/devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
@@ -66,14 +66,14 @@ Lo instala `new-project.sh` en `~/.devkit/bin/devkit`.
 
 | Comando | Qué hace |
 |---|---|
-| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). Resuelve las extensiones del editor antes de construir (ver más abajo). |
+| `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). Detecta la zona horaria del Mac y resuelve las extensiones del editor antes de construir (ver más abajo). |
 | `devkit shell <proyecto>` | Abre una shell dentro del contenedor. |
 | `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador. Solo imprime la URL con el token en la terminal si `open` falta o falla. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor. Lo no committeado se pierde. |
-| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos, `devkit.env` y las extensiones del editor, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
-| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea, con las extensiones resueltas de nuevo. En modo dev, también rearma el contexto de build. |
-| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo y resuelve sus extensiones. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
+| `devkit recreate <proyecto>` | Recrea los contenedores: relee secretos, `devkit.env`, la zona horaria del Mac y las extensiones del editor, reconstruye solo las capas que cambiaron. En modo dev, primero rearma el contexto de build desde el workspace. |
+| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea, con la zona horaria y las extensiones resueltas de nuevo. En modo dev, también rearma el contexto de build. |
+| `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml` del repo, resuelve sus extensiones y vuelve a detectar la zona horaria del Mac. En modo dev no hay etiqueta que bajar: te manda a `recreate`. |
 | `devkit logs <proyecto>` | Arranque y bucles. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
 | `devkit awake <proyecto>` | Impide que el Mac se suspenda por inactividad mientras el contenedor esté vivo: corre `caffeinate -i docker wait devkit-<proyecto>` en primer plano y suelta la aserción cuando el contenedor se detiene o con Ctrl-C. Sin eso, el reposo del Mac congela la VM de Docker y los bucles del contenedor dejan de correr. No evita el reposo al cerrar la tapa. Falla si el contenedor no corre o si falta `caffeinate` (fuera de macOS). |
@@ -115,6 +115,33 @@ fija se instala sin comprobar, igual que antes de este chequeo.
 el build arg `EXTENSIONS` (quedó de antes de este versionado): pide reinstalar
 con `new-project.sh <proyecto> --version <x>` antes de actualizar. Detalle de
 diseño en `docs/ARCHITECTURE.md`, sección 9.
+
+#### Zona horaria del Mac dentro del contenedor
+
+`devkit up`, `recreate`, `rebuild` y `update` detectan la zona horaria del
+Mac con `readlink /etc/localtime` (macOS la enlaza a
+`/var/db/timezone/zoneinfo/<Zona>`, por ejemplo `America/Bogota`), la
+escriben como `DEVKIT_TZ` en `~/.devkit/<proyecto>/.env` y `compose.yaml` la
+pasa al contenedor `dev` como `TZ` (`${DEVKIT_TZ:-UTC}`). Sin zona detectable
+(Linux, o el enlace ausente): `devkit: aviso: no se pudo detectar la zona
+horaria del Mac (/etc/localtime); se usa UTC` en la consola del Mac, y el
+contenedor arranca en UTC; el comando no se detiene por esto. `date` dentro
+del contenedor queda igual que `date` en el Mac (misma hora, misma zona).
+
+Dentro del contenedor, `date +%FT%T%:z` (con desplazamiento, `-05:00`)
+reemplaza a `date -u +%FT%TZ` en las marcas legibles que un humano lee:
+`watch.log`, `devkit-run --estado`, el marcador de arranque y el de
+restauración del sandbox. Lo que ya es de por sí UTC en su sistema de
+origen -`mergedAt`, `submittedAt` y `createdAt` de GitHub; `Creado` y
+`Cierre` de Notion- se queda en UTC. Las comparaciones por hora (edad de un
+lanzamiento, ventana de PRs mergeados, hora de reinicio de cuota) siguen en
+epoch (`date +%s`, `date -d "<marca>" +%s`), que interpreta igual una marca
+vieja en `Z` y una nueva con desplazamiento.
+
+Si cambias `devkit/host/devkit.sh` o `devkit/compose.yaml` (o el `Dockerfile`,
+por `tzdata`), reinstala el comando y el compose del Mac
+(`new-project.sh <proyecto> --ref <rama>` o copia `template/host/devkit.sh` y
+`template/compose.yaml`) y corre `devkit recreate <proyecto>`.
 
 Si el editor no abre: `docker exec devkit-<proyecto> pgrep -af server-main.js`
 para ver si el servidor está vivo, y `devkit logs <proyecto>` para el log de
