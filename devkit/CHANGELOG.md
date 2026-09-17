@@ -21,7 +21,9 @@ versión que usa un proyecto y la destino.
 - Compuerta verificada por el humano el 2026-09-17: el login por el
   proveedor de autenticación de GitHub de VS Code cierra al primer intento
   contra `127.0.0.1:3000`; el token no queda en claro en el disco del
-  contenedor (vive en el almacén de secretos del navegador); `github.com` y
+  contenedor, pero sí en la memoria del extension host mientras la sesión
+  está abierta, legible por cualquier otro proceso `dev` del contenedor:
+  riesgo residual aceptado, no corregido en esta card. `github.com` y
   `api.github.com` ya estaban en la lista blanca, sin dominios nuevos.
   Detalle de amenaza y mitigación en `docs/ARCHITECTURE.md` 8.2.
 - Cambios requeridos: ninguno, `devkit recreate` alcanza.

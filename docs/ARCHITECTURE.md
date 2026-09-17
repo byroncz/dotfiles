@@ -768,17 +768,32 @@ proceso y aparecen en `docker inspect`.
   cambiar de pestaña. Amenaza: si su token de GitHub quedara legible en el
   disco del contenedor, un `claude -p` de ese mismo contenedor podría
   aprobar PRs con la identidad del humano y saltarse la compuerta humana.
-  Verificado el 2026-09-17: `grep -rIl -e 'gh[opsu]_' -e
+  Verificado el 2026-09-17: en disco, `grep -rIl -e 'gh[opsu]_' -e
   'github-authentication' ~/.openvscode-server/` no encuentra el token en
   claro (solo coincide con el nombre del proveedor en código de extensión y
   en `remoteexthost.log`); no existe ningún `*.vscdb` ni archivo
-  `*secret*`/`*token*` bajo ese directorio. El token vive en el almacén de
-  secretos del navegador, fuera del contenedor. Login por el proveedor de
+  `*secret*`/`*token*` bajo ese directorio. Login por el proveedor de
   autenticación de GitHub de VS Code, no por el `gh` de la imagen;
   `github.com` y `api.github.com` ya estaban en la lista blanca del proxy,
   sin dominios nuevos.
+  En memoria la mitigación es parcial: mientras el humano tiene sesión
+  abierta, el extension host (`bootstrap-fork --type=extensionHost`, mismo
+  usuario `dev`) sostiene el token para llamar a la API de GitHub, y
+  `/proc/<pid>/mem` es legible por cualquier otro proceso `dev` del mismo
+  contenedor (`ptrace_scope` en 0). Un `claude -p` headless corriendo ahí
+  podría, en teoría, leer ese token y aprobar PRs con la identidad del
+  humano. Riesgo residual aceptado, no una card de seguimiento: es el mismo
+  problema de fondo que cualquier credencial del contenedor (por ejemplo el
+  token de `gh` en el entorno de cualquier proceso), porque el contenedor no
+  aísla procesos entre sí; resolverlo exigiría sandboxing por agente, fuera
+  del alcance de esta card.
 
 Riesgo residual aceptado: el túnel por DNS. Ningún enfoque casero lo cierra.
+Riesgo residual aceptado: sin aislamiento de procesos entre agentes del
+mismo contenedor, cualquier credencial que un proceso sostenga en memoria
+(el token de la extensión GitHub Pull Requests, el de `gh`, el de Notion) es
+legible por otro proceso del mismo usuario. Corregirlo exige sandboxing por
+agente; no hay card abierta para eso todavía.
 
 ### 8.3 Caducidad
 
