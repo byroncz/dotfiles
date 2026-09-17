@@ -152,6 +152,13 @@ CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
 CUOTA_TTL="${DEVKIT_CUOTA_TTL:-60}"
 CUOTA_CACHE="${DEVKIT_CUOTA_CACHE:-$RUN_DIR/cuota.cache}"
 CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
+# Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
+# caché que Consumo, una sola llamada a Notion por refresco. BLOQUEOS_TTL es
+# más corto que CUOTA_TTL porque el Estado de una card cambia más seguido que
+# la cuota del plan.
+BLOQUEOS_TTL="${DEVKIT_BLOQUEOS_TTL:-30}"
+BLOQUEOS_CACHE="${DEVKIT_BLOQUEOS_CACHE:-$RUN_DIR/bloqueos.cache}"
+BLOQUEOS_LOCK="${DEVKIT_BLOQUEOS_LOCK:-$RUN_DIR/bloqueos.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -639,6 +646,47 @@ mostrar_consumo() {
   fi
 }
 
+# Código del proyecto activo, para `notion.sh bloqueos <código>`. Se relee
+# cada vez: un proyecto nuevo arranca con `project = "PROJ"` en
+# `.devkit/devkit.toml` y `project-init` lo corrige después, sin que haya que
+# reiniciar el contenedor (mismo criterio que `project_code` en watch.sh).
+project_code() {
+  [ -f "$WS/.devkit/devkit.toml" ] || return 0
+  sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1
+}
+
+# Refresca BLOQUEOS_CACHE en segundo plano, mismo patrón que
+# `refrescar_cuota_bg`: `notion.sh bloqueos` es una llamada a la red, y
+# `--estado` no la espera en línea.
+refrescar_bloqueos_bg() {
+  (
+    mkdir -p "$(dirname "$BLOQUEOS_CACHE")" 2>/dev/null
+    exec 8>"$BLOQUEOS_LOCK"
+    flock -n 8 || exit 0
+    local codigo bloqueos
+    codigo=$(project_code)
+    if [ -n "$codigo" ] && bloqueos=$("$NOTION_BIN" bloqueos "$codigo" 2>/dev/null); then
+      printf '%s\t%s\n' "$(date +%s)" "$bloqueos" >"$BLOQUEOS_CACHE.tmp" && mv -f "$BLOQUEOS_CACHE.tmp" "$BLOQUEOS_CACHE"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# "bloquea a: <Claves>" para una fila de `--estado` cuya Clave frena a otras
+# (ampliación de DEVKIT-63): vacío si no hay caché todavía, si no frena a
+# nadie, o si la Clave de la fila ni siquiera aparece (no está Lista para
+# merge). El refresco en segundo plano corre una sola vez por TTL, no por
+# fila: `mostrar_estado` llama esta función varias veces por vuelta y todas
+# comparten la misma caché.
+bloquea_a() {  # bloquea_a <Clave>
+  local ts bloqueos edad lista
+  [ -s "$BLOQUEOS_CACHE" ] || { refrescar_bloqueos_bg; return 0; }
+  IFS=$'\t' read -r ts bloqueos <"$BLOQUEOS_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$BLOQUEOS_TTL" ] || refrescar_bloqueos_bg
+  lista=$(jq -r --arg c "$1" '.[] | select(.clave == $c) | .bloquea_a | join(", ")' <<<"$bloqueos" 2>/dev/null)
+  [ -n "$lista" ] && printf 'bloquea a: %s' "$lista"
+}
+
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
 # watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
 # proceso con el bucle, así que no puede reusar su función.
@@ -1056,7 +1104,13 @@ mostrar_estado() {
   else
     printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
       "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+    local frena
     while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+      frena=""
+      [ "$clave" = - ] || frena=$(bloquea_a "$clave")
+      if [ -n "$frena" ]; then
+        [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
+      fi
       printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
         "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
     done <<<"$filas"
@@ -2066,6 +2120,24 @@ FIN
   check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
     "$(CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio/cuota.lock" \
         WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
+
+  # Columna "bloquea a" (ampliación de la card): caché ya tibia, sin llamar a
+  # notion.sh en el propio check -el refresco es en segundo plano y no debe
+  # bloquear la lectura (H1 de pr-review, mismo criterio que Consumo).
+  local bloq
+  bloq="$tmp/bloqueos"
+  mkdir -p "$bloq"
+  printf '%s\t%s\n' "$(date +%s)" '[{"clave":"DEVKIT-57","bloquea_a":["DEVKIT-61","DEVKIT-99"]}]' \
+    >"$bloq/bloqueos.cache"
+  check "bloquea_a: card en Lista para merge lista a quién frena" "bloquea a: DEVKIT-61, DEVKIT-99" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" bloquea_a DEVKIT-57)"
+  check "bloquea_a: card que no frena a nadie, vacío" "" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" bloquea_a DEVKIT-999)"
+  check "--estado suma la columna a la fila que corresponde" "bloquea a: DEVKIT-61, DEVKIT-99" \
+    "$(BLOQUEOS_CACHE="$bloq/bloqueos.cache" BLOQUEOS_LOCK="$bloq/bloqueos.lock" \
+        CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio2/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio2/cuota.lock" \
+        PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
+        WATCH_LOG="$est/watch.log" mostrar_estado | grep 'DEVKIT-57' | grep -oE 'bloquea a: DEVKIT-61, DEVKIT-99')"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
