@@ -296,16 +296,21 @@ cmd_bloqueos() {  # cmd_bloqueos <código>
 }
 
 # Épica de origen de cada Tarea (DEVKIT-80, ampliación de DEVKIT-63 que
-# quedó pendiente en el PR #53): una sola consulta -todas las páginas
-# Tareas y Épicas del proyecto- porque `estado_filas` no sabe de antemano
-# cuáles Épicas están activas. El cruce Tarea → Padre → Épica se hace en jq,
-# mismo patrón que `bloqueos` con "Depende de".
+# quedó pendiente en el PR #53): una sola consulta -las Épicas En progreso
+# del proyecto y sus Tareas que no están Hecha- porque `estado_filas` no
+# sabe de antemano cuáles Épicas están activas, y acotar el Estado evita
+# traer las cards ya cerradas en cada refresco. El cruce Tarea → Padre →
+# Épica se hace en jq, mismo patrón que `bloqueos` con "Depende de".
 cmd_epicas() {  # cmd_epicas <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
   [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
   filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
-    '{property: "Proyecto", relation: {contains: $p}}')") || return
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {or: [{and: [{property: "Nivel", select: {equals: "Épica"}},
+                         {property: "Estado", select: {equals: "En progreso"}}]},
+                  {and: [{property: "Nivel", select: {equals: "Tarea"}},
+                         {property: "Estado", select: {does_not_equal: "Hecha"}}]}]}]}')") || return
   jq -c --arg codigo "$codigo" '
     def clave($n): "\($codigo)-\($n)";
     def titulo: (.properties["Título"].title // []) | map(.plain_text) | join("");
