@@ -338,15 +338,20 @@ pedía DEVKIT-45 vive en `pr-guard.sh` (cada bloqueo suyo, en
 
 **Entorno del `claude -p` hijo y comprobación de Notion (DEVKIT-65).** Un
 `task-start` lanzado por `epic-plan` corre dentro de un `claude -p` que a su
-vez es otro `claude -p`: el hijo hereda del padre variables de entorno que
-Claude Code usa para marcar una sesión anidada (`CLAUDECODE`,
-`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_CHILD_SESSION`, ...). Tres incidentes
-reales del 2026-09-16 mostraron el síntoma: la CLI hija monta el conector de
-Notion con otro nombre de servidor (`claude_ai_Notion` en vez de
-`plugin:Notion:notion`), `--allowedTools` deja de cubrirlo y la skill termina
-pidiendo autorizar el conector o bloqueada sin poder leer ni escribir en la
-card. `run_claude` (la función interna que arma cada `claude -p`) ya no pasa
-el entorno tal cual: lo arma de cero con `env -i` y una lista blanca
+vez es otro `claude -p`. Tres incidentes reales del 2026-09-16 mostraron el
+síntoma: la CLI hija montaba el conector de Notion con otro nombre de
+servidor (`claude_ai_Notion` en vez de `plugin:Notion:notion`),
+`--allowedTools` dejaba de cubrirlo y la skill terminaba pidiendo autorizar
+el conector o bloqueada sin poder leer ni escribir en la card. La hipótesis
+sobre la causa -que el hijo hereda del padre las variables que Claude Code
+usa para marcar una sesión anidada (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+`CLAUDE_CODE_CHILD_SESSION`, ...)- no quedó confirmada: en este contenedor,
+`claude mcp list` con esas marcas puestas a mano y con la lista blanca de
+abajo dio el mismo resultado (Notion conectada) en ambos casos (comentario
+de la card, 2026-09-17 04:11; repetido en la revisión de `pr-review` sobre
+el commit `ef9a3fe`). `run_claude` (la función interna que arma cada
+`claude -p`) ya no pasa el entorno tal cual: como medida defensiva, lo arma
+de cero con `env -i` y una lista blanca
 (`HOME`, `PATH`, `LANG`, `LC_ALL`, `TZ`, `CLAUDE_CONFIG_DIR`,
 `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, las variables de proxy,
 `DISABLE_AUTOUPDATER` y `MCP_OAUTH_CALLBACK_PORT`, las dos últimas fijas en

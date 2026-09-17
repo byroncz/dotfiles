@@ -140,16 +140,21 @@ PS_BIN="${DEVKIT_PS_BIN:-ps}"
 # contra dobles de `claude` sin `mcp list`; las pruebas de esta comprobación
 # la reactivan a mano.
 NOTION_CHECK="${DEVKIT_NOTION_CHECK:-1}"
-# Variables que de verdad hace falta copiar al `claude -p` hijo: identidad de
-# Notion/GitHub, red de salida (compose.yaml la fija a nivel de contenedor,
-# ver AGENTS.md) y hora local. Todo lo demás que traiga quien lanza se
-# descarta con esta lista blanca en vez de con una lista negra de marcas de
-# sesión anidada (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...): una CLI nueva
-# puede sumar una marca que hoy no conocemos, y una lista negra la dejaría
-# pasar igual (DEVKIT-65, evidencia en la card: un `task-start` lanzado por
-# `epic-plan` -que a su vez corre dentro de otro `claude -p`- hereda esas
-# marcas, la CLI hija monta el conector de Notion con otro nombre de servidor
-# y `--allowedTools` deja de cubrirlo).
+# H4 de pr-review (DEVKIT-65): un `task-start` lanzado por `epic-plan` -que a
+# su vez corre dentro de otro `claude -p`- terminó tres veces montando el
+# conector de Notion con otro nombre de servidor y sin cobertura de
+# `--allowedTools` (incidentes reales del 2026-09-16). La hipótesis de que la
+# causa son las marcas de sesión anidada que el hijo hereda del padre
+# (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT, ...) no quedó confirmada: en este
+# contenedor, `claude mcp list` con esas marcas puestas a mano y con la lista
+# blanca de abajo dio el mismo resultado (comentario de la card, 2026-09-17
+# 04:11; repetido en la revisión de pr-review sobre el commit ef9a3fe). Como
+# medida defensiva de todas formas, `run_claude` copia al hijo solo las
+# variables que de verdad hace falta -identidad de Notion/GitHub, red de
+# salida (compose.yaml la fija a nivel de contenedor, ver AGENTS.md) y hora
+# local- y descarta todo lo demás con esta lista blanca en vez de con una
+# lista negra de marcas de sesión anidada: una CLI nueva puede sumar una
+# marca que hoy no conocemos, y una lista negra la dejaría pasar igual.
 # H2 de pr-review (DEVKIT-65): revisado el bloque `ENV` del Dockerfile y el
 # `environment:` de `compose.yaml` completos. Suman `DISABLE_AUTOUPDATER=1`
 # (Dockerfile: sin ella la CLI intenta actualizarse sola, sin salida a
