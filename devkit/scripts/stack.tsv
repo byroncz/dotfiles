@@ -7,7 +7,7 @@
 # al `case` de version_de, o gen-stack.sh sale con error.
 
 docker | Docker + Compose | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa) y `proxy` (única salida, con lista blanca).
-debian | Debian trixie-slim | Imagen base sin lenguaje. Usuario `dev` sin `sudo`.
+debian | Debian | Imagen base sin lenguaje. Usuario `dev` sin `sudo`.
 tinyproxy | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`).
 uv | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos.
 python | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión.

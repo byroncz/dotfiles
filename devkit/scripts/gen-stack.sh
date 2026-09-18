@@ -66,25 +66,39 @@ versiones() {  # versiones <Dockerfile>
 
 # Versión de cada fila de stack.tsv, por id. Los ids sin versión propia
 # fijada en este repo muestran `—`; sumar una fila con un id nuevo exige
-# sumarlo aquí, o falla en vez de quedar en blanco.
+# sumarlo aquí, o falla en vez de quedar en blanco. Cuando el nombre de la
+# fila no deja claro a qué componente pertenece la versión (p. ej. "zsh +
+# starship" o "rclone + Dropbox"), el valor lleva el nombre del componente
+# delante, para no publicar un número sin decir de qué es (H6, DEVKIT-88).
 version_de() {  # version_de <id> <Dockerfile> <proxy_dockerfile>
   case "$1" in
     debian)
       valor="$(arg_valor "$2" BASE_IMAGE)" || return 1
-      printf '%s' "${valor#*:}" ;;
+      case "$valor" in
+        *:*) printf '%s' "$valor" ;;
+        *) printf -- '—' ;;
+      esac ;;
     tinyproxy)
       valor="$(sed -n 's/^FROM alpine:\(.*\)/\1/p' "$3" | head -1)"
       if [ -z "$valor" ]; then
         echo "gen-stack.sh: $3 no tiene un FROM alpine:<versión>" >&2
         return 1
       fi
-      printf '%s' "$valor" ;;
+      printf 'alpine %s' "$valor" ;;
     uv) arg_valor "$2" UV_VERSION ;;
     openvscode) arg_valor "$2" OPENVSCODE_VERSION ;;
-    zsh) arg_valor "$2" STARSHIP_VERSION ;;
-    github) arg_valor "$2" GH_VERSION ;;
-    bws) arg_valor "$2" BWS_VERSION ;;
-    rclone) arg_valor "$2" RCLONE_VERSION ;;
+    zsh)
+      valor="$(arg_valor "$2" STARSHIP_VERSION)" || return 1
+      printf 'starship %s' "$valor" ;;
+    github)
+      valor="$(arg_valor "$2" GH_VERSION)" || return 1
+      printf 'gh %s' "$valor" ;;
+    bws)
+      valor="$(arg_valor "$2" BWS_VERSION)" || return 1
+      printf 'bws %s' "$valor" ;;
+    rclone)
+      valor="$(arg_valor "$2" RCLONE_VERSION)" || return 1
+      printf 'rclone %s' "$valor" ;;
     docker | python | claude | codex | git | notion | terminal)
       printf -- '—' ;;
     *)
@@ -174,15 +188,23 @@ if [ "${1:-}" = "--test" ]; then
   esperado='| Herramienta | Para qué se usa aquí | Versión |
 |---|---|---|
 | Docker | Sin versión propia. | — |
-| Debian | Base sin lenguaje. | trixie-slim |
-| tinyproxy | Proxy de salida. | 3.22 |
+| Debian | Base sin lenguaje. | debian:trixie-slim |
+| tinyproxy | Proxy de salida. | alpine 3.22 |
 | uv | Gestiona Python. | 1.2.3 |'
-  check "tabla con versiones por id (H1)" "$esperado" \
+  check "tabla con versiones por id, con el componente delante (H6)" "$esperado" \
     "$(tabla "$tmp/stack.tsv" "$tmp/Dockerfile-tabla" "$tmp/proxy-Dockerfile")"
 
   printf 'algo-sin-mapeo | Algo | Descripción.\n' > "$tmp/stack-malo.tsv"
   tabla "$tmp/stack-malo.tsv" "$tmp/Dockerfile-tabla" "$tmp/proxy-Dockerfile" >/dev/null 2>&1
   check "tabla falla si un id no tiene mapeo de versión" 1 "$?"
+
+  printf 'ARG BASE_IMAGE=debian\nARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-sin-tag"
+  printf 'debian | Debian | Base sin lenguaje.\n' > "$tmp/stack-debian.tsv"
+  esperado='| Herramienta | Para qué se usa aquí | Versión |
+|---|---|---|
+| Debian | Base sin lenguaje. | — |'
+  check "BASE_IMAGE sin etiqueta muestra — en vez de un dato falso (H6)" "$esperado" \
+    "$(tabla "$tmp/stack-debian.tsv" "$tmp/Dockerfile-sin-tag" "$tmp/proxy-Dockerfile")"
 
   exit $fail
 fi
