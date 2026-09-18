@@ -993,7 +993,7 @@ task_begin_fallo() {  # task_begin_fallo <prompt> <clave> <motivo>
 }
 
 forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma> [clave]
-  local prompt=$1 logf=$2 motivo=$3 alarma=$4 clave=${5:-} skill estado
+  local prompt=$1 logf=$2 motivo=$3 alarma=$4 clave=${5:-} skill estado card_json pr
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   # `/pr-review <N>` no trae Clave en el prompt: quien la conoce (watch.sh,
   # por el título del PR) la pasa explícita en vez de que se pierda en el
@@ -1003,14 +1003,21 @@ forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma> [cl
     printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
     return 0
   fi
-  estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
+  card_json=$("$NOTION_BIN" card "$clave" 2>/dev/null)
+  estado=$(jq -r '.estado // empty' <<<"$card_json" 2>/dev/null)
   if [ "$estado" = "Hecha" ]; then
     printf '%s devkit-run "%s" ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea (%s)\n' \
       "$(date +%FT%T%:z)" "$prompt" "$motivo" >> "$WATCH_LOG"
     return 1
   fi
   printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
-  motivo="devkit-run: $skill $motivo; ver $logf"
+  # H5 del informe sobre el PR #68: un corte puede llegar después de que la
+  # skill ya entregó (task-start dejó el PR abierto y la card en Revisión
+  # automática antes de pasarse del presupuesto). Sin el Estado y el PR de
+  # ese momento en el motivo, el humano tenía que abrir el log para saber si
+  # había algo entregado antes de desbloquear.
+  pr=$(jq -r '.pr // empty' <<<"$card_json" 2>/dev/null)
+  motivo="devkit-run: $skill $motivo (Estado antes del bloqueo: ${estado:-desconocido}${pr:+, PR: $pr}); ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
 }
@@ -2517,6 +2524,29 @@ FIN
   check "watch.log registra el corte como corte: presupuesto" \
     'ALARMA: corte: presupuesto (99 turnos, presupuesto 15)' \
     "$(grep -oE 'ALARMA: corte: presupuesto \(99 turnos, presupuesto 15\)' "$tmp/run/watch.log" | head -1)"
+
+  # H5 del informe sobre el PR #68: si la card ya tiene Estado y PR cuando
+  # llega el corte -task-start que entregó y quedó en Revisión automática
+  # antes de pasarse del presupuesto-, el motivo los cita, para que el
+  # humano no tenga que abrir el log para saber si hubo algo entregado.
+  printf '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/61"}\n' \
+    >"$RONDA_DIR/card-DEVKIT-3.json"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "el motivo del bloqueo cita el Estado y el PR de la card al momento del corte" \
+    'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null \
+      | grep -oE 'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' | head -1)"
+  rm -f "$RONDA_DIR/card-DEVKIT-3.json"
 
   # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
   # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
