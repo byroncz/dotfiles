@@ -10,6 +10,25 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### Un task-start sobre una card ya cerrada termina con estado, no con pregunta (DEVKIT-76)
+
+- `/task-start` verifica el Estado de la card antes de tocar nada: si ya está
+  `Hecha`, `Lista para merge` o `Revisión automática`, responde `<Clave> ya
+  está en <Estado> (PR <url>); no hay nada que hacer.` en ese mismo turno,
+  sin actualizar el workspace ni escribir en Notion. Si está `Bloqueada`,
+  responde que el humano debe moverla a `En progreso` antes de relanzar. Un
+  relanzamiento por error sobre `DEVKIT-74`, ya `Hecha`, gastó 8 turnos
+  actualizando el workspace y terminó preguntando qué hacer.
+- `forzar_task_block`, en `devkit-run.sh`, lee el Estado real de la card
+  antes de bloquear por pregunta abierta: si ya está `Hecha`, no bloquea,
+  deja `ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea`
+  en `watch.log` y sale con error. Antes, ese relanzamiento terminaba
+  `Bloqueada` sin que nadie fuera a leer el bloqueo: la card ya estaba
+  resuelta.
+- `task-block.sh <Clave> <motivo>` se niega igual si se invoca a mano sobre
+  una card `Hecha`: sale con error y "task-block: <Clave> ya está Hecha; no
+  se bloquea", sin tocar Notion.
+
 ### devkit-run --seguir lanza y queda mostrando el monitor, y --tablero muestra las cards activas del proyecto (DEVKIT-82)
 
 - `devkit-run --seguir <skill> <Clave> [texto extra...]` lanza igual que el

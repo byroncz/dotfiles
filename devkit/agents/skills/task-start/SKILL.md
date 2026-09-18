@@ -33,8 +33,17 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    `devkit-run.sh --worker`, su subshell, su vigilante y tu `claude -p`). Eso
    bloqueó DEVKIT-54 sin motivo, y desconfiar del resultado y correr un `ps`
    aparte cortó DEVKIT-63 sin PR y sin bloquear (DEVKIT-77).
-2. Verifica que la card está en `Lista`. Si está en `En progreso` con `Rama`
-   asignada, cámbiate a esa rama y continúa: es una reanudación.
+2. Verifica el Estado de la card. `Lista`: sigue al paso 3. `En progreso` con
+   `Rama` asignada: cámbiate a esa rama y continúa, es una reanudación.
+   Cualquier otro Estado es un relanzamiento por error sobre una card que ya
+   no está libre (DEVKIT-76: un `task-start` sobre una card `Hecha` volvió a
+   `main`, gastó 8 turnos y terminó preguntando qué hacer, y la barrera de
+   pregunta abierta la bloqueó sin motivo real). Termina en este mismo turno,
+   sin tocar git ni Notion:
+   - `Hecha`, `Lista para merge` o `Revisión automática`: responde
+     `<Clave> ya está en <Estado> (PR <url>); no hay nada que hacer.`
+   - `Bloqueada`: responde `<Clave> está bloqueada; el humano debe moverla a
+     En progreso antes de relanzar.`
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
 4. Nombre de rama: prefijo por `Tipo` (`feature` → `feat/`, `bug` → `fix/`,
    `chore` → `chore/`), la Clave tal cual (en mayúsculas) y un slug corto

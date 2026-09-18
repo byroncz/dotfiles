@@ -29,7 +29,7 @@ hija desde DEVKIT-56: son scripts bash contra la API de Notion, con el token
 |---|---|---|
 | `task-close.sh <Clave> [PR]` | Lista para merge → Hecha; cierra la Épica o llama a `task-next.sh` | `watch.sh` tras el merge; humano con `devkit-run task-close` |
 | `task-next.sh <Clave>` | Lanza `task-start` de la siguiente hija libre de la Épica: su `Depende de` en `Hecha`, ninguna hermana en curso | `watch.sh` al OK de `pr-review`; `task-close.sh` al merge |
-| `task-block.sh <Clave> <motivo>` | Cualquiera → Bloqueada | Agente, `watch.sh` y `devkit-run`; humano con `devkit-run task-block` |
+| `task-block.sh <Clave> <motivo>` | Cualquiera (salvo `Hecha`, que se niega) → Bloqueada | Agente, `watch.sh` y `devkit-run`; humano con `devkit-run task-block` |
 
 Las skills los invocan por ruta, `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh"`:
 `devkit-run` exporta esa variable al `claude -p` que lanza.

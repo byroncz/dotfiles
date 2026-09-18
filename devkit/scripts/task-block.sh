@@ -42,6 +42,15 @@ if [ "$anterior" = "Bloqueada" ]; then
   exit 0
 fi
 
+# DEVKIT-76: una card ya Hecha (cerrada, mergeada y documentada) no se mueve
+# a Bloqueada por un relanzamiento de más, sea automático (`forzar_task_block`
+# en devkit-run.sh) o a mano. Mismo motivo que ahí: nadie va a leer ese
+# bloqueo porque la card ya está resuelta.
+if [ "$anterior" = "Hecha" ]; then
+  echo "task-block: $clave ya está Hecha; no se bloquea" >&2
+  exit 1
+fi
+
 "$NOTION" set "$id" Estado=Bloqueada || { echo "task-block: no pude cambiar el Estado de $clave" >&2; exit 1; }
 # Línea para `devkit-run --estado` (DEVKIT-57): muestra el lanzamiento como
 # `bloqueada` con este motivo, sin consultar Notion. En una sola línea, cortada

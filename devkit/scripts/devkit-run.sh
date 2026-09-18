@@ -878,11 +878,25 @@ pregunta_abierta() {  # pregunta_abierta <resultado>
 # bloqueo es `task-block.sh`, bash contra la API de Notion: no gasta modelo
 # y no puede, a su vez, terminar en pregunta, así que ya no hace falta
 # excluir a nadie para evitar un bucle.
+#
+# DEVKIT-76: antes de bloquear, lee el Estado real de la card. Un
+# relanzamiento por error sobre una card ya `Hecha` (DEVKIT-74: la card
+# cerrada, mergeada y documentada, relanzada a mano) terminaba preguntando
+# "¿tomo la siguiente card?" y esta barrera la mandaba a `Bloqueada` sin que
+# hiciera falta: nadie iba a leer ese bloqueo, porque la card ya estaba
+# resuelta. Deja la alarma en `watch.log` para que quede visible, pero no
+# toca Notion ni corre `task-block.sh`.
 forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo>
-  local prompt=$1 logf=$2 motivo skill clave
+  local prompt=$1 logf=$2 motivo skill clave estado
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   [ -n "$clave" ] || return 0
+  estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
+  if [ "$estado" = "Hecha" ]; then
+    printf '%s devkit-run "%s" ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea\n' \
+      "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
+    return 1
+  fi
   motivo="devkit-run: $skill $3; ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
@@ -2421,6 +2435,47 @@ FIN
     'bloquea la card con task-block.sh: DEVKIT-3' \
     "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
 
+  # DEVKIT-76: `forzar_task_block` lee el Estado real antes de bloquear. Una
+  # card ya Hecha que preguntó de más no se mueve a Bloqueada: solo queda la
+  # alarma en watch.log y task-block.sh no se llama.
+  printf '{"estado":"Hecha"}\n' >"$RONDA_DIR/card-DEVKIT-76.json"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$pregunton" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-76 >/dev/null 2>&1
+  espera=0
+  while ! grep -q 'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' \
+      "$tmp/run/watch.log" 2>/dev/null && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "card Hecha: no llama a task-block.sh" 1 \
+    "$([ -e "$tmp/bloqueo.args" ] && echo 0 || echo 1)"
+  check "card Hecha: deja la alarma sin bloquear" \
+    'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' \
+    "$(grep -oE 'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' "$tmp/run/watch.log" | head -1)"
+
+  # Card En progreso: sigue bloqueando, es el comportamiento anterior a esta
+  # card y la barrera de DEVKIT-50/DEVKIT-44 sigue siendo correcta ahí.
+  printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-76.json"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$pregunton" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-76 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "card En progreso: sigue bloqueando (comportamiento actual)" \
+    'bloquea la card con task-block.sh: DEVKIT-76' \
+    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-76' "$tmp/run/watch.log" | head -1)"
+  rm -f "$RONDA_DIR/card-DEVKIT-76.json"
+
   # DEVKIT-77: `task_start_sin_entregar` usa el mismo doble de notion.sh
   # (`card <Clave>`) para decidir si un task-start dejó la card sin resolver.
   printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
@@ -2450,6 +2505,76 @@ FIN
   check "task-start limpio pero sin entregar deja su propia ALARMA" \
     'ALARMA: terminó sin entregar ni bloquear (DEVKIT-63): card sigue En progreso, sin PR ni bloqueo' \
     "$(grep -oE 'ALARMA: terminó sin entregar ni bloquear \(DEVKIT-63\): card sigue En progreso, sin PR ni bloqueo' "$tmp/run/watch.log" | head -1)"
+
+  # DEVKIT-76, los tres relanzamientos posibles sobre una card ya no libre:
+  # el paso 2 de la skill (nueva) responde en un turno y centavos, sin
+  # pregunta ni alarma. Cada doble de `claude` imita esa respuesta corta;
+  # `resumen()` deja el costo y los turnos reales en watch.log.
+  corto_devkit76() {  # corto_devkit76 <nombre> <resultado>
+    local nombre=$1 resultado=$2
+    cat >"$tmp/claude-corto-$nombre" <<FIN
+#!/usr/bin/env bash
+printf '{"result":"$resultado","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+    chmod +x "$tmp/claude-corto-$nombre"
+  }
+  corto_devkit76 hecha 'DEVKIT-90 ya está en Hecha (PR https://github.com/o/r/pull/9); no hay nada que hacer.'
+  printf '{"estado":"Hecha"}\n' >"$RONDA_DIR/card-DEVKIT-90.json"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-hecha" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-90 >/dev/null 2>&1
+  espera=0
+  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "relanzamiento sobre Hecha: un turno, centavos, sin alarma" \
+    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
+    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
+       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
+  check "relanzamiento sobre Hecha: sin ALARMA de ningún tipo" 0 \
+    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+
+  corto_devkit76 bloqueada 'DEVKIT-91 está bloqueada; el humano debe moverla a En progreso antes de relanzar.'
+  printf '{"estado":"Bloqueada"}\n' >"$RONDA_DIR/card-DEVKIT-91.json"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-bloqueada" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-91 >/dev/null 2>&1
+  espera=0
+  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "relanzamiento sobre Bloqueada: un turno, centavos, sin alarma" \
+    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
+    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
+       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
+  check "relanzamiento sobre Bloqueada: sin ALARMA de ningún tipo" 0 \
+    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+
+  corto_devkit76 revision 'DEVKIT-92 ya está en Revisión automática (PR https://github.com/o/r/pull/12); no hay nada que hacer.'
+  printf '{"estado":"Revisión automática"}\n' >"$RONDA_DIR/card-DEVKIT-92.json"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-revision" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-92 >/dev/null 2>&1
+  espera=0
+  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
+        && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "relanzamiento sobre Revisión automática: un turno, centavos, sin alarma" \
+    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
+    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
+       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
+  check "relanzamiento sobre Revisión automática: sin ALARMA de ningún tipo" 0 \
+    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+  rm -f "$RONDA_DIR/card-DEVKIT-90.json" "$RONDA_DIR/card-DEVKIT-91.json" "$RONDA_DIR/card-DEVKIT-92.json"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
   # bash, en primer plano y con los argumentos tal cual (DEVKIT-55).
