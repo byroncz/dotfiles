@@ -4496,6 +4496,12 @@ FIN
     "$(grep -cE '(task-start-1 lanzando|terminado \[task-start-1\])' "$costos_real/.devkit/costos.log" 2>/dev/null)"
 
   # --- task-submit.sh (DEVKIT-91), con gh y notion.sh simulados -------------
+  # `--mensaje` sin valor (H6): antes entraba en bucle infinito por un
+  # `shift 2` que fallaba sin desplazar; el `timeout` es la red por si
+  # regresa.
+  timeout 5 bash "$HERE/task-submit.sh" --mensaje >/dev/null 2>&1
+  check "task-submit (--mensaje sin valor): sale con 64, no cuelga" 64 "$?"
+
   # Workspace propio con un origin local de verdad, mismo patrón que la
   # batería de task-begin.sh de más arriba: `git push` necesita un remoto al
   # que empujar.

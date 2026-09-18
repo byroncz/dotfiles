@@ -52,7 +52,11 @@ mensaje="" clave_arg=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --mensaje)
-      mensaje="${2:-}"; shift 2 ;;
+      if [ $# -lt 2 ]; then
+        echo 'uso: task-submit.sh [Clave] --mensaje "<tipo>(<Clave>): <resumen>"' >&2
+        exit 64
+      fi
+      mensaje="$2"; shift 2 ;;
     *)
       clave_arg="$1"; shift ;;
   esac
