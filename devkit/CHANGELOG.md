@@ -29,9 +29,13 @@ versión que usa un proyecto y la destino.
   una tabla de consola -Clave, Estado, Tipo, PR y "bloquea a" (columna de
   DEVKIT-63)-, agrupada por Épica de origen cuando hay más de una `En
   progreso` (DEVKIT-80), sin lanzar ningún agente. `notion.sh activas
-  <código>` trae la lista en una sola consulta; "bloquea a" y la Épica de
-  origen reusan las mismas cachés de `--estado`. `--seguir` refresca cada
-  30 s, no 3, para no gastar el límite de peticiones de Notion.
+  <código>` trae la lista en cada vuelta; "bloquea a" y la Épica de origen
+  reusan las mismas cachés de `--estado`, pero `--tablero` las asegura en
+  primer plano antes de pintar en vez de solo disparar su refresco en
+  segundo plano: con las cachés frías, la primera vuelta paga hasta tres
+  consultas -activas, bloqueos y epicas-, no una sola (revisión de
+  `pr-review`: antes salía plano y sin "bloquea a" la primera vez). `--seguir`
+  refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
 - Motivo: los dos pedidos del humano del 2026-09-16 que quedaron en el
   grupo 3 de la Épica DEVKIT-59 sin card hija (`epic-plan` alcanzó a crear
   DEVKIT-63 y no las dos ampliaciones posteriores).

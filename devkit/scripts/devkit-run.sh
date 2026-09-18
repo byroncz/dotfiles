@@ -719,6 +719,17 @@ project_code() {
   sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1
 }
 
+# Trae `notion.sh bloqueos` y escribe BLOQUEOS_CACHE; la comparten el
+# refresco en segundo plano de `--estado` y el síncrono de `--tablero` (H1,
+# DEVKIT-82) para no duplicar la llamada a Notion.
+_bloqueos_fetch_y_guardar() {
+  local codigo bloqueos
+  codigo=$(project_code)
+  [ -n "$codigo" ] || return 1
+  bloqueos=$("$NOTION_BIN" bloqueos "$codigo" 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$bloqueos" >"$BLOQUEOS_CACHE.tmp" && mv -f "$BLOQUEOS_CACHE.tmp" "$BLOQUEOS_CACHE"
+}
+
 # Refresca BLOQUEOS_CACHE en segundo plano, mismo patrón que
 # `refrescar_cuota_bg`: `notion.sh bloqueos` es una llamada a la red, y
 # `--estado` no la espera en línea.
@@ -727,12 +738,24 @@ refrescar_bloqueos_bg() {
     mkdir -p "$(dirname "$BLOQUEOS_CACHE")" 2>/dev/null
     exec 8>"$BLOQUEOS_LOCK"
     flock -n 8 || exit 0
-    local codigo bloqueos
-    codigo=$(project_code)
-    if [ -n "$codigo" ] && bloqueos=$("$NOTION_BIN" bloqueos "$codigo" 2>/dev/null); then
-      printf '%s\t%s\n' "$(date +%s)" "$bloqueos" >"$BLOQUEOS_CACHE.tmp" && mv -f "$BLOQUEOS_CACHE.tmp" "$BLOQUEOS_CACHE"
-    fi
+    _bloqueos_fetch_y_guardar
   ) </dev/null >/dev/null 2>&1 &
+}
+
+# Igual que `refrescar_bloqueos_bg`, pero en primer plano y bloqueante: la usa
+# `mostrar_tablero`, que ya paga una consulta síncrona a Notion por vuelta y,
+# a diferencia de `--estado` (refrescada cada 3 s, puede esperar a la vuelta
+# siguiente), necesita "bloquea a" listo desde la primera llamada (H1,
+# DEVKIT-82: con la caché vacía, `--tablero` salía plano y sin agrupar).
+asegurar_bloqueos_cache() {
+  if [ -s "$BLOQUEOS_CACHE" ]; then
+    local ts edad
+    IFS=$'\t' read -r ts _ <"$BLOQUEOS_CACHE"
+    edad=$(( $(date +%s) - ts ))
+    [ "$edad" -lt "$BLOQUEOS_TTL" ] && return 0
+  fi
+  mkdir -p "$(dirname "$BLOQUEOS_CACHE")" 2>/dev/null
+  { flock 8; _bloqueos_fetch_y_guardar; } 8>"$BLOQUEOS_LOCK"
 }
 
 # "bloquea a: <Claves>" para una fila de `--estado` cuya Clave frena a otras
@@ -751,6 +774,17 @@ bloquea_a() {  # bloquea_a <Clave>
   [ -n "$lista" ] && printf 'bloquea a: %s' "$lista"
 }
 
+# Trae `notion.sh epicas` y escribe EPICAS_CACHE; misma razón que
+# `_bloqueos_fetch_y_guardar` para compartirla entre el refresco en segundo
+# plano y el síncrono (H1, DEVKIT-82).
+_epicas_fetch_y_guardar() {
+  local codigo epicas
+  codigo=$(project_code)
+  [ -n "$codigo" ] || return 1
+  epicas=$("$NOTION_BIN" epicas "$codigo" 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$epicas" >"$EPICAS_CACHE.tmp" && mv -f "$EPICAS_CACHE.tmp" "$EPICAS_CACHE"
+}
+
 # Refresca EPICAS_CACHE en segundo plano, mismo patrón que
 # `refrescar_bloqueos_bg`.
 refrescar_epicas_bg() {
@@ -758,12 +792,20 @@ refrescar_epicas_bg() {
     mkdir -p "$(dirname "$EPICAS_CACHE")" 2>/dev/null
     exec 9>"$EPICAS_LOCK"
     flock -n 9 || exit 0
-    local codigo epicas
-    codigo=$(project_code)
-    if [ -n "$codigo" ] && epicas=$("$NOTION_BIN" epicas "$codigo" 2>/dev/null); then
-      printf '%s\t%s\n' "$(date +%s)" "$epicas" >"$EPICAS_CACHE.tmp" && mv -f "$EPICAS_CACHE.tmp" "$EPICAS_CACHE"
-    fi
+    _epicas_fetch_y_guardar
   ) </dev/null >/dev/null 2>&1 &
+}
+
+# Igual que `asegurar_bloqueos_cache`, para EPICAS_CACHE (H1, DEVKIT-82).
+asegurar_epicas_cache() {
+  if [ -s "$EPICAS_CACHE" ]; then
+    local ts edad
+    IFS=$'\t' read -r ts _ <"$EPICAS_CACHE"
+    edad=$(( $(date +%s) - ts ))
+    [ "$edad" -lt "$EPICAS_TTL" ] && return 0
+  fi
+  mkdir -p "$(dirname "$EPICAS_CACHE")" 2>/dev/null
+  { flock 9; _epicas_fetch_y_guardar; } 9>"$EPICAS_LOCK"
 }
 
 # "Épica <Clave>: <Título>" para una fila de `--estado` cuya Clave tiene una
@@ -1624,11 +1666,17 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
     "$(rellenar "$pr" 40)" "${frena#bloquea a: }"
 }
 
-# Cards activas del proyecto (DEVKIT-82): una sola consulta a Notion
-# (`notion.sh activas`), agrupadas por Épica de origen cuando hay más de una
-# Épica `En progreso` -mismo patrón que `mostrar_estado` (DEVKIT-80)-, y
-# "bloquea a" con la misma caché que `--estado` (`bloquea_a`, DEVKIT-63): no
-# duplica la llamada si ya está tibia.
+# Cards activas del proyecto (DEVKIT-82): una consulta a Notion (`notion.sh
+# activas`), agrupadas por Épica de origen cuando hay más de una Épica `En
+# progreso` -mismo patrón que `mostrar_estado` (DEVKIT-80)-, y "bloquea a" con
+# la misma caché que `--estado` (`bloquea_a`, DEVKIT-63). A diferencia de
+# `--estado`, que solo dispara el refresco de esas cachés en segundo plano
+# porque de todos modos hay algo que mostrar mientras llegan (los procesos, el
+# log), `--tablero` las asegura en primer plano (`asegurar_bloqueos_cache`,
+# `asegurar_epicas_cache`) antes de agrupar: con la caché fría, la primera
+# vuelta paga hasta tres consultas -activas, bloqueos y epicas-, no una sola
+# (H1 de pr-review en DEVKIT-82: antes salía plano y sin "bloquea a" la
+# primera vez, porque esas dos cachés recién arrancaban a llenarse detrás).
 mostrar_tablero() {
   local codigo filas
   codigo=$(project_code)
@@ -1644,6 +1692,8 @@ mostrar_tablero() {
     echo "sin cards activas en el proyecto $codigo"
     return 0
   fi
+  asegurar_bloqueos_cache
+  asegurar_epicas_cache
   local clave estado tipo pr
   local -A epica_de_clave
   local -a orden_epicas=()
@@ -3470,6 +3520,34 @@ FIN
     "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -q 'DEVKIT-61' && echo si || echo no)"
   check "--tablero: DEVKIT-59 sin Épica activa cae en el bloque final" si \
     "$(printf '%s\n' "$salida_tablero" | awk '/^\(sin Épica\)$/{f=1} f' | grep -q 'DEVKIT-59' && echo si || echo no)"
+
+  # H1 (pr-review sobre DEVKIT-82): con las cachés de bloqueos/epicas vacías
+  # -contenedor recién arrancado, sin ningún `--estado` previo-, `--tablero`
+  # las asegura en primer plano antes de pintar, así que agrupa y trae
+  # "bloquea a" desde la primera llamada, no la segunda.
+  local notion_tablero_frio tablero_bloq_frio tablero_epic_frio salida_tablero_frio
+  notion_tablero_frio="$tmp/notion-tablero-frio"
+  cat >"$notion_tablero_frio" <<FIN
+#!/usr/bin/env bash
+case "\$1" in
+  activas) cat "$tablero_fixture" ;;
+  bloqueos) echo '[{"clave":"DEVKIT-58","bloquea_a":["DEVKIT-61"]}]' ;;
+  epicas) echo '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Alfa"},{"clave":"DEVKIT-58","epica":"DEVKIT-51","epica_titulo":"Beta"}]' ;;
+esac
+FIN
+  chmod +x "$notion_tablero_frio"
+  tablero_bloq_frio="$tmp/tablero-bloqueos-frio"
+  tablero_epic_frio="$tmp/tablero-epicas-frio"
+  salida_tablero_frio=$(NOTION_BIN="$notion_tablero_frio" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq_frio/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq_frio/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic_frio/epicas.cache" EPICAS_LOCK="$tablero_epic_frio/epicas.lock" \
+    mostrar_tablero)
+  check "--tablero H1: agrupa por Épica desde la primera llamada con cachés vacías" \
+    "Épica DEVKIT-50: Alfa
+Épica DEVKIT-51: Beta" \
+    "$(printf '%s\n' "$salida_tablero_frio" | grep '^Épica ')"
+  check "--tablero H1: trae bloquea a desde la primera llamada con cachés vacías" si \
+    "$(printf '%s\n' "$salida_tablero_frio" | grep 'DEVKIT-58' | grep -q 'DEVKIT-61' && echo si || echo no)"
 
   local notion_tablero_vacio
   notion_tablero_vacio="$tmp/notion-tablero-vacio"

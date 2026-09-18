@@ -837,13 +837,32 @@ momento, sin dedicar una pantalla al tablero de la web. Reusa a propósito el
 mismo par de cachés de `--estado` para "bloquea a" (DEVKIT-63) y la Épica de
 origen (DEVKIT-80) -mismas variables, mismo TTL de 30 s-, así que un
 `--tablero` corriendo junto a un `--estado --seguir` no duplica esas dos
-llamadas. Lo que sí es nuevo es la lista de cards en sí (`notion.sh activas
-<código>`, una consulta por refresco): a diferencia de "bloquea a"/Épica, que
-son datos accesorios de una tabla que igual tiene algo que mostrar sin ellos
-(los procesos, el log), en `--tablero` esa consulta es el contenido entero,
-así que no tiene sentido el patrón de caché con refresco en segundo plano de
-`Consumo` (DEVKIT-62): el primer llamado a `--tablero` esperaría igual una
-lectura vacía. `--seguir` refresca cada 30 s y no 3 (`DEVKIT_TABLERO_INTERVALO`,
+llamadas cuando ya están tibias. Lo que sí es nuevo es la lista de cards en sí
+(`notion.sh activas <código>`): a diferencia de "bloquea a"/Épica, que en
+`--estado` son datos accesorios de una tabla que igual tiene algo que mostrar
+sin ellos (los procesos, el log), en `--tablero` esa consulta es el contenido
+entero, así que no tiene sentido el patrón de caché con refresco en segundo
+plano de `Consumo` (DEVKIT-62): el primer llamado a `--tablero` esperaría
+igual una lectura vacía.
+
+El diseño original asumió que bastaba con reusar el mismo `bloquea_a`/
+`epica_de` de `--estado`, que solo *dispara* el refresco en segundo plano
+cuando la caché falta o venció y devuelve vacío mientras tanto -razonable en
+`--estado`, que igual pinta algo esa vuelta-. `pr-review` lo marcó como
+hallazgo (H1, PR #59): con el contenedor recién arrancado, sin ningún
+`--estado` previo que hubiera calentado esas cachés, el primer `--tablero`
+salía plano y sin "bloquea a" aunque hubiera dos Épicas activas, porque no
+tenía otra cosa que mostrar mientras el refresco corría detrás. La corrección
+fue `asegurar_bloqueos_cache`/`asegurar_epicas_cache`: mismo candado y mismo
+TTL de 30 s, pero en primer plano y bloqueante cuando la caché falta o
+venció, porque `mostrar_tablero` ya paga una consulta síncrona por vuelta y
+no tiene nada que perder por esperar también estas dos. Efecto medible: con
+las tres cachés frías, la primera vuelta de `--tablero` paga hasta tres
+consultas a Notion (activas, bloqueos, epicas), no una; con las cachés
+tibias -el caso común, con `--estado --seguir` corriendo en paralelo o
+`--tablero --seguir` en su segunda vuelta en adelante- vuelve a ser una sola.
+
+`--seguir` refresca cada 30 s y no 3 (`DEVKIT_TABLERO_INTERVALO`,
 distinto de `DEVKIT_ESTADO_INTERVALO`) porque, a diferencia de `--estado`,
 cada vuelta paga una consulta real a la API de Notion, que limita peticiones
 por minuto.
