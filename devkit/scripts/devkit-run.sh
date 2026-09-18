@@ -1716,7 +1716,7 @@ mostrar_tablero() {
       encabezado_tablero
       while IFS=$'\t' read -r clave estado tipo pr; do
         [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
-      done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+      done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
     done
     local hay_sin=0
     while IFS=$'\t' read -r clave estado tipo pr; do
@@ -1728,12 +1728,12 @@ mostrar_tablero() {
         hay_sin=1
       fi
       formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
-    done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+    done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
   else
     encabezado_tablero
     while IFS=$'\t' read -r clave estado tipo pr; do
       formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
-    done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+    done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
   fi
 }
 
@@ -3548,6 +3548,18 @@ FIN
     "$(printf '%s\n' "$salida_tablero_frio" | grep '^Épica ')"
   check "--tablero H1: trae bloquea a desde la primera llamada con cachés vacías" si \
     "$(printf '%s\n' "$salida_tablero_frio" | grep 'DEVKIT-58' | grep -q 'DEVKIT-61' && echo si || echo no)"
+
+  # H2 (pr-review sobre DEVKIT-82): una card sin Tipo (null) y sin PR (cadena
+  # vacía, lo que devuelve `activas` de verdad, no null) no corre el PR a la
+  # columna Tipo: el jq convierte ambos campos vacíos en "-" antes del `@tsv`,
+  # así que `IFS=$'\t'` -que colapsa tabulaciones consecutivas como cualquier
+  # separador en blanco- ya no ve un campo vacío que saltarse.
+  local h2_json h2_linea h2_tipo h2_pr
+  h2_json='[{"clave":"DEVKIT-70","estado":"Lista","tipo":null,"pr":""}]'
+  h2_linea=$(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$h2_json")
+  IFS=$'\t' read -r _ _ h2_tipo h2_pr <<<"$h2_linea"
+  check "--tablero H2: Tipo null se muestra como guion, no como el PR" "-" "$h2_tipo"
+  check "--tablero H2: PR vacío también se muestra como guion" "-" "$h2_pr"
 
   local notion_tablero_vacio
   notion_tablero_vacio="$tmp/notion-tablero-vacio"
