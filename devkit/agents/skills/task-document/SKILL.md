@@ -85,9 +85,9 @@ sus alternativas.
    Card, rama, PR y, si ya está mergeado, commit de merge.
 
    ## Modelos
-   Implementado con <modelo>, esfuerzo <esfuerzo>
-   Revisado con <modelo>, esfuerzo <esfuerzo> (commit <sha corto>, <OK|CAMBIOS>)
-   Documentado con <modelo>, esfuerzo <esfuerzo>
+   - Implementado con <modelo>, esfuerzo <esfuerzo>
+   - Revisado con <modelo>, esfuerzo <esfuerzo> (commit <sha corto>, <OK|CAMBIOS>)
+   - Documentado con <modelo>, esfuerzo <esfuerzo>
    ```
 
    La sección "Modelos" (DEVKIT-58) copia las marcas, no las deduce: la

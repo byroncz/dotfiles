@@ -167,12 +167,12 @@ $(jq -r '.[] | "- \(.id): \(.texto)"' <<<"$hallazgos")"
   marca_impl=$(marca_linea Implementado "$body")
   [ -n "$marca_impl" ] || marca_impl="Implementado con sin marca"
   revisiones=$(jq -c "$REVISIONES" <<<"$pr_json")
-  lineas_revision=$(jq -r '.[] | "Revisado con \(if .marca == "" then "sin marca" else .marca end) (commit \(.corto), \(.verdict))"' <<<"$revisiones")
-  modelos="$marca_impl"
+  lineas_revision=$(jq -r '.[] | "- Revisado con \(if .marca == "" then "sin marca" else .marca end) (commit \(.corto), \(.verdict))"' <<<"$revisiones")
+  modelos="- $marca_impl"
   [ -z "$lineas_revision" ] || modelos="$modelos
 $lineas_revision"
   modelos="$modelos
-Documentado con script task-document.sh"
+- Documentado con script task-document.sh"
 
   local rama card_url pr_url enlaces
   rama=$(jq -r '.rama // ""' <<<"$card")
@@ -302,11 +302,11 @@ FIN
   check "el cuerpo copia el Objetivo de la card" 1 "$(grep -c 'Que esto funcione sin agente.' "$tmp/notion/cuerpo-creado.txt")"
   check "el cuerpo copia \"Qué cambia\" del PR bajo \"Qué cambió\"" 1 "$(grep -c '^Algo nuevo.$' "$tmp/notion/cuerpo-creado.txt")"
   check "el cuerpo copia \"Cómo probarlo\" del PR" 1 "$(grep -c 'bash -n foo.sh' "$tmp/notion/cuerpo-creado.txt")"
-  check "el cuerpo copia la marca Implementado" 1 "$(grep -c '^Implementado con opus, esfuerzo high$' "$tmp/notion/cuerpo-creado.txt")"
-  check "el cuerpo copia la marca Revisado con el commit y el veredicto" 1 \
-    "$(grep -c '^Revisado con fable, esfuerzo high (commit a1b2c3d, OK)$' "$tmp/notion/cuerpo-creado.txt")"
-  check "la línea Documentado con dice el script, no un modelo" 1 \
-    "$(grep -c '^Documentado con script task-document.sh$' "$tmp/notion/cuerpo-creado.txt")"
+  check "el cuerpo copia la marca Implementado, como viñeta" 1 "$(grep -c '^- Implementado con opus, esfuerzo high$' "$tmp/notion/cuerpo-creado.txt")"
+  check "el cuerpo copia la marca Revisado con el commit y el veredicto, como viñeta" 1 \
+    "$(grep -c '^- Revisado con fable, esfuerzo high (commit a1b2c3d, OK)$' "$tmp/notion/cuerpo-creado.txt")"
+  check "la línea Documentado con dice el script, no un modelo, como viñeta" 1 \
+    "$(grep -c '^- Documentado con script task-document.sh$' "$tmp/notion/cuerpo-creado.txt")"
   check "publica el marcador devkit-doc en el PR abierto" 1 \
     "$(grep -c 'devkit-doc sha=a1b2c3d' "$tmp/gh/comentarios")"
 

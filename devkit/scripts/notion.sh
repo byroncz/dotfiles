@@ -329,34 +329,38 @@ cmd_documentacion() {  # cmd_documentacion <page_id> [clave]
 # nuevo (no es encabezado, viñeta, número ni cerca de código) continúa el
 # párrafo o el ítem de lista anterior, unida con un espacio: los cuerpos de
 # PR llegan con las líneas cortadas a columna fija, y sin esto cada una
-# quedaba como su propio párrafo.
+# quedaba como su propio párrafo. Una línea en blanco corta esa continuación
+# (flag `corte`, H7 del informe del PR 66): sin ella, dos párrafos separados
+# por línea en blanco -como "Por qué" o "Modelos"- se pegaban en uno solo,
+# porque la línea en blanco no tocaba el estado y la siguiente línea seguía
+# viendo el párrafo anterior como continuable.
 MD_BLOQUES="$TRAMOS_DEF"'
 def bloque($tipo; $contenido):
   {object: "block", type: $tipo, ($tipo): {rich_text: (recortar($contenido) | map(. + {type: "text"}))}};
 def es_continuable: . == "paragraph" or . == "bulleted_list_item" or . == "numbered_list_item";
 ($md | split("\n")) as $lineas
 | (reduce $lineas[] as $l
-    ({items: [], en_codigo: false, codigo: "", lenguaje: ""};
+    ({items: [], en_codigo: false, codigo: "", lenguaje: "", corte: false};
       if .en_codigo then
         if ($l | test("^```")) then
           .items += [{tipo: "code", contenido: (.codigo | rtrimstr("\n")),
                       lenguaje: (if .lenguaje == "" then "plain text" else .lenguaje end)}]
-          | .en_codigo = false | .codigo = "" | .lenguaje = ""
+          | .en_codigo = false | .codigo = "" | .lenguaje = "" | .corte = false
         else
           .codigo += ($l + "\n")
         end
       elif ($l | test("^```")) then
         .en_codigo = true | .lenguaje = ($l | ltrimstr("```"))
-      elif ($l | test("^### ")) then .items += [{tipo: "heading_3", contenido: ($l | ltrimstr("### "))}]
-      elif ($l | test("^## "))  then .items += [{tipo: "heading_2", contenido: ($l | ltrimstr("## "))}]
-      elif ($l | test("^# "))   then .items += [{tipo: "heading_1", contenido: ($l | ltrimstr("# "))}]
-      elif ($l | test("^[-*] ")) then .items += [{tipo: "bulleted_list_item", contenido: $l[2:]}]
-      elif ($l | test("^[0-9]+\\. ")) then .items += [{tipo: "numbered_list_item", contenido: ($l | sub("^[0-9]+\\. ";""))}]
-      elif ($l | test("^\\s*$")) then .
-      elif ((.items | length) > 0 and (.items[-1].tipo | es_continuable)) then
+      elif ($l | test("^### ")) then .items += [{tipo: "heading_3", contenido: ($l | ltrimstr("### "))}] | .corte = false
+      elif ($l | test("^## "))  then .items += [{tipo: "heading_2", contenido: ($l | ltrimstr("## "))}] | .corte = false
+      elif ($l | test("^# "))   then .items += [{tipo: "heading_1", contenido: ($l | ltrimstr("# "))}] | .corte = false
+      elif ($l | test("^[-*] ")) then .items += [{tipo: "bulleted_list_item", contenido: $l[2:]}] | .corte = false
+      elif ($l | test("^[0-9]+\\. ")) then .items += [{tipo: "numbered_list_item", contenido: ($l | sub("^[0-9]+\\. ";""))}] | .corte = false
+      elif ($l | test("^\\s*$")) then .corte = true
+      elif (.corte == false and (.items | length) > 0 and (.items[-1].tipo | es_continuable)) then
         .items[-1].contenido += (" " + ($l | sub("^\\s+";"")))
       else
-        .items += [{tipo: "paragraph", contenido: $l}]
+        .items += [{tipo: "paragraph", contenido: $l}] | .corte = false
       end)) as $acc
 | [ $acc.items[] | if .tipo == "code" then
       {object: "block", type: "code",
@@ -772,6 +776,24 @@ Tercero.
   check "MD_BLOQUES: la continuación sangrada de una viñeta se une a su ítem" \
     '"uno continuación de uno"' \
     "$(jq -c '.[1].bulleted_list_item.rich_text[0].text.content' <<<"$got")"
+
+  # H7 (informe del PR 66): la línea en blanco corta la continuación, aun
+  # cuando el texto que sigue podría unirse a un párrafo o a una viñeta.
+  got=$(jq -nc --arg md 'Primero.
+
+Segundo.' "$MD_BLOQUES")
+  check "MD_BLOQUES: dos párrafos separados por una línea en blanco no se unen" \
+    '["Primero.","Segundo."]' \
+    "$(jq -c '[.[].paragraph.rich_text[0].text.content]' <<<"$got")"
+  got=$(jq -nc --arg md '- uno
+
+Después de la lista.' "$MD_BLOQUES")
+  check "MD_BLOQUES: una viñeta seguida de línea en blanco y párrafo no se pegan" \
+    '["bulleted_list_item","paragraph"]' \
+    "$(jq -c '[.[].type]' <<<"$got")"
+  check "MD_BLOQUES: el párrafo tras la línea en blanco conserva su propio texto" \
+    '"Después de la lista."' \
+    "$(jq -c '.[1].paragraph.rich_text[0].text.content' <<<"$got")"
 
   # H2 (informe del PR 66): un bloque de más de 2000 caracteres -código o
   # texto- se corta en varios objetos rich_text, como ya hacía RICH_TEXT
