@@ -11,12 +11,14 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
 
 1. Localiza la Épica en Tareas (por `ID` y `Proyecto`, como dice el
    `README.md` de skills). Verifica que `Nivel` es Épica y `Estado` es
-   `Lista`. Si `Estado` es `En progreso` y trae comentarios con criterios de
-   aceptación nuevos desde el último desglose (DEVKIT-94: relanzamiento sobre
-   una Épica ya planificada, para no repetir lo del grupo 3 de DEVKIT-59, que
-   quedó sin hijas propias para un criterio agregado tarde), sigue igual: el
-   paso 4 evita duplicar las hijas que ya existen. Con cualquier otro
-   `Estado`, detente y explica por qué en una línea.
+   `Lista`. Si `Estado` es `En progreso`, compara los Criterios de aceptación
+   vigentes -los del cuerpo tal cual están ahora, el humano pudo haberlos
+   editado ahí en vez de comentar- contra el último comentario de desglose:
+   si traen algo nuevo (DEVKIT-94: relanzamiento sobre una Épica ya
+   planificada, para no repetir lo del grupo 3 de DEVKIT-59, que quedó sin
+   hijas propias para un criterio agregado tarde), sigue igual: el paso 4
+   evita duplicar las hijas que ya existen. Con cualquier otro `Estado`,
+   detente y explica por qué en una línea.
 2. Lee su Objetivo, Criterios de aceptación y Notas. Lee también el estado del
    repo: `git log --oneline -20`, estructura de directorios, `AGENTS.md`.
 3. Diseña las hijas. Reglas de corte:
