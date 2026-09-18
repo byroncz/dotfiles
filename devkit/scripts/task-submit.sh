@@ -124,7 +124,7 @@ done < <(sh_tocados)
 
 # --- 3. Commit y push --------------------------------------------------------
 if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
-  git -C "$WS" add -A || { err "git add falló"; exit 1; }
+  git -C "$WS" add -A -- . ':!.devkit/pr-body.md' || { err "git add falló"; exit 1; }
   git -C "$WS" commit -q -m "$mensaje" || { err "git commit falló"; exit 1; }
 fi
 push_err=$(mktemp)

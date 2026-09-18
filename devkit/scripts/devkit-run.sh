@@ -4560,6 +4560,8 @@ FIN
   check "task-submit (PR nuevo): sale con 0" 0 "$?"
   check "task-submit (PR nuevo): comitea con el mensaje recibido" "feat(DEVKIT-9301): probar task-submit" \
     "$(git -C "$ts_dir/ws" log -1 --format=%s)"
+  check "task-submit (PR nuevo): el commit no incluye .devkit/pr-body.md" 0 \
+    "$(git -C "$ts_dir/ws" show --name-only --format= HEAD | grep -c 'pr-body.md')"
   check "task-submit (PR nuevo): sube el commit a origin" 1 \
     "$(git -C "$ts_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9301')"
   check "task-submit (PR nuevo): crea el PR (no lo edita)" 1 \
