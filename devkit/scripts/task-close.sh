@@ -140,7 +140,7 @@ if [ "$estado" != "Hecha" ]; then
   [ -n "$(jq -r '.pr // ""' <<<"$card")" ] || props+=("PR=$pr_url")
   "$NOTION" set "$id" "${props[@]}" || { say "no pude pasar $clave a Hecha"; exit 1; }
   transicion=1
-  if doc=$("$NOTION" documentacion "$id"); then
+  if doc=$("$NOTION" documentacion "$id" "$clave"); then
     doc_url=$(jq -r .url <<<"$doc")
     "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url. $marcas"
   elif documentando "$clave"; then
@@ -155,7 +155,7 @@ if [ "$estado" != "Hecha" ]; then
   say "$clave Hecha"
 else
   say "$clave ya estaba Hecha"
-  doc=$("$NOTION" documentacion "$id") && doc_url=$(jq -r .url <<<"$doc")
+  doc=$("$NOTION" documentacion "$id" "$clave") && doc_url=$(jq -r .url <<<"$doc")
 fi
 
 # --- Marcador en el PR -----------------------------------------------------

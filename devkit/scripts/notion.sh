@@ -11,8 +11,12 @@
 #   notion.sh pagina <page_id>                lo mismo, por id de página
 #   notion.sh set <page_id> Prop=valor...     cambia propiedades
 #   notion.sh comentar <page_id> <texto>      comenta en la página
-#   notion.sh documentacion <page_id>         entrada de Documentación de la
-#                                             card (relación Tarea): {id,url}
+#   notion.sh documentacion <page_id> [clave] entrada de Documentación de la
+#                                             card (relación Tarea): {id,url}.
+#                                             Con <clave>, solo cuenta la
+#                                             entrada cuyo Título empieza por
+#                                             "<clave>:" (descarta entradas de
+#                                             referencia con la misma Tarea)
 #   notion.sh hijas <page_id>                 hijas de una Épica (relación
 #                                             Padre), como lista JSON
 #   notion.sh criterios <page_id>             texto de la sección "Criterios
@@ -266,12 +270,23 @@ cmd_comentar() {  # cmd_comentar <page_id> <texto>
   api POST "/comments" "$body" >/dev/null
 }
 
-cmd_documentacion() {  # cmd_documentacion <page_id>
-  local filas
+cmd_documentacion() {  # cmd_documentacion <page_id> [clave]
+  local filas fila
   filas=$(query_all "$(db_id documentacion)" \
     "$(jq -nc --arg p "$1" '{property: "Tarea", relation: {contains: $p}}')") || return
-  [ "$(jq 'length' <<<"$filas")" -gt 0 ] || return 1
-  jq -c '.[0] | {id, url}' <<<"$filas"
+  if [ -n "${2:-}" ]; then
+    # Filtra por la convención de título de task-document (paso 5):
+    # "<Clave>: ...". Sin esto, una entrada de referencia con la misma
+    # relación Tarea (p. ej. una decisión congelada) se confunde con la
+    # entrada de la card y task-document la sobrescribe (DEVKIT-87).
+    fila=$(jq -c --arg pref "$2:" \
+      'map(select((.properties["Título"].title // []) | map(.plain_text) | join("") | startswith($pref))) | .[0] // empty' \
+      <<<"$filas")
+  else
+    fila=$(jq -c '.[0] // empty' <<<"$filas")
+  fi
+  [ -n "$fila" ] || return 1
+  jq -c '{id, url}' <<<"$fila"
 }
 
 cmd_hijas() {  # cmd_hijas <page_id>
@@ -515,6 +530,18 @@ FIN
   env "${entorno[@]}" bash "$HERE/notion.sh" documentacion card-55 >/dev/null
   check "documentacion: sin entrada sale con 1" 1 "$?"
 
+  # documentacion: con clave, descarta una entrada de referencia que
+  # comparte la relación Tarea con la entrada de la card (DEVKIT-87).
+  resp POST__databases_dbdoc_query '{"results":[
+    {"id":"doc-ref","url":"https://www.notion.so/docref","properties":{"Título":{"title":[{"plain_text":"Arquitectura del devkit (referencia congelada)"}]}}},
+    {"id":"doc-1","url":"https://www.notion.so/doc1","properties":{"Título":{"title":[{"plain_text":"DEVKIT-55: Notion por token"}]}}}
+  ],"has_more":false}'
+  check "documentacion: con clave, elige la entrada '<Clave>: ...'" \
+    '{"id":"doc-1","url":"https://www.notion.so/doc1"}' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" documentacion card-55 DEVKIT-55)"
+  env "${entorno[@]}" bash "$HERE/notion.sh" documentacion card-55 DEVKIT-99 >/dev/null
+  check "documentacion: con clave sin entrada propia sale con 1" 1 "$?"
+
   # criterios: la sección entre su encabezado y el siguiente.
   local bloques='[
     {"type":"heading_2","heading_2":{"rich_text":[{"plain_text":"Objetivo"}]}},
@@ -629,7 +656,7 @@ case "${1:-}" in
   pagina) cmd_pagina "${2:?page_id}" ;;
   set) shift; cmd_set "$@" ;;
   comentar) cmd_comentar "${2:?page_id}" "${3:-}" ;;
-  documentacion) cmd_documentacion "${2:?page_id}" ;;
+  documentacion) cmd_documentacion "${2:?page_id}" "${3:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
   bloqueos) cmd_bloqueos "${2:?código}" ;;

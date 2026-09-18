@@ -27,13 +27,16 @@ skill no cambia el `Estado` de la card ni toca código.
    diff (`gh pr diff <N>`) y los informes de `pr-review` con sus respuestas
    de `task-fix`. Los hallazgos corregidos entran en la entrada: son parte
    de lo que cambió.
-4. Busca la entrada existente por la relación `Tarea`, nunca por título:
+4. Busca la entrada existente por la relación `Tarea`, con la Clave como
+   segundo argumento para descartar una entrada de referencia ligada a la
+   misma card (p. ej. una decisión congelada, DEVKIT-87):
 
    ```sh
-   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" documentacion <page_id de la card>
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" documentacion <page_id de la card> <Clave>
    ```
 
-   Devuelve `{id, url}` si existe y sale con 1 si no.
+   Devuelve `{id, url}` si existe una entrada cuyo `Título` empieza por
+   `<Clave>:` y sale con 1 si no.
 5. Escribe la entrada con el plugin de Notion. Si existe, reemplaza su
    contenido y actualiza `PR` y `Rama`; si no, créala en **Documentación**
    con `Título` = `<Clave>: <título corto>`, `Proyecto`, `Tarea` = la card,
