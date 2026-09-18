@@ -1,15 +1,14 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
-#  devkit: tabla y líneas de versiones de la sección Stack del README,
+#  devkit: tabla y línea de extensiones de la sección Stack del README,
 #  generadas desde devkit/scripts/stack.tsv, devkit/Dockerfile,
 #  devkit/proxy/Dockerfile y devkit/vscode/extensions.toml. Las usa
 #  gen-readme.sh al armar el README completo.
 #
-#    gen-stack.sh              imprime la línea de extensiones
-#    gen-stack.sh --versiones  imprime la línea de versiones del Dockerfile
-#    gen-stack.sh --tabla      imprime la tabla Herramienta/Descripción/Versión
-#    gen-stack.sh --check      sale con 1 si el README quedó viejo
-#    gen-stack.sh --test       autoprueba, sin tocar el README
+#    gen-stack.sh          imprime la línea de extensiones
+#    gen-stack.sh --tabla  imprime la tabla Herramienta/Descripción/Versión
+#    gen-stack.sh --check  sale con 1 si el README quedó viejo
+#    gen-stack.sh --test   autoprueba, sin tocar el README
 #
 #  Un "latest" se imprime tal cual, sin resolver contra Open VSX: esa
 #  resolución vive en devkit.sh (resolve_extensions), al construir. Aquí solo
@@ -48,20 +47,6 @@ arg_valor() {  # arg_valor <Dockerfile> <ARG>
     return 1
   fi
   printf '%s' "$valor"
-}
-
-# Las herramientas listadas son las que trae la imagen con una versión fija en
-# el Dockerfile (ARG ..._VERSION); no incluye Debian ni Python, sin versión
-# propia fijada ahí.
-versiones() {  # versiones <Dockerfile>
-  uv="$(arg_valor "$1" UV_VERSION)" || return 1
-  gh="$(arg_valor "$1" GH_VERSION)" || return 1
-  rclone="$(arg_valor "$1" RCLONE_VERSION)" || return 1
-  bws="$(arg_valor "$1" BWS_VERSION)" || return 1
-  starship="$(arg_valor "$1" STARSHIP_VERSION)" || return 1
-  openvscode="$(arg_valor "$1" OPENVSCODE_VERSION)" || return 1
-  printf 'Versiones fijadas en `devkit/Dockerfile`: uv %s, gh %s, rclone %s, bws %s, starship %s, openvscode-server %s.\n' \
-    "$uv" "$gh" "$rclone" "$bws" "$starship" "$openvscode"
 }
 
 # Versión de cada fila de stack.tsv, por id. Los ids sin versión propia
@@ -173,14 +158,9 @@ if [ "${1:-}" = "--test" ]; then
     sh "$HERE/scripts/gen-stack.sh" --check >/dev/null 2>&1
   check "--check con el README viejo sale 1" 1 "$?"
 
-  printf 'ARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile"
-  check "versiones desde el Dockerfile" \
-    'Versiones fijadas en `devkit/Dockerfile`: uv 1.2.3, gh 4.5.6, rclone 7.8.9, bws 1.0.0, starship 2.0.0, openvscode-server 3.0.0.' \
-    "$(versiones "$tmp/Dockerfile")"
-
   printf 'ARG UV_RENOMBRADO=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-sin-uv"
-  versiones "$tmp/Dockerfile-sin-uv" >/dev/null 2>&1
-  check "versiones falla si un ARG se renombró (H2b)" 1 "$?"
+  arg_valor "$tmp/Dockerfile-sin-uv" UV_VERSION >/dev/null 2>&1
+  check "arg_valor falla si un ARG se renombró (H2b)" 1 "$?"
 
   printf 'ARG BASE_IMAGE=debian:trixie-slim\nARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-tabla"
   printf 'FROM alpine:3.22\n' > "$tmp/proxy-Dockerfile"
@@ -215,12 +195,6 @@ README="${DEVKIT_GEN_STACK_README:-$(pwd)/README.md}"
 DOCKERFILE="${DEVKIT_GEN_STACK_DOCKERFILE:-$HERE/Dockerfile}"
 STACK_TSV="${DEVKIT_GEN_STACK_TSV:-$HERE/scripts/stack.tsv}"
 PROXY_DOCKERFILE="${DEVKIT_GEN_STACK_PROXY_DOCKERFILE:-$HERE/proxy/Dockerfile}"
-
-if [ "${1:-}" = "--versiones" ]; then
-  [ -f "$DOCKERFILE" ] || { echo "gen-stack.sh: no existe $DOCKERFILE" >&2; exit 2; }
-  versiones "$DOCKERFILE" || exit 2
-  exit 0
-fi
 
 if [ "${1:-}" = "--tabla" ]; then
   [ -f "$STACK_TSV" ] || { echo "gen-stack.sh: no existe $STACK_TSV" >&2; exit 2; }

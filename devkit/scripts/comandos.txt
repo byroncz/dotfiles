@@ -33,7 +33,7 @@ devkit-run task-close <Clave> [PR] | Cierra una card con el PR mergeado, en bash
 devkit-run task-block <Clave> <motivo> | Bloquea una card con un motivo, en bash.
 
 ## Scripts de `devkit/scripts/`
-gen-stack.sh | Genera la línea de extensiones y de versiones de la sección Stack del README.
+gen-stack.sh | Genera la tabla Stack y la línea de extensiones del README.
 gen-readme.sh | Genera y verifica `README.md` completo desde la plantilla.
 devkit-run.sh | Único punto de lanzamiento de una skill (ver `devkit-run` más arriba).
 watch.sh | Bucle que revisa PRs abiertos y cierra los mergeados, lanzando la skill que toca.
