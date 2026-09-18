@@ -237,15 +237,19 @@ cd "$WS" 2>/dev/null || exit 0
 mkdir -p "$RUN_DIR"
 touch "$LAUNCHED"
 
-# ¿La línea (ya con fecha) es un lanzamiento o un cierre de una de las seis
-# skills que mide `devkit-run --costos` (DEVKIT-89: task-start, pr-review,
-# task-fix, task-document, task-close, epic-plan)? Sin este filtro,
-# costos.log arrastraría también las líneas narrativas ("PR #31 ... lanzando
+# ¿La línea (ya con fecha) es un lanzamiento o un cierre -exitoso o con
+# error- de una de las seis skills que mide `devkit-run --costos` (DEVKIT-89:
+# task-start, pr-review, task-fix, task-document, task-close, epic-plan)? Un
+# cierre con error también gastó turnos y costo, así que cuenta igual que uno
+# exitoso (H2 de pr-review en DEVKIT-89): "ALARMA: <id> terminó con error" es
+# el formato de `run_skill` de aquí mismo, "falló (rc=" el de `devkit-run.sh`
+# y el de `task-close-N`/`task-next-N`. Sin este filtro, costos.log
+# arrastraría también las líneas narrativas ("PR #31 ... lanzando
 # pr-review") y las de task-block/task-next, que no aportan costo/turnos y
 # solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
-    *" lanzando "*|*" terminado"*) ;;
+    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*) ;;
     *) return 1 ;;
   esac
   printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'

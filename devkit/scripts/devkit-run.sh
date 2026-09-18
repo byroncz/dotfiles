@@ -660,16 +660,19 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   printf 'modelo=%s esfuerzo=%s ronda=%s %s%s' "$modelo" "$esfuerzo" "$ronda" "$linea" "$excedido"
 }
 
-# ¿La línea de watch.log (ya con fecha) es un lanzamiento o un cierre de una
-# de las seis skills que mide `--costos` (DEVKIT-89: task-start, pr-review,
-# task-fix, task-document, task-close, epic-plan)? Sin este filtro,
-# costos.log arrastraría también las líneas narrativas del bucle ("PR #31
-# ... lanzando pr-review") y las de task-block/task-next, que no aportan
-# costo/turnos y solo inflarían un archivo que vive fuera de tmpfs y no se
-# rota nunca.
+# ¿La línea de watch.log (ya con fecha) es un lanzamiento o un cierre -exitoso
+# o con error- de una de las seis skills que mide `--costos` (DEVKIT-89:
+# task-start, pr-review, task-fix, task-document, task-close, epic-plan)? Un
+# cierre con error también gastó turnos y costo, así que cuenta igual que uno
+# exitoso (H2 de pr-review en DEVKIT-89): "ALARMA: <id> terminó con error" es
+# el formato de `run_skill` en watch.sh, "falló (rc=" el de `devkit-run.sh` y
+# el de `task-close-N`/`task-next-N` en bash. Sin este filtro, costos.log
+# arrastraría también las líneas narrativas del bucle ("PR #31 ... lanzando
+# pr-review") y las de task-block/task-next, que no aportan costo/turnos y
+# solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
-    *" lanzando "*|*" terminado"*) ;;
+    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*) ;;
     *) return 1 ;;
   esac
   printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'
@@ -1883,13 +1886,16 @@ clave_de_lanzamiento() {  # clave_de_lanzamiento <prompt> <id>
 # Línea de cierre ("terminado"/"falló") de un <id>, la primera tras su línea
 # "lanzando" en <línea> (mismo emparejamiento que `estado_filas` en watch.sh,
 # sin las ramas de "en curso"/"no arrancó": aquí solo interesa lo que ya
-# cerró). Los IDs no son únicos para siempre -se reinician en cada `devkit
-# recreate`, igual que en watch.log-, así que se empareja con el cierre más
-# cercano, no con uno global.
+# cerró). Un cierre con error cuenta igual que uno exitoso (H2 de pr-review en
+# DEVKIT-89), así que se empareja también "$id falló (rc=" (task-close-N,
+# task-next-N) y "ALARMA: $id terminó con error" (`run_skill` en watch.sh, que
+# no deja línea "$id terminado:" cuando falla). Los IDs no son únicos para
+# siempre -se reinician en cada `devkit recreate`, igual que en watch.log-,
+# así que se empareja con el cierre más cercano, no con uno global.
 costos_cierre_de() {  # costos_cierre_de <archivo> <línea de "lanzando"> <id>
   local file=$1 desde=$2 id=$3
   tail -n +"$((desde + 1))" "$file" 2>/dev/null | grep -m1 -E \
-    "^[^ ]+ ($id terminado: |devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:)"
+    "^[^ ]+ ($id (terminado|falló \(rc=[0-9]+\)): |ALARMA: $id terminó con error \(rc=[0-9]+\): |devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:)"
 }
 
 # Un campo "campo=N" de una línea de cierre, vacío si no está (bash no gasta
@@ -1974,10 +1980,14 @@ costos_tabla_card() {
     "$(rellenar "$turnos_tot" 8)" "$(rellenar "$costo_tot" 10)" "$min_tot ($revisiones revisiones)"
 }
 
-# Sin argumento: una fila por card con al menos un cierre de task-close en
-# los últimos 30 días, con la suma de todos sus lanzamientos, más el
-# promedio. Es la serie histórica del criterio de aceptación: mide si las
-# hijas 4 a 8 de la Épica DEVKIT-86 bajan el costo, sin estimar nada.
+# Sin argumento: una fila por card con al menos un cierre exitoso de
+# task-close en los últimos 30 días, con la suma de todos sus lanzamientos,
+# más el promedio. Es la serie histórica del criterio de aceptación: mide si
+# las hijas 4 a 8 de la Épica DEVKIT-86 bajan el costo, sin estimar nada. Un
+# `task-close-N falló` no cierra la card -queda para el siguiente ciclo del
+# bucle-, así que no cuenta aquí (H2 de pr-review en DEVKIT-89); sí aparece
+# como fila en `costos_filas`/`costos_tabla_card`, porque ese lanzamiento
+# igual costó turnos.
 costos_resumen_proyecto() {
   local corte hoy_epoch
   hoy_epoch=$(date +%s)
@@ -1985,14 +1995,14 @@ costos_resumen_proyecto() {
   local -a cerradas=()
   local ts c_clave skill id resto
   while IFS=: read -r ln resto; do
-    [[ $resto =~ ^([^ ]+)\ task-close-([0-9]+)\ (terminado|falló) ]] || continue
+    [[ $resto =~ ^([^ ]+)\ task-close-([0-9]+)\ terminado ]] || continue
     ts=${BASH_REMATCH[1]}
     [ "$(date -d "$ts" +%s 2>/dev/null || echo 0)" -ge "$corte" ] || continue
     c_clave=$(clave_de_pr "${BASH_REMATCH[2]}")
     [ "$c_clave" != - ] && [ -n "$c_clave" ] || continue
     case " ${cerradas[*]:-} " in *" $c_clave "*) continue ;; esac
     cerradas+=("$c_clave")
-  done < <(grep -nE ' task-close-[0-9]+ (terminado|falló)' "$COSTOS_LOG" 2>/dev/null)
+  done < <(grep -nE ' task-close-[0-9]+ terminado' "$COSTOS_LOG" 2>/dev/null)
   if [ "${#cerradas[@]}" -eq 0 ]; then
     echo "Sin cards cerradas en los últimos 30 días en $COSTOS_LOG."
     return 0
@@ -4030,6 +4040,12 @@ FIN
     "$(costos_log_candidata '2026-09-10T10:00:00-05:00 PR #31 (DEVKIT-1) head abc1234 sin informe: lanzando pr-review'; echo $?)"
   check "costos_log_candidata rechaza task-block, fuera de la tabla de --costos" 1 \
     "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-block-31 terminado: bash :: bloqueada'; echo $?)"
+  check "costos_log_candidata acepta el ALARMA de un cierre con error de run_skill" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 ALARMA: task-fix-1 terminó con error (rc=1): modelo=m esfuerzo=e ronda=1 costo=0.05 turnos=3 duracion=10s tokens: entrada=1 cache=1 salida=1 :: error; ver /x.log'; echo $?)"
+  check "costos_log_candidata acepta el falló (rc=) de devkit-run.sh --worker" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 devkit-run "/task-fix DEVKIT-1" falló (rc=1) [task-fix-1]: modelo=m esfuerzo=e ronda=1 costo=0.05 turnos=3 duracion=10s :: error'; echo $?)"
+  check "costos_log_candidata acepta el falló (rc=) de task-close-N en bash" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-close-31 falló (rc=1): bash, cerrado 15s después del merge :: error'; echo $?)"
 
   # Una card completa: task-start, una revisión de pr-review (sin Clave en su
   # prompt, se resuelve por el título del PR con un doble de gh), un
@@ -4078,6 +4094,22 @@ FIN
 
   check "mostrar_costos sin costos.log avisa en vez de fallar" 1 \
     "$(COSTOS_LOG="$tmp/no-existe/costos.log" mostrar_costos | grep -c 'Sin costos.log todavía')"
+
+  # H2 de pr-review en DEVKIT-89: un cierre con error también gastó turnos y
+  # costo, y no debe perderse ni contarse como card cerrada.
+  local costos_error=$tmp/costos-error
+  mkdir -p "$costos_error"
+  cat >"$costos_error/costos.log" <<'FIN'
+2026-09-11T10:00:00-05:00 task-fix-40 lanzando (origen=bucle) modelo=modelo-medio esfuerzo=medium ronda=1: "/task-fix DEVKIT-80" log=/run/devkit/task-fix-40.log
+2026-09-11T10:01:00-05:00 ALARMA: task-fix-40 terminó con error (rc=1): modelo=modelo-medio esfuerzo=medium ronda=1 costo=0.07 turnos=4 duracion=20s tokens: entrada=1 cache=1 salida=1 :: error; ver /run/devkit/task-fix-40.log
+2026-09-11T10:05:00-05:00 task-close-40 falló (rc=1): bash, cerrado 5s después del merge :: error
+FIN
+  check "costos_cierre_de empareja el ALARMA de un cierre con error" 1 \
+    "$(costos_cierre_de "$costos_error/costos.log" 1 task-fix-40 | grep -c 'costo=0.07 turnos=4')"
+  check "costos_filas no pierde el costo de un lanzamiento que terminó con error" "0.07" \
+    "$(costos_filas "$costos_error/costos.log" DEVKIT-80 | cut -f9)"
+  check "costos_resumen_proyecto no cuenta un task-close-N falló como card cerrada" 1 \
+    "$(COSTOS_LOG="$costos_error/costos.log" costos_resumen_proyecto | grep -c 'Sin cards cerradas')"
 
   check "--costos-totales de la card, por línea de comandos" "14	0.3600	3	1" \
     "$(DEVKIT_GH_BIN="$costos_tmp/gh-doble" DEVKIT_COSTOS_LOG="$costos_tmp/costos.log" \
