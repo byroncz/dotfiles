@@ -2904,6 +2904,30 @@ FIN
     '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/12"}' \
     'task-begin: DEVKIT-9092 ya está en Revisión automática (PR https://github.com/o/r/pull/12); no hay nada que hacer.'
 
+  # H7 del informe sobre el PR #64 (esta card): --test solo probaba que los
+  # Estados terminales de arriba no bloqueaban; la rama real de bloqueo
+  # (card tomable, pero el workspace no está listo) no tenía un caso propio.
+  # Workspace con cambios sin commit sobre una card Lista: task-begin.sh
+  # falla por el motivo real (no por un doble) y devkit-run bloquea la card.
+  printf '{"estado":"Lista","tipo":"feature","titulo":"Probar bloqueo real"}\n' \
+    >"$RONDA_DIR/card-DEVKIT-9098.json"
+  echo sucio >"$tmp/sucio.txt"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN=/bin/false DEVKIT_TASK_BEGIN_BIN="$HERE/task-begin.sh" DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-9098 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "H7: workspace sucio sobre una card Lista bloquea la card de verdad" \
+    'bloquea la card con task-block.sh: DEVKIT-9098' \
+    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-9098' "$tmp/run/watch.log" | head -1)"
+  check "H7: task-block.sh recibe el motivo real de task-begin.sh (workspace sucio)" \
+    'cambios sin commit' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'cambios sin commit')"
+  rm -f "$tmp/sucio.txt" "$RONDA_DIR/card-DEVKIT-9098.json"
+
   # --- task-begin.sh de verdad (no el doble), con notion.sh simulado -------
   # Lista y En progreso con Rama: los dos casos que sí tocan git y Notion,
   # de punta a punta, a través del propio `devkit-run.sh task-start` (no
