@@ -10,8 +10,7 @@
 # la entrada de Documentación de DEVKIT-54: DEVKIT-51 en Sonnet necesitó tres
 # ciclos, y un task-fix en Haiku por rol `chore` concluyó "nada que corregir"
 # con un veredicto CAMBIOS vigente). El Tipo sigue eligiendo el prefijo de
-# rama (`feat/`, `fix/`, `chore/`) y la sección del CHANGELOG; ya no elige
-# modelo.
+# rama (`feat/`, `fix/`, `chore/`); ya no elige modelo.
 #
 # `frontera` es la lista ordenada de modelos de frontera, por alias de
 # `claude --model`. `devkit-run` prueba el primero disponible en cada

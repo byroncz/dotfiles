@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 #  devkit: imagen de trabajo.
 #
-#  Principios (docs/ARCHITECTURE.md):
+#  Principios (entrada de Documentación "Arquitectura del devkit", Notion):
 #    - Base sin lenguaje. Python lo instala uv al primer arranque.
 #    - Todo binario se elige por arquitectura (arm64 en Apple Silicon, amd64
 #      en el resto). Las versiones van fijadas en ARG y se suben a propósito.

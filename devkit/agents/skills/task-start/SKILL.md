@@ -69,8 +69,8 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 7. Lee los comentarios de la card completa, no solo Objetivo y Criterios de
    aceptación. Cualquier comentario que amplíe, corrija o precise el alcance
    original es una ampliación: anótala para el plan del paso siguiente.
-   Ignorar un comentario dejó el CHANGELOG de `1.0.0` con un dato falso
-   (DEVKIT-41).
+   Ignorar un comentario dejó las notas de la versión `1.0.0` con un dato
+   falso (DEVKIT-41).
 8. Comenta en la card el plan en dos a cuatro líneas: qué vas a cambiar y en
    qué orden. Si el paso anterior encontró ampliaciones, una línea por cada
    una, citando qué comentario la originó. Sin justificaciones largas.

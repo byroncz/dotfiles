@@ -9,7 +9,7 @@ El template del entorno de desarrollo (`devkit/`) y su instalador
 (`new-project.sh`). Cualquier proyecto de datos se instancia desde una
 etiqueta de este repo. Aquí el workspace es el propio template en modo `dev`:
 lo que cambies se prueba en vivo con `devkit recreate` antes de etiquetar.
-Diseño y decisiones en `docs/ARCHITECTURE.md`.
+Diseño y decisiones en la base Documentación de Notion (proyecto `DEVKIT`).
 
 ## Cómo se trabaja aquí
 
@@ -66,21 +66,19 @@ Diseño y decisiones en `docs/ARCHITECTURE.md`.
   la card, si no hay card que bloquear) y termina. Toda ejecución headless
   cierra en un estado observable de la card, nunca a la espera.
 
-## Documentar comandos y skills
+## Documentar el trabajo de una card
 
-`README.md` en la raíz y la entrada "Stack y comandos del devkit" en
-Documentación (Notion,
-https://app.notion.com/p/3d427957d23d81c48debd29c70f68bcd) son la
-referencia de herramientas y comandos del devkit. Regla sin excepción:
-
-- Todo comando de `devkit.sh`, alias del shell, script de `devkit/scripts/`,
-  bucle en segundo plano o skill que se cree, cambie de nombre o de
-  comportamiento se documenta en ambos sitios **en el mismo PR** que lo
-  introduce. `task-submit` no abre el PR si falta.
-- Toda herramienta que entre o salga del `Dockerfile` actualiza la tabla de
-  stack de ambos sitios, con su versión.
-- El README lleva el detalle; la entrada de Notion, el resumen y el enlace al
-  README. Ninguno de los dos se edita a mano fuera de una card.
+Cada card escribe una sola vez su propia entrada de Documentación (Notion),
+con qué cambió, por qué y cómo probarlo: ese es el único lugar donde una card
+ordinaria documenta. `README.md` en la raíz y la entrada "Stack y comandos
+del devkit" en Documentación (Notion,
+https://app.notion.com/p/3d427957d23d81c48debd29c70f68bcd) describen el
+estado actual del devkit -qué comandos, skills y herramientas trae hoy-, no
+el historial de cambios; se regeneran solo en la card de release de cada
+versión, y ninguna card ordinaria los edita. Un cambio que afecte a los
+proyectos instanciados se declara en la sección "Cambios requeridos" del
+cuerpo del PR: de ahí lo toman la entrada de Documentación de la card y, más
+adelante, la card de release.
 
 ## Guía de redacción
 

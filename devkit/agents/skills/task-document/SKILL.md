@@ -27,13 +27,16 @@ skill no cambia el `Estado` de la card ni toca código.
    diff (`gh pr diff <N>`) y los informes de `pr-review` con sus respuestas
    de `task-fix`. Los hallazgos corregidos entran en la entrada: son parte
    de lo que cambió.
-4. Busca la entrada existente por la relación `Tarea`, nunca por título:
+4. Busca la entrada existente por la relación `Tarea`, con la Clave como
+   segundo argumento para descartar una entrada de referencia ligada a la
+   misma card (p. ej. una decisión congelada, DEVKIT-87):
 
    ```sh
-   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" documentacion <page_id de la card>
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" documentacion <page_id de la card> <Clave>
    ```
 
-   Devuelve `{id, url}` si existe y sale con 1 si no.
+   Devuelve `{id, url}` si existe una entrada cuyo `Título` empieza por
+   `<Clave>:` y sale con 1 si no.
 5. Escribe la entrada con el plugin de Notion. Si existe, reemplaza su
    contenido y actualiza `PR` y `Rama`; si no, créala en **Documentación**
    con `Título` = `<Clave>: <título corto>`, `Proyecto`, `Tarea` = la card,
@@ -94,13 +97,15 @@ skill no cambia el `Estado` de la card ni toca código.
 
    Termina aquí.
 7. Épica: verifica que está `Hecha` (la cierra `task-close.sh`). Crea o
-   actualiza su entrada, buscada igual por `Tarea`, con `Tipo` = `cambio`:
-   una línea por hija con enlace a su entrada (`notion.sh documentacion`
-   con el id de cada hija) y la sección "Cambios requeridos" unificada. Una
-   hija sin entrada se nombra como tal, sin inventar su contenido. No hay PR
-   ni marcador. La sección "Modelos" de la Épica lleva solo la línea
-   "Documentado con ..." de esta ejecución: las marcas de cada hija están en
-   su propia entrada.
+   actualiza su entrada, buscada igual por `Tarea` con la Clave de la Épica
+   como segundo argumento (`notion.sh documentacion <id de la Épica>
+   <Clave de la Épica>`), con `Tipo` = `cambio`: una línea por hija con
+   enlace a su entrada, buscada de la misma forma (`notion.sh documentacion
+   <id de la hija> <Clave de la hija>`), y la sección "Cambios requeridos"
+   unificada. Una hija sin entrada se nombra como tal, sin inventar su
+   contenido. No hay PR ni marcador. La sección "Modelos" de la Épica lleva
+   solo la línea "Documentado con ..." de esta ejecución: las marcas de cada
+   hija están en su propia entrada.
 
 ## Modo headless
 

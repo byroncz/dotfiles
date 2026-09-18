@@ -71,14 +71,15 @@
 # Desde DEVKIT-54, el modelo no se elige por Tipo de la card sino por el papel
 # de la skill en el flujo: `roles.toml` declara una lista `frontera` ordenada
 # de alias de modelo y cada rol un `model_index` (posición 1-based desde la
-# que empieza a buscar). El Tipo sigue eligiendo prefijo de rama y sección
-# del CHANGELOG, pero ya no modelo. Desde DEVKIT-61, `implementacion.rondas`
+# que empieza a buscar). El Tipo sigue eligiendo prefijo de rama, pero ya no
+# modelo. Desde DEVKIT-61, `implementacion.rondas`
 # cambia modelo y esfuerzo según cuántas veces se corrigió el PR (ver
 # `model_effort_of`).
 # Los permisos (qué puede correr una skill sin pedir permiso) siguen en
 # `devkit/agents/settings.json`: este script no los toca ni los reemplaza.
-# `docs/ARCHITECTURE.md` 8.2 documenta que la lista `allow` de ese archivo no
-# restringe nada en modo `-p`/headless (se probó con `claude -p` real:
+# La entrada de Documentación "Arquitectura del devkit" (Notion), sección 8.2,
+# documenta que la lista `allow` de ese archivo no restringe nada en modo
+# `-p`/headless (se probó con `claude -p` real:
 # comandos fuera de `allow` corren igual); lo que sí bloquea es la lista
 # `deny` y el hook `pr-guard.sh`, que ya registra en
 # `/run/devkit/denials.log` cada comando que rechaza, para ampliar sus
@@ -1448,7 +1449,7 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
 # lanzado dentro de otro, caso raro) cuenta como "en curso" recién cuando
 # aparece en `ps` con la ruta de su log, no antes; `estado_filas` también lo
 # detecta por su patrón `--sync /<skill> <arg>` en la lista de procesos. Ver
-# docs/ARCHITECTURE.md 4.4.
+# la entrada de Documentación "Arquitectura del devkit" (Notion), sección 4.4.
 agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
   local wlog=$1 ahora=$2 procesos lanz ids candado=libre en_curso=0
   local -A done_ids
@@ -2377,7 +2378,7 @@ FIN
   check "pregunta_abierta: regla original, termina en ?" si \
     "$(pregunta_abierta '¿qué credencial uso?' && echo si || echo no)"
   check "pregunta_abierta: un cierre normal no dispara la barrera" no \
-    "$(pregunta_abierta 'Completé DEVKIT-40: cambios en el Dockerfile y el CHANGELOG. PR #25 abierto y en Revisión automática.' && echo si || echo no)"
+    "$(pregunta_abierta 'Completé DEVKIT-40: cambios en el Dockerfile y las notas de la versión. PR #25 abierto y en Revisión automática.' && echo si || echo no)"
   local resultado_linea resultado_frase resultado_opciones
   resultado_linea=$'Reuní el contexto necesario.\n\n¿Prefieres que continúe con el plan A o el plan B?\nDime cuál y sigo enseguida.'
   check "pregunta_abierta: línea que empieza por ¿ en el último párrafo, sin terminar en ?" si \
@@ -2843,7 +2844,7 @@ FIN
 {"result": "DEVKIT-65 entregada: PR #46 abierto con auto-merge, card en Revisión automática.\n\n**Resumen del cambio:** `run_claude` en `devkit-run.sh` ahora arma el `claude -p` hijo con `env -i` y una lista blanca de entorno (en vez de heredarlo tal cual), así un `task-start` lanzado por `epic-plan` anidado no arrastra las marcas de sesión anidada del padre (`CLAUDECODE`, etc.). Antes de lanzar, prueba con `claude mcp list` que Notion está conectada; si no, avisa con `ALARMA:` y no lanza. Si el propio resultado dice \"sin acceso a Notion\" pese a que la sonda pasó, bloquea la card. `--allowedTools` y `settings.json` cubren los dos nombres conocidos del conector. Documentado en README y en la entrada de Notion; 115+114 casos de autoprueba en verde, sin regresiones.\n\n**Limitación que dejé anotada en la card y el PR:** no pude correr la prueba real de punta a punta (una Épica completa lanzada por `epic-plan` en el contenedor de producción) porque esta sesión corre en una sandbox de agente en la nube, no en el devkit Docker real con Notion/GitHub conectados. Queda para confirmar quien revise o el humano.", "total_cost_usd": 0.01, "num_turns": 2}
 FIN
   cat >"$tmp/result-task-fix-46-ce49aa6.json" <<'FIN'
-{"result":"PR #46: corregí los 3 hallazgos (H10, H11, H12), no descarté ninguno. Head nuevo: `61eadf8`.\n\n- **H10:** `devkit-run.sh` ahora decide que el agente se quedó sin acceso a Notion sobre todo por el campo `permission_denials` del `result`. El texto queda de respaldo: \"notion\" y la frase de falta de acceso deben ir en la misma oración. Además, hice algo que el revisor no pidió: antes de buscar, se descarta lo que va entre comillas o backticks. Sin ese paso, los dos `result` reales (`pr-review-46-7fdb66e.log` y `task-start-1.log`) seguirían bloqueando la card, porque citan entre comillas la frase \"sin acceso a Notion\". Probé la detección con los 7 logs reales de `/run/devkit` y ninguno bloquea. Sumé a la autoprueba esos dos `result` reales, que no bloquean, y un caso que sí bloquea por `permission_denials`. También actualicé el README.\n- **H11:** `forzar_task_block` recibe el motivo como tercer argumento. Cuando falta Notion, la card ya no queda bloqueada con el motivo de \"pregunta abierta\". La autoprueba comprueba el motivo en los dos casos.\n- **H12:** agregué al CHANGELOG, en \"Sin publicar\", una viñeta sobre este bloqueo automático.\n\nLa autoprueba `devkit-run.sh --test` pasa con 125 casos correctos, y `bash -n` pasa sin errores. Publiqué la respuesta en el PR con el marcador que lee `pr-review`, sin `manual=1` porque me lanzó el bucle. Después avisé al bucle para que revise.\n\nPor error publiqué antes en el PR un comentario de prueba incompleto. Lo borré enseguida y no afecta al ciclo.","total_cost_usd":0.01,"num_turns":2}
+{"result":"PR #46: corregí los 3 hallazgos (H10, H11, H12), no descarté ninguno. Head nuevo: `61eadf8`.\n\n- **H10:** `devkit-run.sh` ahora decide que el agente se quedó sin acceso a Notion sobre todo por el campo `permission_denials` del `result`. El texto queda de respaldo: \"notion\" y la frase de falta de acceso deben ir en la misma oración. Además, hice algo que el revisor no pidió: antes de buscar, se descarta lo que va entre comillas o backticks. Sin ese paso, los dos `result` reales (`pr-review-46-7fdb66e.log` y `task-start-1.log`) seguirían bloqueando la card, porque citan entre comillas la frase \"sin acceso a Notion\". Probé la detección con los 7 logs reales de `/run/devkit` y ninguno bloquea. Sumé a la autoprueba esos dos `result` reales, que no bloquean, y un caso que sí bloquea por `permission_denials`. También actualicé el README.\n- **H11:** `forzar_task_block` recibe el motivo como tercer argumento. Cuando falta Notion, la card ya no queda bloqueada con el motivo de \"pregunta abierta\". La autoprueba comprueba el motivo en los dos casos.\n- **H12:** agregué al registro de cambios, en \"Sin publicar\", una viñeta sobre este bloqueo automático.\n\nLa autoprueba `devkit-run.sh --test` pasa con 125 casos correctos, y `bash -n` pasa sin errores. Publiqué la respuesta en el PR con el marcador que lee `pr-review`, sin `manual=1` porque me lanzó el bucle. Después avisé al bucle para que revise.\n\nPor error publiqué antes en el PR un comentario de prueba incompleto. Lo borré enseguida y no afecta al ciclo.","total_cost_usd":0.01,"num_turns":2}
 FIN
   local caso_real
   for caso_real in pr-review-46-7fdb66e task-start-1 task-fix-46-ce49aa6; do

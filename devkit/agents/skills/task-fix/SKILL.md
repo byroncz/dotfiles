@@ -74,8 +74,8 @@ trabajo de `pr-review`.
    - Lee solo los archivos que el hallazgo nombra y lo que haga falta para
      entenderlos. No releas el PR entero ni la card.
    - Aplica el cambio mínimo que resuelve "qué falla" siguiendo "qué hacer".
-     Si el hallazgo obliga a tocar documentación (regla de `AGENTS.md`:
-     README, Notion, `CHANGELOG.md`), hazlo en el mismo commit.
+     Si el hallazgo obliga a corregir la sección "Cambios requeridos" del PR
+     (regla de `AGENTS.md`), hazlo en el mismo commit.
    - Un commit por hallazgo, con Conventional Commits y la Clave como
      ámbito, empezando por el id: `fix(DEVKIT-13): H2 validar el marcador`.
      Si dos hallazgos se resuelven con el mismo cambio, un solo commit y las

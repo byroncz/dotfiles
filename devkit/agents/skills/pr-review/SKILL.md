@@ -94,11 +94,9 @@ es trabajo de `task-fix`.
      autor se repite o se marca `No verificado`.
    - **Lectura adversarial del diff.** Busca lo que rompe, lo que queda fuera
      del alcance de la card, lo que contradice `AGENTS.md`, nombres viejos
-     que sobreviven (`git grep`), scripts sin `bash -n`, y las dos reglas de
-     documentación: un comando, script o skill nuevo o cambiado sin su fila
-     en `README.md` y en la entrada "Stack y comandos del devkit"; un cambio
-     que afecte a los proyectos instanciados sin entrada en
-     `devkit/CHANGELOG.md`, sección "Sin publicar".
+     que sobreviven (`git grep`), scripts sin `bash -n`, y la regla de
+     documentación: un cambio que afecte a los proyectos instanciados sin su
+     sección "Cambios requeridos" en el cuerpo del PR.
    - **Agota la clase, no el caso.** Cuando un hallazgo es una instancia de
      un patrón más amplio (una sintaxis con variantes, la misma validación
      repetida en varios lugares), busca y reporta todas las variantes en

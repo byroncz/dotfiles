@@ -33,9 +33,14 @@ dice otro código, detente.
      revisar a mano".
    - Commit `chore(<CÓDIGO>-0): actualizar template a <X.Y.Z>` con
      `.devkit/devkit.toml` y, si se tocó, `AGENTS.md`. Push.
+   - Notas de la versión, igual que `template-update` paso 2:
+     `gh release view v<X.Y.Z> --repo byroncz/dotfiles --json body --jq .body`,
+     repitiendo la consulta por cada versión intermedia entre la que tenía el
+     proyecto y `<X.Y.Z>`. Si el salto es MAJOR, agrega también los cambios
+     manuales requeridos que esas notas describan.
    - `gh pr create --base main --title "<CÓDIGO>-0 Actualizar template a
-     <X.Y.Z>"` con cuerpo: entradas del changelog entre versiones y, si es
-     MAJOR, los cambios manuales requeridos. `gh pr merge --auto --squash`.
+     <X.Y.Z>"` con cuerpo: el resumen de esas notas y, si aplica, los cambios
+     manuales requeridos. `gh pr merge --auto --squash`.
    - Borra el directorio temporal.
 4. Reporta una línea por proyecto: nombre, versión actual, URL del PR.
 
