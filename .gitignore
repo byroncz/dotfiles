@@ -13,3 +13,8 @@
 # fuera del contenedor los respete igual.
 *.local
 *.local.*
+
+# Serie histórica de costo por card (DEVKIT-89): la escriben watch.sh y
+# devkit-run.sh en cada lanzamiento, vive fuera de tmpfs a propósito (por eso
+# no está en /run/devkit) pero no es código ni algo que el repo deba versionar.
+/.devkit/costos.log

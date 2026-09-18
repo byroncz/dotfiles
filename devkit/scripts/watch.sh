@@ -72,6 +72,11 @@ LAUNCHED="$RUN_DIR/launched"
 POKE="$RUN_DIR/poke"
 LOCK="$RUN_DIR/skill.lock"
 WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
+# Copia de las líneas `lanzando`/`terminado` fuera de tmpfs (DEVKIT-89): sin
+# ella, la única evidencia de costo por card muere en cada `devkit recreate`.
+# devkit-run.sh no se importa de este archivo: repite la misma variable y las
+# mismas funciones (mismo patrón que INTERVALO_BUCLE en ese script).
+COSTOS_LOG_FILE="${DEVKIT_COSTOS_LOG:-$WS/.devkit/costos.log}"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
 # `devkit-run.sh` es el único punto de lanzamiento (DEVKIT-45): resuelve
@@ -231,7 +236,35 @@ fi
 cd "$WS" 2>/dev/null || exit 0
 mkdir -p "$RUN_DIR"
 touch "$LAUNCHED"
-log() { printf '%s %s\n' "$(date +%FT%T%:z)" "$*"; }
+
+# ¿La línea (ya con fecha) es un lanzamiento o un cierre de una de las seis
+# skills que mide `devkit-run --costos` (DEVKIT-89: task-start, pr-review,
+# task-fix, task-document, task-close, epic-plan)? Sin este filtro,
+# costos.log arrastraría también las líneas narrativas ("PR #31 ... lanzando
+# pr-review") y las de task-block/task-next, que no aportan costo/turnos y
+# solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
+costos_log_candidata() {  # costos_log_candidata <línea con fecha>
+  case "$1" in
+    *" lanzando "*|*" terminado"*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'
+}
+
+# Copia a costos.log, si corresponde (DEVKIT-89). devkit-run.sh tiene su
+# propia copia de esta función: los dos scripts no se importan entre sí.
+costos_log() {  # costos_log <línea completa, con fecha>
+  costos_log_candidata "$1" || return 0
+  mkdir -p "$(dirname "$COSTOS_LOG_FILE")" 2>/dev/null
+  printf '%s\n' "$1" >> "$COSTOS_LOG_FILE" 2>/dev/null
+}
+
+log() {
+  local linea
+  linea="$(date +%FT%T%:z) $*"
+  printf '%s\n' "$linea"
+  costos_log "$linea"
+}
 
 # `cuota:<clave>` es la misma entrada, reescrita mientras la skill espera a que
 # se reinicie la cuota (DEVKIT-27): para el bucle cuenta como lanzada, así que
@@ -439,8 +472,8 @@ run_skill() {
   # corta por bytes y partiría un acento, y --estado ya no reconocería la
   # línea.
   en_linea=$(printf '%s' "$prompt" | tr '\n"' '  ')
-  printf '%s %s lanzando (origen=bucle) modelo=%s esfuerzo=%s ronda=%s: "%s" log=%s\n' \
-    "$(date +%FT%T%:z)" "$name" "${modelo:--}" "${esfuerzo:--}" "${ronda:--}" "${en_linea:0:120}" "$logf"
+  log "$(printf '%s lanzando (origen=bucle) modelo=%s esfuerzo=%s ronda=%s: "%s" log=%s' \
+    "$name" "${modelo:--}" "${esfuerzo:--}" "${ronda:--}" "${en_linea:0:120}" "$logf")"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
   # mismo workspace se pisarían la rama.

@@ -130,12 +130,24 @@ marca() {  # marca <verbo> <texto>: última línea "<verbo> con ..." del texto
 }
 marca_impl=$(marca Implementado "$(jq -r '.body // ""' <<<"$pr_json")")
 marca_rev=$(marca Revisado "$(jq -r '[(.reviews // [])[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body // ""' <<<"$pr_json")")
-marcas="${marca_impl:-Implementado: sin marca en el PR}. ${marca_rev:-Revisado: sin marca en el último informe}. Cierre sin modelo (task-close.sh)."
 
 # --- Card ------------------------------------------------------------------
 transicion=0
 doc_url=""
 if [ "$estado" != "Hecha" ]; then
+  # --- Costo de la card (DEVKIT-89) ------------------------------------------
+  # Misma cuenta que la fila TOTAL de `devkit-run --costos <Clave>`: turnos,
+  # costo y minutos ya sumados en costos.log más el número de revisiones
+  # (lanzamientos de pr-review). Solo lo que ya está en el log; nunca se
+  # estima. Solo se calcula aquí, no en la card "ya Hecha": ese caso no
+  # comenta nada y no debe lanzar `devkit-run` de más.
+  costo_linea=""
+  if totales=$("$DEVKIT_RUN" --costos-totales "$clave" 2>/dev/null) && [ -n "$totales" ]; then
+    IFS=$'\t' read -r c_turnos c_costo c_min c_rev <<<"$totales"
+    costo_linea=" Costo: $c_turnos turnos, $c_costo USD, $c_min min, $c_rev revisiones."
+  fi
+  marcas="${marca_impl:-Implementado: sin marca en el PR}. ${marca_rev:-Revisado: sin marca en el último informe}. Cierre sin modelo (task-close.sh).$costo_linea"
+
   props=(Estado=Hecha "Cierre=$HOY")
   [ -n "$(jq -r '.pr // ""' <<<"$card")" ] || props+=("PR=$pr_url")
   "$NOTION" set "$id" "${props[@]}" || { say "no pude pasar $clave a Hecha"; exit 1; }
