@@ -39,6 +39,13 @@ que un script no puede: repasar los criterios y redactar el cuerpo del PR.
    "Implementado con ...", DEVKIT-58) y borra el archivo al terminar; no las
    escribas a mano.
 
+   Si esta card cambió una decisión de diseño -no solo la implementó-, agrega
+   además una línea `Tipo: decisión` en cualquier parte de `pr-body.md`
+   (DEVKIT-92). `watch.sh` la detecta en el cuerpo del PR y, al OK del
+   revisor, lanza el agente `task-document` en vez del script mecánico: una
+   entrada "decisión" necesita razonar el porqué, no copiarlo de ningún lado.
+   Sin esta marca, la entrada que se escribe es "cambio", sin agente.
+
 3. Ejecuta:
 
    ```sh

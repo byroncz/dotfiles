@@ -492,6 +492,19 @@ cat >"$CICLO/devkit-run.sh" <<'FIN'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FAKE_NOTION/lanzamientos"
 FIN
+# Doble de task-document.sh (DEVKIT-92): task-close.sh ya no lanza el agente
+# para una card de Nivel Tarea, así que aquí no hace falta un `claude` de
+# mentira; basta con anotar la llamada y responder como si hubiera escrito la
+# entrada. `$FAKE_NOTION/task-document-falla` simula que no pudo.
+cat >"$CICLO/task-document.sh" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_NOTION/task-document-llamadas"
+if [ -f "$FAKE_NOTION/task-document-falla" ]; then
+  echo "task-document: fake fallo" >&2
+  exit 1
+fi
+echo "task-document: $1 documentado: https://notion.so/doc-3"
+FIN
 # gh de mentira: `pr list` devuelve la línea ya formateada que produciría el
 # --jq de watch.sh; `pr view` distingue la consulta de watch.sh (solo
 # comentarios) de la de task-close.sh (estado y merge commit).
@@ -505,7 +518,7 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 FIN
-chmod +x "$CICLO/notion.sh" "$CICLO/devkit-run.sh" "$CICLO/bin/gh"
+chmod +x "$CICLO/notion.sh" "$CICLO/devkit-run.sh" "$CICLO/task-document.sh" "$CICLO/bin/gh"
 
 # tarea <id> <numero> <estado> <orden> <depende (ids separados por coma)>
 tarea() {
@@ -534,24 +547,55 @@ FIN
 chmod +x "$CICLO/ps-vacio"
 ciclo_env=(FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH"
            DEVKIT_NOTION_BIN="$CICLO/notion.sh" DEVKIT_RUN_BIN="$CICLO/devkit-run.sh"
+           DEVKIT_TASK_DOCUMENT_BIN="$CICLO/task-document.sh"
            DEVKIT_PS_BIN="$CICLO/ps-vacio"
            DEVKIT_WS="$CICLO/ws" DEVKIT_RUN_DIR="$CICLO/run" DEVKIT_HOY=2026-09-16)
 
-# 1. OK del revisor: el bucle decide documentar y task-document corre con el
-#    rol de implementación: sin PR legible es la ronda 1 de la escalera del
-#    template, `sonnet:high` (DEVKIT-61).
+# 1. OK del revisor: el bucle decide documentar.
 check "ciclo: OK sin documentar" documentar a1 "$(rev T01 a1 OK)" --
-corre_documentar() {
+
+# task-document.sh en bash para la entrada "cambio"; el agente solo si el
+# cuerpo del PR trae "Tipo: decisión" (DEVKIT-92, absorbe DEVKIT-83 y
+# DEVKIT-84: ya no hay ronda, modelo ni segundo lanzamiento que evitar).
+DOC_FAKE="$TMP/task-document-fake"
+mkdir -p "$DOC_FAKE"
+cat >"$DOC_FAKE/task-document.sh" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$DOC_FAKE_LOG"
+echo "task-document: $1 documentado: https://notion.so/doc-x"
+FIN
+chmod +x "$DOC_FAKE/task-document.sh"
+
+corre_documentar() {  # corre_documentar <cuerpo del PR>
   local dir
   dir=$(mktemp -d -p "$TMP")
   OUT="$dir/watch.log"
-  DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS=0 \
+  DOC_LOG="$dir/doc-llamadas"
+  DOC_FAKE_LOG="$DOC_LOG" DEVKIT_TASK_DOCUMENT_BIN="$DOC_FAKE/task-document.sh" \
+  DEVKIT_TEST_COUNT="$dir/claude-llamadas" DEVKIT_TEST_FAILS=0 \
   DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
   DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
-    bash "$WATCH" --run-skill "task-document-40-a1" "/task-document DEVKIT-3 40" "documentar:40:a1" >"$OUT" 2>&1
+    bash "$WATCH" --documentar 40 DEVKIT-3 a1 "$1" >"$OUT" 2>&1
+  CLAUDE_LLAMADAS=$(cat "$dir/claude-llamadas" 2>/dev/null || echo 0)
 }
-corre_documentar
-check_log "ciclo: task-document corre con la ronda 1" 'task-document-40-a1 terminado: modelo=sonnet esfuerzo=high ronda=1'
+
+corre_documentar "## Qué cambia
+algo"
+check_log "ciclo: sin marca, task-document.sh corre en bash" 'task-document-40-a1 terminado: bash ::'
+check_igual "ciclo: task-document.sh recibe la Clave y el número de PR" "DEVKIT-3 40" \
+  "$(cat "$DOC_LOG" 2>/dev/null)"
+check_igual "ciclo: sin marca, no lanza el agente" 0 "$CLAUDE_LLAMADAS"
+
+corre_documentar "Tipo: decisión
+
+## Qué cambia
+algo"
+check_log "ciclo: con \"Tipo: decisión\", lanza el agente task-document" \
+  'task-document-40-a1 lanzando \(origen=bucle\).*"/task-document DEVKIT-3 40"'
+check_igual "ciclo: con \"Tipo: decisión\", no llama al script" 0 \
+  "$([ -s "$DOC_LOG" ] && echo 1 || echo 0)"
+check_igual "ciclo: con \"Tipo: decisión\", el agente corre" 1 "$CLAUDE_LLAMADAS"
+
 # 2. task-document deja su marcador: ya no hay nada que hacer hasta el merge.
 check "ciclo: documentado, espera el merge" nada a1 "$(rev T01 a1 OK)" -- "$(doc T02 a1)"
 
@@ -598,24 +642,28 @@ check_igual "task-close: PR no mergeado no cierra" "task-close: PR no mergeado: 
   "$(env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 2>&1 | tail -1)"
 jq '.state = "MERGED" | .comments = []' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
 
-# Sin entrada de Documentación (merge antes de que el bucle documentara): se
-# cierra igual y se lanza task-document.
-rm -f "$N/doc-card-3.json"; : >"$N/llamadas"; : >"$N/lanzamientos"
+# Sin entrada de Documentación (merge antes de que el bucle documentara, o
+# task-document.sh no pudo escribirla): se cierra igual, llamando siempre al
+# script -ya no al agente, ni con la guarda por proceso vivo que pedía
+# DEVKIT-55 H3, innecesaria con un script bash idempotente (DEVKIT-92)- y el
+# comentario dice que sigue faltando.
+rm -f "$N/doc-card-3.json"; : >"$N/llamadas"; : >"$N/task-document-llamadas"
 env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
-check_igual "task-close: sin Documentación lanza task-document" "task-document DEVKIT-3" \
-  "$(grep '^task-document' "$N/lanzamientos")"
-# Con task-document ya corriendo para la Clave (merge aprobado mientras escribe
-# la entrada): no se relanza y el comentario no dice que falta.
-cat >"$CICLO/ps-documentando" <<'FIN'
-#!/usr/bin/env bash
-echo "bash /workspace/devkit/scripts/devkit-run.sh --sync /task-document DEVKIT-3 40"
-FIN
-chmod +x "$CICLO/ps-documentando"
+check_igual "task-close: llama a task-document.sh con la Clave y el PR" "DEVKIT-3 https://github.com/o/r/pull/40" \
+  "$(cat "$N/task-document-llamadas" 2>/dev/null)"
+check_igual "task-close: sin entrada, el comentario dice que falta" 1 \
+  "$(grep -c '^comentar card-3 Cerrada. Falta la entrada de Documentación: task-document.sh no pudo escribirla.' "$N/llamadas")"
+
+# task-document.sh es idempotente (DEVKIT-92): con la entrada ya escrita para
+# el head vigente, task-close.sh lo llama igual -es bash, no cuesta nada- y
+# el comentario trae la URL de siempre, sin relanzar ni un agente ni nada más.
+printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
 tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
-: >"$N/llamadas"; : >"$N/lanzamientos"
-env "${ciclo_env[@]}" DEVKIT_PS_BIN="$CICLO/ps-documentando" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
-check_igual "task-close: con task-document en curso no lo relanza" "0 comentar card-3 Cerrada. La entrada de Documentación la está escribiendo task-document. Implementado con opus, esfuerzo high. Revisado con fable, esfuerzo high. Cierre sin modelo (task-close.sh)." \
-  "$(grep -c '^task-document' "$N/lanzamientos") $(grep '^comentar card-3' "$N/llamadas" | head -1)"
+: >"$N/llamadas"; : >"$N/task-document-llamadas"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close: entrada ya escrita, llama igual al script y comenta con su URL" \
+  "DEVKIT-3 https://github.com/o/r/pull/40 1" \
+  "$(cat "$N/task-document-llamadas" 2>/dev/null) $(grep -c '^comentar card-3 Cerrada. Documentación: https://notion.so/doc-3.' "$N/llamadas")"
 
 # PR sin marcas (anterior a DEVKIT-58, o una sesión interactiva que no las
 # escribió): el comentario lo dice, no inventa un modelo.
