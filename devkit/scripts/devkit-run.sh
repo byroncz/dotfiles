@@ -1308,7 +1308,15 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
     [ -n "$pid" ] || continue
     case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
     prompt=${resto#*" -p "}
-    prompt=${prompt%% --*}
+    # `run_claude` siempre pone `--model` justo después del prompt (:585):
+    # cortar ahí, no en el primer " --", evita partir un comentario humano
+    # que trae sus propias banderas (DEVKIT-81 H10). La sonda de modelo y la
+    # de cuota no pasan por `run_claude`; la de cuota no lleva `--model`, así
+    # que se cae al corte por el primer " --" de siempre.
+    case "$prompt" in
+      *" --model "*) prompt=${prompt% --model *} ;;
+      *) prompt=${prompt%% --*} ;;
+    esac
     case "$prompt" in ok|/usage) continue ;; esac
     # Comparar contra la misma forma que quedó en la línea "lanzando"
     # (DEVKIT-81 H2): sin comillas ni saltos de línea y cortada a 120
@@ -2725,6 +2733,29 @@ FIN
   chmod +x "$pslist_comillas"
   check "sin registro: un prompt con comillas normaliza igual que la línea lanzando" 0 \
     "$(PS_BIN="$pslist_comillas" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
+  # DEVKIT-81 H10: un comentario humano que trae " --" (por ejemplo "no uses
+  # --forzar aquí") no debe cortarse ahí: `run_claude` siempre pone
+  # `--model` justo después del prompt, así que cortar en el primer " --"
+  # partía el prompt antes de tiempo y daba un falso "sin registro".
+  local comentario_guiones prompt_guiones log_guiones pslist_guiones
+  comentario_guiones="no uses --forzar aquí"
+  prompt_guiones="/task-fix DEVKIT-91 $comentario_guiones"
+  log_guiones="$tmp/guiones-watch.log"
+  : >"$est/task-fix-91.log"
+  printf '%s task-fix-91 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "%s" log=%s/task-fix-91.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$(prompt_en_linea "$prompt_guiones")" "$est" >"$log_guiones"
+  pslist_guiones="$tmp/ps-guiones"
+  cat >"$pslist_guiones" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+703 claude -p $prompt_guiones --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_guiones"
+  check "sin registro: un comentario humano con -- no se corta ahí" 0 \
+    "$(PS_BIN="$pslist_guiones" LOCK="$est/skill.lock" estado_filas "$log_guiones" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: un lanzamiento fuera de la cola visible (ESTADO_FILAS, 20
