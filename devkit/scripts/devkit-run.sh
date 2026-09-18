@@ -885,19 +885,28 @@ pregunta_abierta() {  # pregunta_abierta <resultado>
 # "¿tomo la siguiente card?" y esta barrera la mandaba a `Bloqueada` sin que
 # hiciera falta: nadie iba a leer ese bloqueo, porque la card ya estaba
 # resuelta. Deja la alarma en `watch.log` para que quede visible, pero no
-# toca Notion ni corre `task-block.sh`.
-forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo>
-  local prompt=$1 logf=$2 motivo skill clave estado
+# toca Notion ni corre `task-block.sh`. H4: esa alarma cita el motivo
+# recibido en vez de asumir que siempre fue una pregunta, porque esta misma
+# barrera también se dispara por falta de acceso a Notion (DEVKIT-65). H5:
+# la alarma genérica del llamador se imprime aquí, después de saber si la
+# card está Hecha, para no duplicarla con la de la card Hecha sobre el mismo
+# evento.
+forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma>
+  local prompt=$1 logf=$2 motivo=$3 alarma=$4 skill clave estado
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
-  [ -n "$clave" ] || return 0
+  if [ -z "$clave" ]; then
+    printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
+    return 0
+  fi
   estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
   if [ "$estado" = "Hecha" ]; then
-    printf '%s devkit-run "%s" ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea\n' \
-      "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
+    printf '%s devkit-run "%s" ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea (%s)\n' \
+      "$(date +%FT%T%:z)" "$prompt" "$motivo" >> "$WATCH_LOG"
     return 1
   fi
-  motivo="devkit-run: $skill $3; ver $logf"
+  printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
+  motivo="devkit-run: $skill $motivo; ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
 }
@@ -2446,16 +2455,18 @@ FIN
     DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-76 >/dev/null 2>&1
   espera=0
-  while ! grep -q 'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' \
+  while ! grep -q 'ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea' \
       "$tmp/run/watch.log" 2>/dev/null && [ "$espera" -lt 40 ]; do
     sleep 0.1
     espera=$((espera + 1))
   done
   check "card Hecha: no llama a task-block.sh" 1 \
     "$([ -e "$tmp/bloqueo.args" ] && echo 0 || echo 1)"
-  check "card Hecha: deja la alarma sin bloquear" \
-    'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' \
-    "$(grep -oE 'ALARMA: terminó preguntando sobre una card ya Hecha; no se bloquea' "$tmp/run/watch.log" | head -1)"
+  check "card Hecha: deja la alarma sin bloquear, con el motivo real (H4)" \
+    'ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea (terminó con una pregunta abierta' \
+    "$(grep -oE 'ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea \(terminó con una pregunta abierta' "$tmp/run/watch.log" | head -1)"
+  check "card Hecha: una sola ALARMA, no la genérica y la de Hecha (H5)" 1 \
+    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
 
   # Card En progreso: sigue bloqueando, es el comportamiento anterior a esta
   # card y la barrera de DEVKIT-50/DEVKIT-44 sigue siendo correcta ahí.
@@ -3866,20 +3877,18 @@ case "${1:-}" in
     if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if pregunta_abierta "$resultado"; then
-        printf '%s devkit-run "%s" ALARMA: terminó con una pregunta abierta en vez de un estado observable\n' \
-          "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf" \
-          "terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44)"
+          "terminó con una pregunta abierta en vez de un estado observable (barrera mecánica de DEVKIT-50 sobre DEVKIT-44)" \
+          "ALARMA: terminó con una pregunta abierta en vez de un estado observable"
       elif notion_denegado "$logf"; then
         # La sonda de arriba vio Notion conectado, pero la CLI negó una
         # herramienta de Notion (DEVKIT-65): mismo remedio que la pregunta
         # abierta, la card queda sin resolver y necesita al humano. H11: con
         # su propio motivo, para que el humano no busque una pregunta que no
         # existe.
-        printf '%s devkit-run "%s" ALARMA: terminó sin acceso a Notion (permission_denials)\n' \
-          "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
         forzar_task_block "$prompt" "$logf" \
-          "terminó sin acceso a Notion pese a que \`claude mcp list\` la vio conectada (DEVKIT-65)"
+          "terminó sin acceso a Notion pese a que \`claude mcp list\` la vio conectada (DEVKIT-65)" \
+          "ALARMA: terminó sin acceso a Notion (permission_denials)"
       elif result_sin_notion "$logf"; then
         # H13 de pr-review: el texto solo avisa; el humano mira el resultado.
         printf '%s devkit-run "%s" ALARMA: el resultado describe falta de acceso a Notion (ver resultado)\n' \
