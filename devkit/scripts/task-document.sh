@@ -56,6 +56,15 @@ marca_linea() {  # marca_linea <verbo> <texto>
   printf '%s\n' "$2" | tr -d '\r' | grep -oE "$1 con [^,]+, esfuerzo .+" | tail -1 | sed -E 's/[[:space:].]+$//'
 }
 
+# ¿El cuerpo del PR trae la marca "Tipo: decisión" (mismo criterio que
+# es_decision en watch.sh)? Esa entrada la escribe el agente task-document,
+# que razona el porqué en vez de copiarlo; si este script la crea o la
+# reemplaza igual, pisa o duplica el trabajo del agente cuando task-close.sh
+# llama siempre, sin mirar la marca (informe del PR 66, H1).
+es_decision() {  # es_decision <cuerpo del PR>
+  printf '%s\n' "$1" | tr -d '\r' | grep -qx 'Tipo: decisión'
+}
+
 # Cada informe de pr-review (marcador, sha corto, veredicto, marca "Revisado
 # con ...", en orden cronológico).
 REVISIONES='
@@ -120,6 +129,11 @@ principal() {
   num=$(jq -r .number <<<"$pr_json")
   state=$(jq -r .state <<<"$pr_json")
   body=$(jq -r '.body // ""' <<<"$pr_json" | tr -d '\r')
+
+  if es_decision "$body"; then
+    say "$clave marcado Tipo: decisión; la entrada la escribe el agente task-document"
+    return 0
+  fi
 
   local ya_marcado doc doc_rc
   ya_marcado=$(jq --arg sha "$head" '[.comments[] | select(.body // "" | test("<!-- devkit-doc sha=" + $sha + " -->"))] | length' <<<"$pr_json")
@@ -331,6 +345,21 @@ FIN
   env "${entorno[@]}" bash "$HERE/task-document.sh" DEVKIT-9 >/dev/null
   check "hallazgos corregidos entran en Por qué, con el texto original" 1 \
     "$(grep -c '^- H1: rompe algo$' "$tmp/notion/cuerpo-creado.txt")"
+
+  # Marcado "Tipo: decisión" (informe del PR 66, H1): la entrada la escribe
+  # el agente task-document, no este script; ni crea ni reemplaza, aunque no
+  # exista entrada previa ni marcador para el head.
+  jq -nc '{state:"OPEN", number:9, url:"https://github.com/o/r/pull/9",
+    headRefOid:"d1", headRefName:"feat/DEVKIT-9-x", mergeCommit:null,
+    body:"## Qué cambia\nAlgo.\n\nTipo: decisión\n\n## Cómo probarlo\nx\n\n## Cambios requeridos\nNinguno.",
+    reviews:[], comments:[]}' >"$tmp/gh/pr.json"
+  rm -f "$tmp/notion/doc.json"
+  : >"$tmp/notion/llamadas"; : >"$tmp/gh/comentarios"
+  salida=$(env "${entorno[@]}" bash "$HERE/task-document.sh" DEVKIT-9)
+  check "Tipo: decisión: sale con 0 y avisa que la escribe el agente" \
+    "task-document: DEVKIT-9 marcado Tipo: decisión; la entrada la escribe el agente task-document" "$salida"
+  check "Tipo: decisión: no crea ni reemplaza" 0 "$(grep -cE '^(crear-doc|reemplazar-doc)' "$tmp/notion/llamadas")"
+  check "Tipo: decisión: no publica el marcador devkit-doc" 0 "$(wc -l <"$tmp/gh/comentarios" | tr -d ' ')"
 
   # Sin PR: comenta en la card y sale con 1, sin bloquear la card.
   jq 'del(.pr)' "$tmp/notion/card.json" >"$tmp/notion/card2.json" && mv "$tmp/notion/card2.json" "$tmp/notion/card.json"
