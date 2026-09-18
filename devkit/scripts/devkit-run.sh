@@ -2521,9 +2521,11 @@ FIN
   # comprueba que ninguno deja ALARMA y que `resumen()` reporta bien el
   # costo y los turnos que le devuelve `claude -p`. H1 de la revisión: el
   # doble de `claude` fija ese costo y esos turnos a mano, así que esto no
-  # mide cuánto gasta de verdad el modelo con la skill nueva; esa evidencia
-  # sale de una corrida real de `devkit-run task-start`, comentada en la
-  # card.
+  # mide cuánto gasta de verdad el modelo con la skill nueva. Esa evidencia
+  # todavía no existe: `task-fix` no puede generarla porque corre con el
+  # candado del workspace tomado, así que queda pendiente de una corrida
+  # real de `devkit-run task-start` con el workspace libre, pedida al
+  # humano con `task-block.sh` (ver el comentario de este PR).
   corto_devkit76() {  # corto_devkit76 <nombre> <resultado>
     local nombre=$1 resultado=$2
     cat >"$tmp/claude-corto-$nombre" <<FIN
