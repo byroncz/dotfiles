@@ -157,6 +157,10 @@ SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
 # Se pueden sustituir por un doble en la autoprueba, para no tocar Notion.
 TASK_BLOCK_BIN="${DEVKIT_TASK_BLOCK_BIN:-$HERE/task-block.sh}"
 TASK_CLOSE_BIN="${DEVKIT_TASK_CLOSE_BIN:-$HERE/task-close.sh}"
+# Pasos mecánicos de task-start, en bash (DEVKIT-90). Sustituible por un doble
+# en la autoprueba: las pruebas que no giran alrededor de él no necesitan un
+# workspace git + Notion completos solo para que task-start arranque.
+TASK_BEGIN_BIN="${DEVKIT_TASK_BEGIN_BIN:-$HERE/task-begin.sh}"
 # Para leer la ronda de un lanzamiento (DEVKIT-61): la card en Notion trae la
 # URL del PR, y gh cuenta sus comentarios devkit-fix. Sustituibles por dobles.
 NOTION_BIN="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
@@ -943,6 +947,25 @@ pregunta_abierta() {  # pregunta_abierta <resultado>
 # la alarma genérica del llamador se imprime aquí, después de saber si la
 # card está Hecha, para no duplicarla con la de la card Hecha sobre el mismo
 # evento.
+# task-begin.sh no dejó la card lista: se registra el motivo y, si la card
+# seguía tomable (Lista o En progreso: lo era antes de intentar, y si falló a
+# mitad de camino sigue siéndolo, porque task-begin.sh solo pasa a Notion
+# Estado=En progreso al final, con la rama ya creada y subida), se bloquea.
+# Backlog/Hecha/Lista para merge/Revisión automática/Bloqueada no se tocan:
+# ahí no hay nada que bloquear, y bloquear una card en pleno ciclo de
+# revisión sería peor que no lanzar nada.
+task_begin_fallo() {  # task_begin_fallo <prompt> <clave> <motivo>
+  local prompt=$1 clave=$2 motivo=${3:-sin motivo} estado
+  printf '%s devkit-run "%s" no lanza: %s\n' "$(date +%FT%T%:z)" "$prompt" "$motivo" >> "$WATCH_LOG" 2>/dev/null
+  estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
+  case "$estado" in
+    Lista|"En progreso")
+      printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG" 2>/dev/null
+      "$TASK_BLOCK_BIN" "$clave" "devkit-run: task-begin.sh no la dejó lista: $motivo" >>"$WATCH_LOG" 2>&1
+      ;;
+  esac
+}
+
 forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma>
   local prompt=$1 logf=$2 motivo=$3 alarma=$4 skill clave estado
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
@@ -2189,6 +2212,20 @@ FIN
   export DEVKIT_NOTION_BIN="$tmp/notion-doble" DEVKIT_GH_BIN="$tmp/gh-doble"
   NOTION_BIN="$tmp/notion-doble" GH_BIN="$tmp/gh-doble"
 
+  # Doble de task-begin.sh (DEVKIT-90), exportado para el resto de la
+  # autoprueba: las pruebas de más abajo que lanzan task-start no giran
+  # alrededor de sus pasos mecánicos (workspace, rama, Notion) y no necesitan
+  # un repositorio git completo solo para que el agente arranque. Las pruebas
+  # que sí prueban task-begin.sh de verdad anulan esta variable con el
+  # binario real, por invocación.
+  cat >"$tmp/task-begin-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "- Clave: $1"
+echo "- Título: card de prueba"
+FIN
+  chmod +x "$tmp/task-begin-doble"
+  export DEVKIT_TASK_BEGIN_BIN="$tmp/task-begin-doble"
+
   # Un doble de `claude` que no gasta cuota: responde bien a cualquier
   # `--model`, así sirve tanto para las comprobaciones de disponibilidad como
   # para los lanzamientos de punta a punta de más abajo.
@@ -2608,6 +2645,7 @@ case "\$2" in
   */epic-plan*)
     DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \\
       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \\
+      DEVKIT_TASK_BEGIN_BIN="$tmp/task-begin-doble" \\
       bash "$HERE/devkit-run.sh" task-start DEVKIT-3 >/dev/null 2>&1
     ;;
 esac
@@ -2788,80 +2826,121 @@ FIN
     'ALARMA: terminó sin entregar ni bloquear (DEVKIT-63): card sigue En progreso, sin PR ni bloqueo' \
     "$(grep -oE 'ALARMA: terminó sin entregar ni bloquear \(DEVKIT-63\): card sigue En progreso, sin PR ni bloqueo' "$tmp/run/watch.log" | head -1)"
 
-  # DEVKIT-76, los tres relanzamientos posibles sobre una card ya no libre:
-  # comprueba que ninguno deja ALARMA y que `resumen()` reporta bien el
-  # costo y los turnos que le devuelve `claude -p`. H1 de la revisión: el
-  # doble de `claude` fija ese costo y esos turnos a mano, así que esto no
-  # mide cuánto gasta de verdad el modelo con la skill nueva. Esa evidencia
-  # todavía no existe: `task-fix` no puede generarla porque corre con el
-  # candado del workspace tomado, así que queda pendiente de una corrida
-  # real de `devkit-run task-start` con el workspace libre, pedida al
-  # humano con `task-block.sh` (ver el comentario de este PR).
-  corto_devkit76() {  # corto_devkit76 <nombre> <resultado>
-    local nombre=$1 resultado=$2
-    cat >"$tmp/claude-corto-$nombre" <<FIN
-#!/usr/bin/env bash
-printf '{"result":"$resultado","total_cost_usd":0.01,"num_turns":1}\n'
-FIN
-    chmod +x "$tmp/claude-corto-$nombre"
+  # DEVKIT-76 + DEVKIT-90: un task-start sobre una card que ya no es tomable
+  # (Hecha, Bloqueada, Revisión automática) ya ni siquiera llega a lanzar un
+  # agente: task-begin.sh la detecta por Notion, antes de cualquier
+  # `claude -p`, y devkit-run deja "no lanza" con su motivo, sin ALARMA y sin
+  # bloquear (nada que bloquear en esos Estados). Antes de DEVKIT-90 el
+  # agente llegaba a correr y respondía él mismo este mismo texto (de ahí
+  # `DEVKIT_CLAUDE_BIN=/bin/false`: si el hook fallara y la llamada llegara
+  # a intentar lanzar un agente, la prueba lo notaría por el fallo, no por un
+  # falso positivo).
+  no_lanza_terminal() {  # no_lanza_terminal <nombre> <Clave> <card JSON> <motivo esperado, con el prefijo de task-begin.sh>
+    local nombre=$1 clave=$2 card_json=$3 motivo=$4
+    printf '%s\n' "$card_json" >"$RONDA_DIR/card-$clave.json"
+    : >"$tmp/run/watch.log"
+    rm -f "$tmp/bloqueo.args"
+    DEVKIT_CLAUDE_BIN=/bin/false DEVKIT_TASK_BEGIN_BIN="$HERE/task-begin.sh" DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+      DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+      DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+      bash "$HERE/devkit-run.sh" task-start "$clave" >/dev/null 2>&1
+    check "$nombre: no lanza, con el motivo de task-begin.sh" "no lanza: $motivo" \
+      "$(grep -oE 'no lanza: .*' "$tmp/run/watch.log" | head -1)"
+    check "$nombre: sin ALARMA de ningún tipo" 0 "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+    check "$nombre: no bloquea (nada que bloquear en ese Estado)" 1 \
+      "$([ -e "$tmp/bloqueo.args" ] && echo 0 || echo 1)"
+    rm -f "$RONDA_DIR/card-$clave.json"
   }
-  corto_devkit76 hecha 'DEVKIT-90 ya está en Hecha (PR https://github.com/o/r/pull/9); no hay nada que hacer.'
-  printf '{"estado":"Hecha"}\n' >"$RONDA_DIR/card-DEVKIT-90.json"
-  : >"$tmp/run/watch.log"
-  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-hecha" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
-    bash "$HERE/devkit-run.sh" task-start DEVKIT-90 >/dev/null 2>&1
-  espera=0
-  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
-        && [ "$espera" -lt 40 ]; do
-    sleep 0.1
-    espera=$((espera + 1))
-  done
-  check "relanzamiento sobre Hecha: devkit-run reporta costo/turnos del doble" \
-    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
-    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
-       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
-  check "relanzamiento sobre Hecha: sin ALARMA de ningún tipo" 0 \
-    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+  # Claves de cuatro cifras a propósito, fuera del rango de una Clave real de
+  # este proyecto: `lanzamiento_duplicado` mira `ps` de verdad (no un doble),
+  # y una Clave de dos cifras coincidió una vez con la propia card que esta
+  # autoprueba corría en ese momento (un `task-start DEVKIT-90` real y vivo
+  # en `ps` durante la corrida de la card DEVKIT-90), lo que hizo que la
+  # prueba se topara con su propio lanzamiento en curso y saliera por el
+  # camino de "ya hay un lanzamiento" en vez de probar task-begin.sh.
+  no_lanza_terminal "relanzamiento sobre Hecha" DEVKIT-9090 \
+    '{"estado":"Hecha","pr":"https://github.com/o/r/pull/9"}' \
+    'task-begin: DEVKIT-9090 ya está en Hecha (PR https://github.com/o/r/pull/9); no hay nada que hacer.'
+  no_lanza_terminal "relanzamiento sobre Bloqueada" DEVKIT-9091 \
+    '{"estado":"Bloqueada"}' \
+    'task-begin: DEVKIT-9091 está bloqueada; el humano debe moverla a En progreso antes de relanzar.'
+  no_lanza_terminal "relanzamiento sobre Revisión automática" DEVKIT-9092 \
+    '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/12"}' \
+    'task-begin: DEVKIT-9092 ya está en Revisión automática (PR https://github.com/o/r/pull/12); no hay nada que hacer.'
 
-  corto_devkit76 bloqueada 'DEVKIT-91 está bloqueada; el humano debe moverla a En progreso antes de relanzar.'
-  printf '{"estado":"Bloqueada"}\n' >"$RONDA_DIR/card-DEVKIT-91.json"
-  : >"$tmp/run/watch.log"
-  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-bloqueada" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
-    bash "$HERE/devkit-run.sh" task-start DEVKIT-91 >/dev/null 2>&1
-  espera=0
-  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
-        && [ "$espera" -lt 40 ]; do
-    sleep 0.1
-    espera=$((espera + 1))
-  done
-  check "relanzamiento sobre Bloqueada: devkit-run reporta costo/turnos del doble" \
-    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
-    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
-       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
-  check "relanzamiento sobre Bloqueada: sin ALARMA de ningún tipo" 0 \
-    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
+  # --- task-begin.sh de verdad (no el doble), con notion.sh simulado -------
+  # Lista y En progreso con Rama: los dos casos que sí tocan git y Notion,
+  # de punta a punta, a través del propio `devkit-run.sh task-start` (no
+  # aislado). Workspace propio, con un origin local de verdad (`git push`
+  # necesita un remoto al que empujar) para no interferir con `$tmp`, que
+  # usan decenas de pruebas más y no vive en la rama `main`.
+  local tb_dir
+  tb_dir=$(mktemp -d)
+  git init -q --bare "$tb_dir/origin.git"
+  git init -q "$tb_dir/ws"
+  git -C "$tb_dir/ws" config user.email test@example.com
+  git -C "$tb_dir/ws" config user.name test
+  git -C "$tb_dir/ws" remote add origin "$tb_dir/origin.git"
+  git -C "$tb_dir/ws" commit -q --allow-empty -m init --no-gpg-sign
+  git -C "$tb_dir/ws" branch -q -m main
+  git -C "$tb_dir/ws" push -q -u origin main
+  mkdir -p "$tb_dir/run" "$tb_dir/ronda"
+  : >"$tb_dir/run/ready"
+  # `--otros-agentes` de verdad mira `ps`: aislado con un doble que siempre
+  # dice "libre", para que estas dos pruebas no dependan de qué más corre en
+  # este contenedor en el momento de la corrida (esa comprobación ya tiene su
+  # propia batería de pruebas más arriba, con `filtrar_agentes`/`propio_de`).
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$tb_dir/otros-agentes-libre"
+  chmod +x "$tb_dir/otros-agentes-libre"
+  cat >"$tb_dir/notion-doble" <<FIN
+#!/usr/bin/env bash
+case "\$1" in
+  card) cat "$tb_dir/ronda/card-\$2.json" 2>/dev/null ;;
+  set) shift 2; printf '%s\n' "\$*" >>"$tb_dir/ronda/set-llamadas" ;;
+  contenido) printf '## Objetivo\ncard de prueba\n' ;;
+  comentarios) printf 'un comentario de prueba\n' ;;
+esac
+FIN
+  chmod +x "$tb_dir/notion-doble"
+  # DEVKIT_COSTOS_LOG fuera de `ws` a propósito: en un proyecto real
+  # `.devkit/costos.log` está en `.gitignore` (DEVKIT-89), pero este
+  # workspace de prueba no trae ese `.gitignore`, y sin la variable
+  # `costos_log()` lo crea dentro de `ws` y ensucia el árbol para el segundo
+  # lanzamiento (el de reanudación, que si ve cambios sin commit no debería).
+  local tb_env=(DEVKIT_WS="$tb_dir/ws" DEVKIT_RUN_DIR="$tb_dir/run" DEVKIT_NOTION_BIN="$tb_dir/notion-doble" \
+    DEVKIT_TASK_BEGIN_BIN="$HERE/task-begin.sh" DEVKIT_RUN_BIN="$tb_dir/otros-agentes-libre" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+    DEVKIT_FRONTERA_CACHE_DIR="$tb_dir/frontera" DEVKIT_ARRANQUE_ESPERA=1 \
+    DEVKIT_COSTOS_LOG="$tb_dir/costos.log")
 
-  corto_devkit76 revision 'DEVKIT-92 ya está en Revisión automática (PR https://github.com/o/r/pull/12); no hay nada que hacer.'
-  printf '{"estado":"Revisión automática"}\n' >"$RONDA_DIR/card-DEVKIT-92.json"
-  : >"$tmp/run/watch.log"
-  DEVKIT_CLAUDE_BIN="$tmp/claude-corto-revision" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
-    bash "$HERE/devkit-run.sh" task-start DEVKIT-92 >/dev/null 2>&1
+  # Lista: crea la rama desde main, la sube y deja la card En progreso con
+  # Agente=claude y Rama, antes de que el agente llegue a arrancar.
+  printf '{"id":"pagina-9093","estado":"Lista","tipo":"feature","titulo":"Probar rama nueva"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9093.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9093 >/dev/null 2>&1
   espera=0
-  while ! grep -qE 'terminado \[task-start-[0-9]+\]: modelo=.*costo=' "$tmp/run/watch.log" 2>/dev/null \
-        && [ "$espera" -lt 40 ]; do
-    sleep 0.1
-    espera=$((espera + 1))
-  done
-  check "relanzamiento sobre Revisión automática: devkit-run reporta costo/turnos del doble" \
-    'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
-    "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
-       "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
-  check "relanzamiento sobre Revisión automática: sin ALARMA de ningún tipo" 0 \
-    "$(grep -c 'ALARMA' "$tmp/run/watch.log")"
-  rm -f "$RONDA_DIR/card-DEVKIT-90.json" "$RONDA_DIR/card-DEVKIT-91.json" "$RONDA_DIR/card-DEVKIT-92.json"
+  while [ ! -s "$tb_dir/run/task-start-1.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "task-begin de verdad (Lista): crea y sube la rama feat/DEVKIT-9093-..." 1 \
+    "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9093-probar-rama-nueva')"
+  check "task-begin de verdad (Lista): deja la card En progreso, Agente=claude y Rama en Notion" 1 \
+    "$(grep -c 'Estado=En progreso Agente=claude Rama=' "$tb_dir/ronda/set-llamadas" 2>/dev/null)"
+  check "task-begin de verdad (Lista): el agente sí llega a arrancar (con la card ya lista)" 1 \
+    "$([ -s "$tb_dir/run/task-start-1.log" ] && echo 1 || echo 0)"
+
+  # En progreso con Rama: reanudación, cambia a la rama que ya existe en vez
+  # de crear una nueva ni tocar Notion otra vez.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" push -q origin main:refs/heads/feat/DEVKIT-9094-otra
+  printf '{"id":"pagina-9094","estado":"En progreso","rama":"https://github.com/o/r/tree/feat/DEVKIT-9094-otra"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9094.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9094 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-2.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "task-begin de verdad (En progreso con Rama): cambia a la rama existente (reanudación)" \
+    "feat/DEVKIT-9094-otra" "$(git -C "$tb_dir/ws" rev-parse --abbrev-ref HEAD)"
+  check "task-begin de verdad (En progreso con Rama): no crea una rama nueva ni vuelve a tocar Notion" 1 \
+    "$(grep -c 'Estado=En progreso Agente=claude Rama=' "$tb_dir/ronda/set-llamadas" 2>/dev/null)"
+  rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
   # bash, en primer plano y con los argumentos tal cual (DEVKIT-55).
@@ -3871,9 +3950,12 @@ FIN
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     DEVKIT_ESTADO_INTERVALO=1 \
     timeout 15 bash "$HERE/devkit-run.sh" --seguir task-start DEVKIT-97 2>&1)
+  # El prompt entre comillas ya no es solo "/task-start DEVKIT-97": lleva el
+  # volcado de task-begin.sh bajo "## Card" (DEVKIT-90), así que la
+  # comparación es por prefijo, no por el prompt completo.
   check "--seguir <skill> <Clave>: la última línea es el resumen terminado del lanzamiento" si \
     "$(printf '%s\n' "$seguir_out" | tail -1 \
-        | grep -qE 'devkit-run "/task-start DEVKIT-97" terminado \[task-start-[0-9]+\]: modelo=.*costo=' \
+        | grep -qE 'devkit-run "/task-start DEVKIT-97.*terminado \[task-start-[0-9]+\]: modelo=.*costo=' \
         && echo si || echo no)"
 
   # Ctrl-C durante --seguir no mata al agente (DEVKIT-82): una señal al
@@ -4495,6 +4577,38 @@ fi
 esperar_arranque "$prompt" || exit 69
 avisar_atras_de_origin "$prompt"
 mkdir -p "$RUN_DIR"
+
+# task-begin.sh (DEVKIT-90): antes de lanzar task-start, los pasos mecánicos
+# corren en bash. Si no dejó la card lista, no se lanza el agente. Va antes
+# de numerar el log: un lanzamiento que no ocurre no debe consumir un número.
+#
+# `prompt_lanzado` (no `prompt`) es lo que de verdad recibe `claude -p`: lleva
+# el volcado de la card bajo `## Card`, con saltos de línea reales. `ps -eo
+# args=` los sustituye por espacios al mostrarlos (comprobado: un argumento
+# con "\n" dentro no parte la línea de `ps`, cada "\n" se ve como un espacio
+# más), así que toda comparación contra el prompt corto -`lanzamiento_duplicado`
+# arriba, `confirmar_arranque` abajo- sigue encontrando el delimitador justo
+# después de la Clave y no necesita conocer `prompt_lanzado`. Ningún otro
+# lugar del flujo (roles.toml, `model_effort_of`, las alarmas) necesita el
+# volcado: todas sus expresiones regulares miran el principio del prompt.
+prompt_lanzado="$prompt"
+if [ "$skill" = task-start ]; then
+  begin_err=$(mktemp)
+  card_md=$("$TASK_BEGIN_BIN" "$clave" 2>"$begin_err")
+  begin_rc=$?
+  begin_motivo=$(tail -1 "$begin_err" 2>/dev/null)
+  rm -f "$begin_err"
+  if [ "$begin_rc" -ne 0 ]; then
+    echo "devkit-run: ${begin_motivo:-task-begin.sh no dejó lista la card}" >&2
+    task_begin_fallo "$prompt" "$clave" "$begin_motivo"
+    exit 71
+  fi
+  prompt_lanzado="$prompt
+
+## Card
+$card_md"
+fi
+
 n=1
 while [ -e "$RUN_DIR/$skill-$n.log" ]; do n=$((n + 1)); done
 logf="$RUN_DIR/$skill-$n.log"
@@ -4513,11 +4627,11 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 #
 # La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
 # para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
-linea_inicio=$(linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" "$modelo" "$esfuerzo" "$ronda")
+linea_inicio=$(linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt_lanzado" "$logf" "$modelo" "$esfuerzo" "$ronda")
 printf '%s\n' "$linea_inicio" >> "$WATCH_LOG" 2>/dev/null
 costos_log "$linea_inicio"
 "$SETSID_BIN" nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
-  "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
+  "$HERE/devkit-run.sh" --worker "$prompt_lanzado" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
   >/dev/null 2>&1 &
 worker=$!
 disown
