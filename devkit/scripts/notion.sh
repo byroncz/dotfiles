@@ -431,6 +431,12 @@ cmd_criterios() {  # cmd_criterios <page_id>
 # los vuelca en orden. Cubre los tipos de bloque que aparecen en una card
 # (encabezados, párrafos, listas, cita, código); cualquier otro tipo cae al
 # texto plano de su rich_text, que suele bastar.
+#
+# No desciende a los hijos de un bloque (una sub-viñeta, un toggle, una
+# columna): H5 de pr-review en esta misma card. En vez de perder ese
+# contenido en silencio, marca la línea para que quien lea el volcado (el
+# agente de task-start, sin acceso a Notion) sepa que falta algo en vez de
+# asumir que el bloque no tenía más que su primera línea.
 CONTENIDO='
 def texto: (.[.type].rich_text // []) | map(.plain_text) | join("");
 def linea:
@@ -441,7 +447,9 @@ def linea:
   elif .type == "quote" then "> " + texto
   else texto
   end;
-[ .[] | linea | select(. != "") ] | join("\n")
+[ .[] | linea as $l | select($l != "")
+  | if .has_children then $l + "\n  (bloque con contenido anidado omitido)" else $l end
+] | join("\n")
 '
 
 cmd_contenido() {  # cmd_contenido <page_id>
@@ -623,6 +631,18 @@ algo
 ## Notas
 fuera" \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-90)"
+
+  # contenido: un bloque con hijos (sub-viñeta, toggle, columna) no desciende
+  # a ellos, así que avisa en vez de perder ese contenido en silencio (H5 de
+  # pr-review en DEVKIT-90).
+  resp GET__blocks_card-91_children '{"results":[
+    {"type":"bulleted_list_item","has_children":true,"bulleted_list_item":{"rich_text":[{"plain_text":"uno con hijos"}]}},
+    {"type":"paragraph","paragraph":{"rich_text":[{"plain_text":"sin hijos"}]}}],"has_more":false}'
+  check "contenido: un bloque con hijos avisa que quedó contenido anidado sin volcar" \
+    "- uno con hijos
+  (bloque con contenido anidado omitido)
+sin hijos" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-91)"
 
   # comentarios: orden cronológico, tal como los devuelve la API.
   resp GET__comments '{"results":[
