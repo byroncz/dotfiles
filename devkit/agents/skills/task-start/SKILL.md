@@ -17,7 +17,26 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 
 ## Pasos
 
-1. Verifica que el workspace está limpio: `git status --porcelain` vacío. Si
+1. Verifica el Estado de la card. Es una lectura de Notion, antes de tocar el
+   workspace: así un relanzamiento por error responde en este mismo turno
+   pase lo que pase en `git status`, en vez de detenerse antes de llegar a la
+   frase de estado por un árbol sucio o por otro agente vivo (DEVKIT-76: un
+   `task-start` sobre una card `Hecha` volvió a `main`, gastó 8 turnos y
+   terminó preguntando qué hacer, y la barrera de pregunta abierta la
+   bloqueó sin motivo real).
+   - `Lista`: sigue al paso 2.
+   - `En progreso` con `Rama` asignada: cámbiate a esa rama y continúa, es
+     una reanudación; sigue al paso 2.
+   - `En progreso` sin `Rama` (se bloqueó o cortó antes de crear la rama):
+     trátala como `Lista`, sigue al paso 2.
+   - `Backlog`: responde `<Clave> está en Backlog; el humano debe moverla a
+     Lista.` y termina, sin tocar git ni Notion.
+   - `Hecha`, `Lista para merge` o `Revisión automática`: responde
+     `<Clave> ya está en <Estado> (PR <url>); no hay nada que hacer.` y
+     termina, sin tocar git ni Notion.
+   - `Bloqueada`: responde `<Clave> está bloqueada; el humano debe moverla a
+     En progreso antes de relanzar.` y termina, sin tocar git ni Notion.
+2. Verifica que el workspace está limpio: `git status --porcelain` vacío. Si
    hay cambios sin commit, detente y explica; no mezcles trabajo de dos cards.
    La única comprobación válida de si hay otro agente trabajando el mismo
    workspace es `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
@@ -33,17 +52,6 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    `devkit-run.sh --worker`, su subshell, su vigilante y tu `claude -p`). Eso
    bloqueó DEVKIT-54 sin motivo, y desconfiar del resultado y correr un `ps`
    aparte cortó DEVKIT-63 sin PR y sin bloquear (DEVKIT-77).
-2. Verifica el Estado de la card. `Lista`: sigue al paso 3. `En progreso` con
-   `Rama` asignada: cámbiate a esa rama y continúa, es una reanudación.
-   Cualquier otro Estado es un relanzamiento por error sobre una card que ya
-   no está libre (DEVKIT-76: un `task-start` sobre una card `Hecha` volvió a
-   `main`, gastó 8 turnos y terminó preguntando qué hacer, y la barrera de
-   pregunta abierta la bloqueó sin motivo real). Termina en este mismo turno,
-   sin tocar git ni Notion:
-   - `Hecha`, `Lista para merge` o `Revisión automática`: responde
-     `<Clave> ya está en <Estado> (PR <url>); no hay nada que hacer.`
-   - `Bloqueada`: responde `<Clave> está bloqueada; el humano debe moverla a
-     En progreso antes de relanzar.`
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
 4. Nombre de rama: prefijo por `Tipo` (`feature` → `feat/`, `bug` → `fix/`,
    `chore` → `chore/`), la Clave tal cual (en mayúsculas) y un slug corto
