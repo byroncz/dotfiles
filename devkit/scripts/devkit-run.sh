@@ -1866,6 +1866,22 @@ seguir_tablero() {
 # Solo suma cifras que ya están en el log (costo=, turnos=, duracion=);
 # prohibido estimar (misma regla que DEVKIT-62).
 
+# Precarga `CLAVE_DE_PR_CACHE` con una sola llamada a `gh pr list`, en vez de
+# una `gh pr view` por cada PR distinto del log (H3 de pr-review en
+# DEVKIT-89, segunda vuelta): `costos_filas` resuelve la Clave de *todas* las
+# líneas de pr-review/task-close antes de filtrar por la Clave pedida, así
+# que sin esto un solo `--costos-totales <Clave>` paga un `gh pr view` por
+# cada PR distinto que haya pasado por el proyecto. `--limit` acota el costo
+# de esta llamada; un PR más viejo que el límite no queda en la caché y cae
+# al `gh pr view` individual de `clave_de_pr`, que sigue siendo correcto,
+# solo más lento para ese caso puntual.
+poblar_cache_pr() {  # poblar_cache_pr <archivo de caché>
+  local cache=$1
+  "$GH_BIN" pr list --state all --limit 500 --json number,title 2>/dev/null \
+    | jq -r '.[] | .title as $t | (if ($t | test("^[A-Z][A-Z0-9]+-[0-9]+")) then ($t | capture("(?<c>^[A-Z][A-Z0-9]+-[0-9]+)").c) else "-" end) as $c | [(.number|tostring), $c] | @tsv' \
+    2>/dev/null >>"$cache"
+}
+
 # Clave de un PR, por su título (mismo patrón que `key_of` en watch.sh). "-"
 # si `gh` no responde o el título no trae Clave: nunca se inventa.
 # `CLAVE_DE_PR_CACHE`, si está seteada, apunta a un archivo "num<TAB>clave"
@@ -1875,7 +1891,7 @@ seguir_tablero() {
 # fila dentro de un `< <(...)`, así que un array en memoria no sobrevive
 # entre esas invocaciones; un archivo sí, sin importar el subshell. La
 # arman `mostrar_costos` y `--costos-totales`, dueños de la corrida
-# completa.
+# completa, con `poblar_cache_pr` antes de la primera lectura.
 clave_de_pr() {  # clave_de_pr <número de PR>
   local num=$1 titulo clave hit
   if [ -n "${CLAVE_DE_PR_CACHE:-}" ] && [ -f "$CLAVE_DE_PR_CACHE" ]; then
@@ -4134,6 +4150,36 @@ FIN
   check "clave_de_pr con caché llama a gh una sola vez pese a dos líneas del mismo PR" 1 \
     "$(wc -l < "$llamadas_gh")"
 
+  # H3 de pr-review en DEVKIT-89, segunda vuelta: dos cards de PR distinto en
+  # el mismo log. Sin poblar_cache_pr, costos_filas resolvería la Clave de
+  # las dos (antes de filtrar) con dos `gh pr view`; con la caché poblada por
+  # una sola `gh pr list`, el total de llamadas a gh es 1, no 2.
+  local llamadas_gh2=$costos_tmp/llamadas-gh2 cache_pr2 dos_prs_log=$costos_tmp/dos-prs.log
+  : > "$llamadas_gh2"
+  cat >"$costos_tmp/gh-contador2" <<FIN
+#!/usr/bin/env bash
+echo x >> "$llamadas_gh2"
+if [ "\$1" = pr ] && [ "\$2" = list ]; then
+  echo '[{"number":101,"title":"DEVKIT-101 algo"},{"number":102,"title":"DEVKIT-102 otra cosa"}]'
+  exit 0
+fi
+exit 1
+FIN
+  chmod +x "$costos_tmp/gh-contador2"
+  cat >"$dos_prs_log" <<'FIN'
+2026-09-18T10:00:00-05:00 pr-review-101 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 101" log=/run/devkit/pr-review-101.log
+2026-09-18T10:01:00-05:00 pr-review-101 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.10 turnos=2 duracion=30s tokens: entrada=1 cache=1 salida=1 :: revisado
+2026-09-18T10:02:00-05:00 pr-review-102 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 102" log=/run/devkit/pr-review-102.log
+2026-09-18T10:03:00-05:00 pr-review-102 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=3 duracion=40s tokens: entrada=1 cache=1 salida=1 :: revisado
+FIN
+  cache_pr2=$(mktemp)
+  GH_BIN="$costos_tmp/gh-contador2" poblar_cache_pr "$cache_pr2"
+  GH_BIN="$costos_tmp/gh-contador2" CLAVE_DE_PR_CACHE="$cache_pr2" costos_filas "$dos_prs_log" DEVKIT-101 >/dev/null
+  rm -f "$cache_pr2"
+  GH_BIN="$costos_tmp/gh-doble"
+  check "poblar_cache_pr resuelve dos PR distintos con una sola llamada a gh" 1 \
+    "$(wc -l < "$llamadas_gh2")"
+
   check "costos_totales_card suma turnos, costo y minutos; cuenta 1 revisión" \
     "14	0.3600	3	1" \
     "$(costos_totales_card DEVKIT-77)"
@@ -4340,8 +4386,11 @@ case "${1:-}" in
   --costos)
     # CLAVE_DE_PR_CACHE vive solo esta corrida (H3 de pr-review en
     # DEVKIT-89): sin ella, `clave_de_pr` llama a `gh pr view` una vez por
-    # línea de pr-review/task-close, aunque compartan PR.
+    # línea de pr-review/task-close, aunque compartan PR. `poblar_cache_pr`
+    # la llena con una sola llamada a `gh pr list` antes de leer el log
+    # (segunda vuelta de H3): así ni PRs distintos vuelven a tocar la red.
     CLAVE_DE_PR_CACHE=$(mktemp)
+    poblar_cache_pr "$CLAVE_DE_PR_CACHE"
     mostrar_costos "${2:-}"
     rc=$?
     rm -f "$CLAVE_DE_PR_CACHE"
@@ -4352,6 +4401,7 @@ case "${1:-}" in
     # card, sin tabla, misma función que la fila TOTAL de `--costos <Clave>`.
     [ -n "${2:-}" ] || exit 64
     CLAVE_DE_PR_CACHE=$(mktemp)
+    poblar_cache_pr "$CLAVE_DE_PR_CACHE"
     costos_totales_card "$2"
     rc=$?
     rm -f "$CLAVE_DE_PR_CACHE"
