@@ -68,3 +68,31 @@ implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
 # No hay rol para cerrar ni bloquear una card (DEVKIT-55): `task-close.sh` y
 # `task-block.sh` son bash contra la API de Notion y no lanzan modelo. El rol
 # `contabilidad` que los agrupaba se retiró con ellos.
+
+# Presupuesto de turnos por skill (DEVKIT-94), clave punteada bajo
+# `presupuesto` con el mismo mecanismo que anula `model_index`/`effort` por
+# skill (`role_field`, arriba): no hace falta un parser de tablas nuevo, el
+# grep de `role_field presupuesto <skill>` ya entiende
+# `presupuesto.<skill> = N` como TOML de clave punteada válido. Antes, el
+# único presupuesto era el de `implementacion.max_turns`/`revision.max_turns`
+# (arriba) y `resumen()` solo lo escribía en watch.log como aviso: la card
+# seguía su curso aunque se pasara. Ahora `devkit-run --worker` compara los
+# turnos reales contra el valor de aquí y, si se excede, corta y bloquea la
+# card con `task-block.sh` en vez de dejarla avanzar sin límite. La CLI
+# instalada (2.1.274) sigue sin exponer `--max-turns` (igual que a los
+# 2.1.270 del comentario de `revision.max_turns`), así que el corte es
+# posterior a la ejecución, no un límite que Claude Code aplique mientras
+# corre.
+#
+# Valores iniciales, decididos por el humano en DEVKIT-94 con las medidas de
+# las hijas 87 a 90: pr-review entre 16 y 33 turnos, task-fix entre 30
+# (ronda 2) y 87 (ronda 1), task-start entre 43 y 125 antes de
+# `task-begin.sh`. Se ajustan con `devkit-run --costos` tras cuatro o cinco
+# cards con el flujo nuevo. Una skill sin entrada aquí usa el `max_turns` de
+# su rol (`implementacion` o `revision`, arriba); `task-submit` y
+# `task-document` no tienen entrada propia a propósito, todavía con el valor
+# de `implementacion.max_turns`.
+presupuesto.task-start = 60
+presupuesto.pr-review = 30
+presupuesto.task-fix = 40
+presupuesto.epic-plan = 40

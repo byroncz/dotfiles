@@ -26,8 +26,10 @@
 #      probarlo` y `## Cambios requeridos`, que escribió la skill), le agrega
 #      `## Card` con la URL de la card en Notion y la línea "Implementado con
 #      ..." (DEVKIT-58, de `DEVKIT_MODEL`/`DEVKIT_EFFORT`, las que exporta
-#      `devkit-run` al `claude -p` que lanzó esta sesión). Crea el PR si no
-#      existe uno para la rama, o actualiza su cuerpo si ya existe.
+#      `devkit-run` al `claude -p` que lanzó esta sesión). Si el diff contra
+#      `origin/main` supera 300 líneas, agrega el aviso "Diff grande: N
+#      líneas" (DEVKIT-94): no bloquea, solo lo anota para quien revisa. Crea
+#      el PR si no existe uno para la rama, o actualiza su cuerpo si ya existe.
 #   5. Activa auto-merge (`gh pr merge --auto --squash`). Si GitHub lo
 #      rechaza porque el repo no lo permite, comenta el motivo en la card y
 #      sigue: no es un fallo de este script.
@@ -163,7 +165,19 @@ fi
 rm -f "$push_err"
 
 # --- 4. Cuerpo del PR y creación/actualización -------------------------------
-cuerpo="$(cat "$PR_BODY_FILE")
+# Diff grande (DEVKIT-94): un aviso, no un bloqueo. `--numstat` da líneas
+# añadidas/borradas por archivo; un binario marca "-" en vez de un número,
+# se cuenta como 0 en vez de romper la suma con `awk`.
+diff_lineas=$(git -C "$WS" diff --numstat origin/main...HEAD 2>/dev/null \
+  | awk '{a=$1; d=$2; if (a !~ /^[0-9]+$/) a=0; if (d !~ /^[0-9]+$/) d=0; suma+=a+d} END{print suma+0}')
+
+cuerpo="$(cat "$PR_BODY_FILE")"
+if [ "$diff_lineas" -gt 300 ] 2>/dev/null; then
+  cuerpo="$cuerpo
+
+Diff grande: $diff_lineas líneas"
+fi
+cuerpo="$cuerpo
 
 ## Card
 $card_url

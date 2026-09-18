@@ -529,6 +529,11 @@ ronda_de() {  # ronda_de <prompt>
 # [ronda] viene cuando quien llama ya la resolvió (watch.sh la pasa de `--rol`
 # a `--sync` en DEVKIT_RONDA): no se vuelve a consultar el PR ni se repiten
 # los avisos en watch.log.
+#
+# El presupuesto de turnos sigue la misma regla que el esfuerzo: el
+# `max_turns` del rol, anulado por `presupuesto.<skill>` si roles.toml trae
+# una entrada (DEVKIT-94). `--worker` lo usa para cortar y bloquear la card
+# cuando el lanzamiento se pasa, no solo para avisar.
 model_effort_of() {  # model_effort_of <prompt> [ronda]
   local role skill idx modelo esfuerzo turnos ronda avisar=1 elem alias esf i
   local -a rondas=()
@@ -567,6 +572,8 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
   esf=$(role_field "$skill" effort)
   [ -z "$esf" ] || esfuerzo=$esf
   turnos=$(role_field "$role" max_turns)
+  i=$(role_field presupuesto "$skill")
+  [ -z "$i" ] || turnos=$i
   # Campos vacíos como "-": `read` parte por espacios y se salta los campos
   # vacíos, así que un modelo vacío se leía como si fuera el esfuerzo
   # (DEVKIT-55).
@@ -1911,7 +1918,11 @@ seguir_tablero() {
 # --- devkit-run --costos [<Clave>] (DEVKIT-89) ------------------------------
 # Mide el costo por card desde costos.log, que sobrevive a `devkit recreate`.
 # Solo suma cifras que ya están en el log (costo=, turnos=, duracion=);
-# prohibido estimar (misma regla que DEVKIT-62).
+# prohibido estimar (misma regla que DEVKIT-62). `--costos <Clave>` marca con
+# "!" pegado al número de turnos las filas que superaron el presupuesto
+# vigente en roles.toml para ese skill (DEVKIT-94); el resumen de proyecto
+# (sin Clave) agrega turnos de varios skills por card y no tiene un único
+# presupuesto contra el que comparar, así que no lleva marca.
 
 # Precarga `CLAVE_DE_PR_CACHE` con una sola llamada a `gh pr list`, en vez de
 # una `gh pr view` por cada PR distinto del log (H3 de pr-review en
@@ -2046,9 +2057,21 @@ costos_totales_card() {  # costos_totales_card <Clave>
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
 }
 
+# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
+# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
+# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
+# a partir del nombre del skill solo, para marcar filas ya cerradas en
+# `--costos`.
+presupuesto_de_skill() {  # presupuesto_de_skill <skill>
+  local skill=$1 valor
+  valor=$(role_field presupuesto "$skill")
+  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
+  printf '%s' "$valor"
+}
+
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
 costos_tabla_card() {
-  local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0
+  local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0 presupuesto t_col
   # FECHA mide 27, no 21 (H7 de pr-review en DEVKIT-89): el timestamp con
   # zona (`2026-09-18T10:05:00-05:00`) mide 25, y `rellenar` no trunca.
   printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 16)" "$(rellenar FECHA 27)" "$(rellenar MODELO/ESFUERZO/RONDA 28)" \
@@ -2061,8 +2084,15 @@ costos_tabla_card() {
     else modelo_col="$modelo/$esfuerzo r$ronda"; fi
     min=-
     [ "$d" = - ] || min=$((d / 60))
+    t_col=$t
+    if [ "$t" != - ] && [ -n "$t" ]; then
+      presupuesto=$(presupuesto_de_skill "$skill")
+      if [ -n "$presupuesto" ] && [ "$t" -gt "$presupuesto" ] 2>/dev/null; then
+        t_col="${t}!"
+      fi
+    fi
     printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 16)" "$(rellenar "$ts" 27)" "$(rellenar "$modelo_col" 28)" \
-      "$(rellenar "$t" 8)" "$(rellenar "$c" 10)" "$min"
+      "$(rellenar "$t_col" 8)" "$(rellenar "$c" 10)" "$min"
   done < <(costos_filas "$COSTOS_LOG" "$clave")
   if [ "$filas" = 0 ]; then
     echo "Sin lanzamientos de $clave en $COSTOS_LOG."
@@ -2422,6 +2452,62 @@ FIN
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
   check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-barato low 15 1" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --- Presupuesto de turnos por skill (DEVKIT-94) ---------------------------
+  # `presupuesto.task-fix` anula `implementacion.max_turns` (15 en
+  # $tmp/roles.toml), igual que ya hacían `model_index`/`effort` por skill.
+  cat >"$tmp/roles-presupuesto.toml" <<'FIN'
+frontera = ["modelo-barato"]
+implementacion.model_index = 1
+implementacion.effort = "low"
+implementacion.max_turns = 40
+revision.model_index = 1
+revision.effort = "high"
+revision.max_turns = 50
+presupuesto.task-fix = 7
+FIN
+  check "model_effort_of usa presupuesto.task-fix, no implementacion.max_turns" "modelo-barato low 7 1" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-presupuesto.toml" FRONTERA_CACHE_DIR="$tmp/frontera-presupuesto" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+  check "sin presupuesto.pr-review, sigue el max_turns del rol" "modelo-barato high 50 -" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-presupuesto.toml" FRONTERA_CACHE_DIR="$tmp/frontera-presupuesto" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
+
+  # De punta a punta: un lanzamiento que se pasa del presupuesto corta y
+  # bloquea la card con task-block.sh, en vez de quedar solo como aviso en
+  # watch.log (comportamiento anterior a DEVKIT-94). $tmp/roles.toml no trae
+  # `presupuesto.task-fix`, así que el tope es `implementacion.max_turns`
+  # (15); el doble de `claude` responde con 99 turnos, muy por encima.
+  local gastador bloqueo_presupuesto espera
+  gastador="$tmp/claude-gastador"
+  cat >"$gastador" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"Completé DEVKIT-3: listo.","total_cost_usd":0.5,"num_turns":99}\n'
+FIN
+  chmod +x "$gastador"
+  bloqueo_presupuesto="$tmp/task-block-doble-presupuesto"
+  printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >"%s/bloqueo.args"\n' "$tmp" >"$bloqueo_presupuesto"
+  chmod +x "$bloqueo_presupuesto"
+  mkdir -p "$tmp/run"
+  : >"$tmp/run/ready"  # sin esto, esperar_arranque espera 120s de verdad
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "presupuesto agotado bloquea la card con task-block.sh" \
+    'bloquea la card con task-block.sh: DEVKIT-3' \
+    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+  check "el motivo del bloqueo nombra el presupuesto excedido" \
+    'cortó por exceder el presupuesto de 15 turnos' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'cortó por exceder el presupuesto de 15 turnos' | head -1)"
+  check "watch.log registra el corte como corte: presupuesto" \
+    'ALARMA: corte: presupuesto (99 turnos, presupuesto 15)' \
+    "$(grep -oE 'ALARMA: corte: presupuesto \(99 turnos, presupuesto 15\)' "$tmp/run/watch.log" | head -1)"
 
   # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
   # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
@@ -4396,6 +4482,26 @@ FIN
   check "costos_filas trae las cuatro filas de la card (task-close incluido)" 4 \
     "$(costos_filas "$COSTOS_LOG" DEVKIT-77 | wc -l)"
 
+  # DEVKIT-94: `--costos <Clave>` marca con "!" la fila cuyos turnos pasaron
+  # el presupuesto vigente en roles.toml para ese skill. task-fix-31 gastó 8
+  # turnos; con `presupuesto.task-fix = 5` queda marcado, task-start (1
+  # turno, tope 40 por defecto) y pr-review (5 turnos, tope 50 por defecto)
+  # no.
+  cat >"$costos_tmp/roles.toml" <<'FIN'
+frontera = ["modelo-barato"]
+implementacion.model_index = 1
+implementacion.effort = "low"
+implementacion.max_turns = 40
+revision.model_index = 1
+revision.effort = "high"
+revision.max_turns = 50
+presupuesto.task-fix = 5
+FIN
+  check "--costos <Clave> marca con ! la fila que superó el presupuesto" 1 \
+    "$(ROLES_FILE="$costos_tmp/roles.toml" costos_tabla_card DEVKIT-77 | grep -c '8!')"
+  check "--costos <Clave> no marca las filas dentro del presupuesto" 0 \
+    "$(ROLES_FILE="$costos_tmp/roles.toml" costos_tabla_card DEVKIT-77 | grep -cE '\b(1|5)!')"
+
   # H3 de pr-review en DEVKIT-89: pr-review-31 y task-close-31 comparten el
   # PR 31; con CLAVE_DE_PR_CACHE, la segunda resolución sale del archivo y no
   # de un segundo `gh pr view`.
@@ -4892,7 +4998,17 @@ $card_md"
       "$(basename "$logf" .log)" "$resumen_txt")
     printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
     costos_log "$linea_fin"
-    if [ $rc -eq 0 ]; then
+    turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
+    if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
+       && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
+      # DEVKIT-94: antes esto solo quedaba como aviso en `resumen_txt`
+      # ("excede el presupuesto..."); la card seguía su curso. Ahora corta:
+      # sin límite real de la CLI (no expone `--max-turns`, ver roles.toml),
+      # el único punto donde se puede actuar es aquí, al terminar.
+      forzar_task_block "$prompt" "$logf" \
+        "cortó por exceder el presupuesto de $presupuesto turnos de roles.toml ($turnos_reales usados)" \
+        "ALARMA: corte: presupuesto ($turnos_reales turnos, presupuesto $presupuesto)"
+    elif [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if pregunta_abierta "$resultado"; then
         forzar_task_block "$prompt" "$logf" \
