@@ -169,6 +169,11 @@ if [ "${1:-}" = "--test" ]; then
     sh "$HERE/scripts/gen-readme.sh" --check >/dev/null 2>&1
   check "--check con el README viejo sale 1" 1 "$?"
 
+  DEVKIT_GEN_README_TMPL="$tmp/tmpl-llano.md" DEVKIT_GEN_README_README="$tmp/README.md" \
+    sh "$HERE/scripts/gen-readme.sh" >/dev/null 2>&1
+  modo="$(stat -c %a "$tmp/README.md" 2>/dev/null || stat -f %Lp "$tmp/README.md" 2>/dev/null)"
+  check "el README escrito queda legible por todos, no 0600 (H8)" 644 "$modo"
+
   printf '# t\n{{STACK}}\n' > "$tmp/tmpl-rota.md"
   printf 'README viejo\n' > "$tmp/README-rota.md"
   DEVKIT_GEN_README_TMPL="$tmp/tmpl-rota.md" DEVKIT_GEN_README_README="$tmp/README-rota.md" \
@@ -235,7 +240,10 @@ fi
 
 # Arma en un archivo temporal y solo pisa $README si todo salió bien: un
 # fallo a mitad de armar (una skill sin sumar a SKILLS_ORDEN, un ARG
-# renombrado) no debe dejar el README truncado (H2d, DEVKIT-88).
+# renombrado) no debe dejar el README truncado (H2d, DEVKIT-88). `mktemp`
+# crea el archivo en 0600 y `mv` conserva ese permiso, dejando el README
+# ilegible para otros (H8, DEVKIT-88); se corrige antes de moverlo.
 nuevo="$(mktemp)"; trap 'rm -f "$nuevo"' EXIT
 armar > "$nuevo"
+chmod 644 "$nuevo"
 mv "$nuevo" "$README"
