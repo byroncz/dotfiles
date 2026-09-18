@@ -239,6 +239,18 @@ printf '{"result":"%s","total_cost_usd":0.01,"num_turns":3}\n' "${DEVKIT_TEST_RE
 FIN
 chmod +x "$DOBLE"
 
+# Doble de review-prep.sh (DEVKIT-93): estas pruebas son sobre cuota, alarmas
+# y el lanzador, no sobre la preparación de pr-review, así que siempre dice
+# "hay algo que revisar" y no toca gh ni Notion. `run_claude` lo llama antes
+# del doble de `claude` para cualquier prompt "/pr-review ...".
+REVIEW_PREP_DOBLE="$TMP/review-prep"
+cat >"$REVIEW_PREP_DOBLE" <<'FIN'
+#!/usr/bin/env bash
+echo "## Card
+material de prueba"
+FIN
+chmod +x "$REVIEW_PREP_DOBLE"
+
 # Cache de disponibilidad de frontera, precargada como "si" para los tres
 # modelos de `devkit/agents/roles.toml` (DEVKIT-54): sin esto,
 # `devkit-run.sh --rol` invocaría el doble una vez más solo para comprobar
@@ -262,6 +274,7 @@ corre_doble() {
   DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS="$1" DEVKIT_TEST_MSG="${2:-}" \
   DEVKIT_TEST_SLEEP="${DEVKIT_TEST_SLEEP:-0}" DEVKIT_TEST_RESULT="${DEVKIT_TEST_RESULT:-listo}" \
   DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_REVIEW_PREP_BIN="${REVIEW_PREP_OVERRIDE:-$REVIEW_PREP_DOBLE}" \
   DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
   DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 \
   DEVKIT_WATCH_QUOTA_RETRIES="${RETRIES:-3}" \
@@ -332,6 +345,25 @@ check_log "la línea de resumen trae el modelo del rol de revisión" \
 # `devkit-run --estado`.
 check_log "run_skill deja la línea lanzando con origen, modelo y esfuerzo" \
   'pr-review-9-abc1234 lanzando \(origen=bucle\) modelo=opus esfuerzo=high ronda=-: "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
+
+# --- review-prep.sh sin nada que revisar (DEVKIT-93) -------------------------
+# `run_claude` corta con rc=3 antes de llamar a `claude -p`; `run_skill` debe
+# leerlo como un cierre normal (sin ALARMA, sin reintento de cuota) y no como
+# un error. Un PR de seis líneas de documentación pagó 33 turnos en Opus solo
+# en "ya revisado" (DEVKIT-74); este es el caso que ya no debe costar nada.
+REVIEW_PREP_NADA="$TMP/review-prep-nada"
+cat >"$REVIEW_PREP_NADA" <<'FIN'
+#!/usr/bin/env bash
+echo "ya revisado en abc123"
+exit 3
+FIN
+chmod +x "$REVIEW_PREP_NADA"
+REVIEW_PREP_OVERRIDE="$REVIEW_PREP_NADA" corre_doble 0
+check_log "nada que revisar: el motivo queda en watch.log sin ALARMA" \
+  'pr-review-9-abc1234 no lanzó: nada que revisar \(ya revisado en abc123\)'
+check_igual "nada que revisar: sin ALARMA en el log" 0 "$(grep -c ALARMA "$OUT")"
+check_igual "nada que revisar: no llamó a claude -p (cero turnos de Opus)" 0 "$LLAMADAS"
+
 # Un comentario humano con acentos de más de 120 bytes: el corte es por
 # caracteres, así que la línea sigue siendo UTF-8 válido y --estado la muestra.
 NOMBRE=fix-humano-9 PROMPT="/task-fix DEVKIT-9 $(printf 'á%.0s' $(seq 1 80))" corre_doble 0

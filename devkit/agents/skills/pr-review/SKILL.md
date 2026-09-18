@@ -9,111 +9,63 @@ Argumento: número de PR. Eres el revisor, no el autor: no conoces su
 razonamiento, no lees su sesión y tienes prohibido tocar la rama. Corregir
 es trabajo de `task-fix`.
 
+Los pasos 1 a 5 -leer el PR, encontrar el marcador, comprobar el devkit-fix,
+delimitar el diff- y las comprobaciones mecánicas de la rúbrica (`bash -n`,
+`ruff`, `pytest`, `devkit-run.sh --test`/`watch-test.sh` si el diff los toca,
+`git grep` de cada identificador que el diff renombra o borra) ya corrieron
+en bash, antes de que existas: `devkit/scripts/review-prep.sh` los hizo todos
+en segundos y sin modelo (DEVKIT-93, Épica DEVKIT-86 Contexto 4). Si estás
+leyendo esto es porque `review-prep.sh` salió con 0 -había algo que
+revisar- y `devkit-run` agregó su salida a este prompt bajo `## Material`:
+card (Objetivo y Criterios), cuerpo del PR, el diff delimitado (completo en
+el primer ciclo, desde el marcador en los siguientes), los hallazgos
+anteriores con la respuesta `devkit-fix` cuando aplica, y el resultado de
+cada comprobación mecánica (`Verificado`/`Falla`, con la salida). Un PR de
+código trae además la ruta de un worktree ya creado, para correr ahí lo que
+haga falta; uno de documentación no trae worktree, y no debes crear uno.
+
+No vuelvas a consultar el PR con `gh pr view` ni la card con Notion para
+nada de lo que ya está en `## Material`: releerlo es el mismo desperdicio de
+turnos que esta card elimina.
+
 ## Pasos
 
-1. Lee el PR: `gh pr view <N> --json number,title,state,url,headRefOid,headRefName,body,reviews,comments`.
-   Si `state` no es `OPEN`, responde "PR no abierto" y termina. Los informes
-   del revisor viven en `reviews`; las respuestas del corrector, en
-   `comments`: necesitas ambos.
-2. Deduce la Clave del prefijo del título (`DEVKIT-12 ...` → código `DEVKIT`,
-   ID `12`). Si el código no coincide con `project` de `.devkit/devkit.toml` o
-   el ID es `0`, responde "sin card que revisar" y termina. Localiza la card en
-   Tareas filtrando por `ID` y `Proyecto`. Si su `Estado` no es
-   `Revisión automática`, responde el estado y termina: la card ya salió del
-   ciclo o todavía no entró.
-3. Busca el último marcador. Cada informe del revisor empieza con
-   `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Toma el más
-   reciente por `submittedAt`:
-
-   ```sh
-   gh pr view <N> --json reviews \
-     --jq '[.reviews[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body' \
-     | grep -o '<!-- devkit-review [^>]*-->'
-   ```
-
-   Si su `sha` no es igual a `headRefOid`, sigue al paso 4: hay código nuevo
-   que revisar. Si es igual, antes de descartar el PR comprueba si el
-   corrector ya respondió a ese informe sin empujar commits (descartó todos
-   los hallazgos, o solo comentó): un comentario `devkit-fix` con `review=`
-   igual a ese `sha`, posterior a `submittedAt` del marcador:
-
-   ```sh
-   gh pr view <N> --json comments --jq \
-     '[.comments[] | select(.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=<sha>( manual=1)? -->")) | select(.createdAt > "<submittedAt del marcador>")] | length'
-   ```
-
-   Sin ese comentario, el corrector no respondió todavía: responde "ya
-   revisado en <sha>" y termina, el bucle te llama varias veces y no debes
-   publicar dos informes para el mismo head sin nada nuevo que juzgar. Con
-   ese comentario (DEVKIT-22), sigue al paso 4: hay que volver a juzgar ese
-   mismo head con la respuesta del corrector a la vista, aunque no haya
-   código nuevo.
-4. Prepara una copia de trabajo aparte, para no tocar la rama del autor:
-
-   ```sh
-   git fetch origin pull/<N>/head
-   git worktree add --detach /tmp/devkit-review-<N> FETCH_HEAD
-   ```
-
-   Todo lo que ejecutes corre ahí. Al terminar, `git worktree remove --force
-   /tmp/devkit-review-<N>`.
-5. Delimita qué leer:
-   - **Primer ciclo** (sin marcador previo): el diff completo,
-     `git diff origin/main...FETCH_HEAD`, y el cuerpo del PR.
-   - **Ciclos siguientes**: solo `git diff <sha del marcador> FETCH_HEAD`
-     (vacío si el corrector respondió sin empujar commits, DEVKIT-22),
-     el bloque `devkit-findings` de tu informe anterior y el bloque
-     `devkit-fixes` con el que `task-fix` respondió. Esa respuesta es un
-     comentario del PR, no una review: el último de la cuenta máquina
-     (`gh api user --jq .login`) cuyo marcador
-     `<!-- devkit-fix sha=<head> review=<sha> -->` (con ` manual=1` al final
-     si lo lanzó un humano) tenga `review=` igual al `sha` de tu marcador
-     anterior:
-
-     ```sh
-     gh pr view <N> --json comments | jq -r \
-       --arg bot "$(gh api user --jq .login)" --arg rev "<sha del marcador>" \
-       '[.comments[] | select(.author.login == $bot and (.body | test("<!-- devkit-fix sha=[0-9a-f]+ review=" + $rev)))] | sort_by(.createdAt) | last | .body'
-     ```
-
-     (`--jq` de `gh` no acepta `--arg`; por eso el filtro corre en `jq`.)
-
-     Trae una línea `id | atendido o descartado | commit o motivo` por
-     hallazgo. Si no hay comentario, el corrector no respondió todavía:
-     revisa el diff igual y marca cada hallazgo anterior por lo que veas en
-     el código. No releas el PR entero ni repitas lo que ya diste por
-     verificado.
-6. Aplica la rúbrica, en este orden:
-   - **Criterios de aceptación de la card, uno por uno.** Cada uno se
-     comprueba ejecutando algo en la copia de trabajo (`bash -n`, `git grep`,
-     `ruff check`, `uv run pytest`, `gh api`, leer el archivo y citar la
-     línea). Resultado: `Verificado`, `Falla` o `No verificado` cuando no
-     hay forma de ejecutarlo desde el contenedor. Di siempre cómo lo
-     comprobaste.
+1. Aplica la rúbrica, en este orden:
+   - **Criterios de aceptación de la card, uno por uno.** Los que ya trae
+     `## Material` como `Verificado`/`Falla` (las comprobaciones mecánicas)
+     se copian tal cual, con la comprobación que ya dejó `review-prep.sh`.
+     Los demás se comprueban ejecutando algo -en el worktree que trae
+     `## Material` si el PR es de código, leyendo el diff si es de
+     documentación- y se marcan `Verificado`, `Falla` o `No verificado`
+     cuando no hay forma de ejecutarlo desde el contenedor. Di siempre cómo
+     lo comprobaste.
    - **El cuerpo del PR es afirmación, no evidencia.** Cada "se probó X" del
      autor se repite o se marca `No verificado`.
    - **Lectura adversarial del diff.** Busca lo que rompe, lo que queda fuera
-     del alcance de la card, lo que contradice `AGENTS.md`, nombres viejos
-     que sobreviven (`git grep`), scripts sin `bash -n`, y la regla de
-     documentación: un cambio que afecte a los proyectos instanciados sin su
-     sección "Cambios requeridos" en el cuerpo del PR.
+     del alcance de la card, lo que contradice `AGENTS.md` y nombres viejos
+     que sobreviven más allá de lo que ya cubrió el `git grep` mecánico de
+     `## Material` (ese solo persigue los identificadores que el diff borra o
+     renombra; uno que cambia de forma sin cambiar de nombre sigue siendo
+     trabajo tuyo). También la regla de documentación: un cambio que afecte a
+     los proyectos instanciados sin su sección "Cambios requeridos" en el
+     cuerpo del PR.
    - **Agota la clase, no el caso.** Cuando un hallazgo es una instancia de
      un patrón más amplio (una sintaxis con variantes, la misma validación
      repetida en varios lugares), busca y reporta todas las variantes en
      este mismo ciclo; no dejes que el corrector las encuentre una por una
      en ciclos sucesivos. Una variante por ciclo costó 7 revisiones y 9
      commits de corrección en el PR 27 (DEVKIT-20).
-   - **Ciclos siguientes:** además, cada hallazgo anterior se marca
+   - **Ciclos siguientes:** además, cada hallazgo anterior (en `## Material`,
+     bajo "Hallazgos anteriores y respuesta devkit-fix") se marca
      `Corregido`, `Sin cambios` o `Reabierto`, con la comprobación.
-7. Clasifica los hallazgos. Severidad `alta` si rompe algo o viola un
+2. Clasifica los hallazgos. Severidad `alta` si rompe algo o viola un
    criterio de la card; `media` si un criterio queda parcial o hay un riesgo
    real; `baja` si es mejora. Los ids son `H1`, `H2`, ... y en los ciclos
    siguientes continúan la numeración anterior. Veredicto `CAMBIOS` si hay
    algún hallazgo `alta` o `media`, o algún criterio en `Falla`; `OK` en
    cualquier otro caso.
-8. Publica el informe con `gh pr review --comment --body-file - <N>` (las
-   opciones antes del número: así coincide con el permiso de
-   `settings.json`). Este es el formato, sin saludos ni resumen:
+3. Escribe `.devkit/review-<N>.md` con exactamente este formato, sin saludos
+   ni resumen:
 
    ```
    <!-- devkit-review sha=<headRefOid> verdict=<OK|CAMBIOS> -->
@@ -142,56 +94,42 @@ es trabajo de `task-fix`.
    <!-- /devkit-findings -->
    ```
 
-   La línea "Revisado con ..." va en cada informe, justo debajo del
-   marcador, y sale de las variables que `devkit-run` exporta al `claude -p`
-   (DEVKIT-58): `echo "Revisado con ${DEVKIT_MODEL:-?}, esfuerzo
-   ${DEVKIT_EFFORT:-?}"`. Cópiala tal cual, sin formato. Si vienen vacías
-   (sesión interactiva), escribe el alias del modelo que te ejecuta y
-   `esfuerzo sin registrar`; nunca inventes un esfuerzo.
+   La línea "Revisado con ..." va justo debajo del marcador, y sale de las
+   variables que `devkit-run` exporta al `claude -p` (DEVKIT-58): `echo
+   "Revisado con ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"`. Cópiala
+   tal cual, sin formato. Si vienen vacías (sesión interactiva), escribe el
+   alias del modelo que te ejecuta y `esfuerzo sin registrar`; nunca
+   inventes un esfuerzo.
 
    El bloque `devkit-findings` va solo si hay hallazgos. Es lo único que
    `task-fix` lee: una línea por hallazgo, cinco campos separados por ` | `,
    sin saltos de línea dentro de un hallazgo.
-9. Según el veredicto:
-   - **`OK`**: `Estado` de la card = `Lista para merge`. No escribas la
-     entrada de Documentación: con tu marcador OK, el bucle lanza
-     `task-document` sobre este head (DEVKIT-55). Pide el review al
-     humano con `gh pr edit --add-reviewer <usuario> <N>`. El usuario sale de
-     la clave `reviewer` de `.devkit/devkit.toml`:
+4. Ejecuta:
 
-     ```sh
-     sed -n 's/^reviewer[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' .devkit/devkit.toml | head -1
-     ```
+   ```sh
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh" <N> .devkit/review-<N>.md
+   ```
 
-     Si la clave no existe, usa el dueño del repo solo si es un usuario y no
-     una organización (`gh api repos/{owner}/{repo} --jq '.owner.type'`
-     devuelve `User`). Si no hay revisor, o es la propia cuenta máquina
-     (`gh api user --jq .login`), no pidas review y dilo en el comentario:
-     el humano debe declarar `reviewer`. Luego publica un comentario
-     aparte con `gh pr comment --body-file - <N>`, para el humano, siguiendo
-     la guía de redacción de `AGENTS.md` y con este contenido, en máximo diez
-     líneas:
-
-     ```
-     Listo para tu aprobación.
-     Qué hace: <dos líneas>.
-     Qué se verificó: <una o dos líneas, con lo que quedó "No verificado" si lo hay>.
-     Qué mirar primero: <una línea>.
-     Recomendación: aprobar. <Si hay hallazgos baja: "H3 puede ir a una card aparte.">
-     ```
-
-   - **`CAMBIOS`**: la card se queda en `Revisión automática`. No muevas
-     nada más ni comentes en la card: `task-fix` lee el bloque de hallazgos
-     directamente en el PR.
-10. Limpia la copia de trabajo (paso 4) y responde con una línea: PR,
-    veredicto y número de hallazgos.
+   El script publica el informe con `gh pr review --comment --body-file`,
+   borra el worktree si existía y, solo con veredicto `OK`, pasa la card a
+   `Lista para merge`, pide el review al humano (`reviewer` de
+   `.devkit/devkit.toml`, o el dueño del repo si es un usuario y no una
+   organización) y publica un comentario aparte para el humano, armado a
+   partir de la sección "## Qué cambia" del PR y de tus Criterios/hallazgos:
+   no redactes tú ese comentario, ni lo dupliques. Con veredicto `CAMBIOS`,
+   la card se queda en `Revisión automática` sin que este script toque nada
+   más: `task-fix` lee el bloque de hallazgos directamente en el PR. Si
+   falla, el error va en stderr; corrígelo (el informe suele ser la causa:
+   revisa que empiece con el marcador) y vuelve a ejecutarlo, no publiques un
+   segundo informe con `gh pr review` a mano.
+5. Responde con una línea: PR, veredicto y número de hallazgos.
 
 ## Reglas
 
 - Nunca `git commit`, `git push` ni edición de archivos en la rama del PR.
   Nunca `gh pr review --approve` ni ningún `gh pr merge`. Nunca `gh api`
-  sobre `/pulls/*/reviews`: publicar reviews es trabajo de `gh pr review
-  --comment` y nada más.
+  sobre `/pulls/*/reviews`: publicar reviews es trabajo de
+  `review-publish.sh` (que usa `gh pr review --comment`) y nada más.
 - `settings.json` no puede impedir aprobar: sus reglas son prefijos y no
   ven `gh pr review <N> --approve` ni una review por `gh api`. La compuerta
   real está en GitHub: la cuenta máquina no puede aprobar sus propios PRs y
@@ -200,11 +138,9 @@ es trabajo de `task-fix`.
   permita.
 - No leas los comentarios de la card para saber qué hizo el autor: la card
   te da los criterios, el PR te da el código. Lo demás es contexto del autor.
-- Un informe por head, salvo la respuesta sin push del paso 3 (DEVKIT-22):
-  ahí el head no cambia pero hay una respuesta nueva que juzgar, así que
-  publicas un segundo informe para el mismo `sha`. Si el head cambió
-  mientras revisabas, publica igual el informe con el `sha` que revisaste:
-  el bucle detectará que el head es otro y volverá a llamarte.
-- Modo headless (`claude -p "/pr-review <N>"`): sin preguntas. Si falta
-  algo (card no encontrada, PR sin Clave), responde qué falta y termina sin
-  publicar nada.
+- Un informe por head, salvo la respuesta sin push que ya delimitó
+  `review-prep.sh` (DEVKIT-22): ahí el head no cambia pero hay una respuesta
+  nueva que juzgar, así que publicas un segundo informe para el mismo `sha`.
+- Modo headless (`claude -p "/pr-review <N>"`): sin preguntas. Si `##
+  Material` no tiene lo que necesitas para juzgar un criterio, márcalo `No
+  verificado` y sigue: no hay nadie que responda una pregunta.

@@ -161,6 +161,11 @@ TASK_CLOSE_BIN="${DEVKIT_TASK_CLOSE_BIN:-$HERE/task-close.sh}"
 # en la autoprueba: las pruebas que no giran alrededor de él no necesitan un
 # workspace git + Notion completos solo para que task-start arranque.
 TASK_BEGIN_BIN="${DEVKIT_TASK_BEGIN_BIN:-$HERE/task-begin.sh}"
+# Pasos 1 a 5 de pr-review y sus comprobaciones mecánicas, en bash (DEVKIT-93):
+# `run_claude` lo corre antes de cualquier `claude -p` de pr-review, para que
+# un PR sin nada nuevo que juzgar no gaste un lanzamiento en Opus. Sustituible
+# por un doble en la autoprueba.
+REVIEW_PREP_BIN="${DEVKIT_REVIEW_PREP_BIN:-$HERE/review-prep.sh}"
 # Para leer la ronda de un lanzamiento (DEVKIT-61): la card en Notion trae la
 # URL del PR, y gh cuenta sus comentarios devkit-fix. Sustituibles por dobles.
 NOTION_BIN="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
@@ -622,8 +627,33 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
 }
 
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
-  local skill
+  local skill prompt=$1
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  # Preparación mecánica de pr-review (DEVKIT-93): antes de gastar un solo
+  # turno de Opus, `review-prep.sh` repite los pasos 1 a 5 de la skill y sus
+  # comprobaciones de la rúbrica en bash. Salida 3: nada que revisar (PR
+  # cerrado, sin card, o ya revisado sin respuesta del corrector, DEVKIT-74);
+  # se corta aquí, sin `claude -p`, y el motivo queda en stdout para que quien
+  # llama lo deje en watch.log sin ALARMA. Cualquier otra salida distinta de
+  # cero es un fallo real (gh/Notion no respondieron) y se corta igual, con el
+  # motivo en stderr.
+  if [ "$skill" = pr-review ]; then
+    local numero material prep_rc
+    numero=$(printf '%s' "$1" | grep -oE '[0-9]+' | head -1)
+    material=$("$REVIEW_PREP_BIN" "$numero" 2>&1)
+    prep_rc=$?
+    if [ "$prep_rc" -eq 3 ]; then
+      printf '%s\n' "$material"
+      return 3
+    elif [ "$prep_rc" -ne 0 ]; then
+      printf '%s\n' "$material" >&2
+      return "$prep_rc"
+    fi
+    prompt="$1
+
+## Material
+$material"
+  fi
   local -a extra=(
     "DEVKIT_ORIGEN=" "DEVKIT_MODELO_FORZADO=" "DEVKIT_RONDA="
     "DEVKIT_MODEL=$2" "DEVKIT_EFFORT=$3" "DEVKIT_SKILL=$skill"
@@ -651,7 +681,7 @@ run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
     alarma_sin_notion "$1"
     return 67
   fi
-  "${lanzador[@]}" "$CLAUDE_BIN" -p "$1" --model "$2" --effort "$3" --output-format json \
+  "${lanzador[@]}" "$CLAUDE_BIN" -p "$prompt" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
     --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
       "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion"
@@ -2246,6 +2276,19 @@ FIN
   chmod +x "$tmp/task-begin-doble"
   export DEVKIT_TASK_BEGIN_BIN="$tmp/task-begin-doble"
 
+  # Doble de review-prep.sh (DEVKIT-93), exportado igual que el de
+  # task-begin.sh: dice que siempre hay algo que revisar, sin tocar gh ni
+  # Notion, para que las pruebas de más abajo que lanzan "/pr-review ..." sin
+  # probar la preparación en sí no dependan del PR 9 de verdad. Las pruebas
+  # que sí prueban la preparación anulan esta variable por invocación.
+  cat >"$tmp/review-prep-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "## Card
+material de prueba"
+FIN
+  chmod +x "$tmp/review-prep-doble"
+  export DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-doble"
+
   # Un doble de `claude` que no gasta cuota: responde bien a cualquier
   # `--model`, así sirve tanto para las comprobaciones de disponibilidad como
   # para los lanzamientos de punta a punta de más abajo.
@@ -2461,6 +2504,64 @@ FIN
     bash "$HERE/devkit-run.sh" --sync '/epic-plan DEVKIT-1' >/dev/null 2>&1
   check "el claude -p de epic-plan recibe --model fable" 1 \
     "$(grep -c -- '--model fable' "$tmp/claude-llamadas")"
+
+  # --- review-prep.sh antes de pr-review (DEVKIT-93) ------------------------
+  # `run_claude` corre `review-prep.sh` antes de cualquier `claude -p` de
+  # pr-review: con un PR simulado docs y uno código (la clasificación la
+  # decide el propio `review-prep.sh`, acá solo importa que su salida llegue
+  # al prompt bajo `## Material`) y, por separado, el caso que paga esta card:
+  # "nada que revisar" no debe gastar ningún turno de Opus.
+  cat >"$tmp/review-prep-docs" <<'FIN'
+#!/usr/bin/env bash
+echo "## Card
+PR simulado de documentación.
+## Comprobaciones mecánicas
+PR de documentación: sin worktree, sin comprobaciones mecánicas."
+FIN
+  cat >"$tmp/review-prep-codigo" <<'FIN'
+#!/usr/bin/env bash
+echo "## Card
+PR simulado de código.
+## Comprobaciones mecánicas
+Comprobaciones mecánicas (2 Verificado, 0 Falla):
+- **bash -n foo.sh**: Verificado"
+FIN
+  cat >"$tmp/review-prep-nada" <<'FIN'
+#!/usr/bin/env bash
+echo "ya revisado en abc123"
+exit 3
+FIN
+  chmod +x "$tmp/review-prep-docs" "$tmp/review-prep-codigo" "$tmp/review-prep-nada"
+
+  : >"$tmp/claude-llamadas"
+  DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-docs" \
+    DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+    DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 20' >/dev/null 2>&1
+  check "PR docs simulado: el material de review-prep.sh entra en el prompt" 1 \
+    "$(grep -c 'PR de documentación: sin worktree' "$tmp/claude-llamadas")"
+  check "PR docs simulado: el prompt trae el encabezado ## Material" 1 \
+    "$(grep -c '## Material' "$tmp/claude-llamadas")"
+
+  : >"$tmp/claude-llamadas"
+  DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-codigo" \
+    DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+    DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 21' >/dev/null 2>&1
+  check "PR código simulado: el material de review-prep.sh entra en el prompt" 1 \
+    "$(grep -c 'bash -n foo.sh' "$tmp/claude-llamadas")"
+
+  : >"$tmp/claude-llamadas"
+  salida_nada=$(DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-nada" \
+    DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+    DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 22' 2>&1)
+  salida_nada_rc=$?
+  check "nada que revisar: devkit-run --sync sale con 3" 3 "$salida_nada_rc"
+  check "nada que revisar: el motivo llega a stdout/stderr" 1 \
+    "$(grep -c 'ya revisado en abc123' <<<"$salida_nada")"
+  check "nada que revisar: no llama a claude -p (cero turnos de Opus)" 0 \
+    "$(wc -l <"$tmp/claude-llamadas" | tr -d ' ')"
 
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
@@ -4876,8 +4977,16 @@ $card_md"
     flock -u 9
     exec 9>&-
     estado=terminado
-    [ $rc -eq 0 ] || estado="falló (rc=$rc)"
-    resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$ronda")"
+    if [ "$rc" -eq 3 ]; then
+      # DEVKIT-93: review-prep.sh dijo que no había nada que revisar; el
+      # log trae su motivo en texto plano, no JSON. Con el prefijo "no
+      # lanzó: ", `confirmar_arranque` lo reconoce igual que el corte de
+      # task-begin.sh y no lo trata como un worker muerto.
+      resumen_txt="no lanzó: $(tr '\n' ' ' < "$logf" 2>/dev/null | sed -E 's/[[:space:]]+$//')"
+    else
+      [ $rc -eq 0 ] || estado="falló (rc=$rc)"
+      resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$ronda")"
+    fi
     [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
     # `[<id>]` une el resumen con su línea "lanzando" para `--estado`: dos
     # lanzamientos del mismo prompt solo se distinguen por el log.
@@ -4917,6 +5026,8 @@ $card_md"
         printf '%s devkit-run "%s" ALARMA: terminó sin entregar ni bloquear (%s): card sigue En progreso, sin PR ni bloqueo\n' \
           "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
       fi
+    elif [ "$rc" -eq 3 ]; then
+      : # DEVKIT-93: nada que revisar; no es un error, sin ALARMA.
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
