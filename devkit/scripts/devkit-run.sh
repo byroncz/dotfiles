@@ -650,7 +650,7 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   # reloj del monitor (DEVKIT-89, criterio 3): así un lanzamiento leído mucho
   # después de terminar (por ejemplo, al reconstruir costos.log) mide igual.
   linea=$(tail -1 "$logf" 2>/dev/null | jq -r '
-    "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") duracion=\((.duration_ms // 0) / 1000 | floor)s tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
+    "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") duracion=\(if .duration_ms then ((.duration_ms / 1000 | floor) | tostring) else "?" end)s tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
   [ -n "$linea" ] || linea="$(tail -1 "$logf" 2>/dev/null | cut -c1-160)"
   turnos=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != "-" ] && [ -n "$turnos" ] \
@@ -4053,6 +4053,9 @@ FIN
   check "resumen incluye duracion= desde duration_ms del JSON" "duracion=12s" \
     "$(printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3,"duration_ms":12345}\n' >"$tmp/dur.log"
        resumen "$tmp/dur.log" m e 99 | grep -oE 'duracion=[0-9]+s')"
+  check "resumen usa ? en duracion= cuando falta duration_ms, no un 0 inventado (H4)" "duracion=?s" \
+    "$(printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n' >"$tmp/sindur.log"
+       resumen "$tmp/sindur.log" m e 99 | grep -oE 'duracion=\?s')"
 
   check "costos_log_candidata acepta un lanzamiento de las seis skills" 0 \
     "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-start-1 lanzando (origen=humano) modelo=m esfuerzo=e ronda=1: "/task-start DEVKIT-1" log=/x.log'; echo $?)"
