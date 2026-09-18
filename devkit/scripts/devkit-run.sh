@@ -2975,13 +2975,13 @@ FIN
   printf '#!/usr/bin/env bash\necho "9001 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 %s/task-start-9.log opus high 40"\n' \
     "$tmp/run" >"$pslist_dup"
   chmod +x "$pslist_dup"
-  printf '%s task-start-9 lanzando (origen=humano): "/task-start DEVKIT-9" log=%s/task-start-9.log\n' \
+  printf '%s task-start-9 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-start DEVKIT-9" log=%s/task-start-9.log\n' \
     "$(date +%FT%T%:z)" "$tmp/run" >"$tmp/run/watch.log"
   dup_out=$(DEVKIT_PS_BIN="$pslist_dup" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     bash "$HERE/devkit-run.sh" task-start DEVKIT-9 2>&1); dup_rc=$?
   check "lanzamiento duplicado: sale con error" 68 "$dup_rc"
-  check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo" 1 \
+  check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo (línea nueva con modelo/esfuerzo/ronda)" 1 \
     "$(printf '%s' "$dup_out" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9001, log $tmp/run/task-start-9.log)")"
   check "lanzamiento duplicado: no agrega una segunda línea lanzando" 1 \
     "$(grep -c 'lanzando' "$tmp/run/watch.log" 2>/dev/null)"
@@ -2990,6 +2990,24 @@ FIN
         DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
         bash "$HERE/devkit-run.sh" --forzar task-start DEVKIT-9 >/dev/null 2>&1
       grep -c 'lanzando' "$tmp/run/watch.log")"
+
+  # DEVKIT-81 H1: el aviso de duplicado también debe encontrar el log de una
+  # línea "lanzando" del formato viejo, sin modelo/esfuerzo/ronda, que puede
+  # seguir en watch.log tras una actualización del devkit.
+  local pslist_dup_viejo dup_out_viejo tmp_viejo
+  tmp_viejo="$tmp/dup-viejo"
+  mkdir -p "$tmp_viejo/run"
+  pslist_dup_viejo="$tmp/ps-dup-viejo"
+  printf '#!/usr/bin/env bash\necho "9002 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-9 %s/task-start-9.log opus high 40"\n' \
+    "$tmp_viejo/run" >"$pslist_dup_viejo"
+  chmod +x "$pslist_dup_viejo"
+  printf '%s task-start-9 lanzando (origen=humano): "/task-start DEVKIT-9" log=%s/task-start-9.log\n' \
+    "$(date +%FT%T%:z)" "$tmp_viejo/run" >"$tmp_viejo/run/watch.log"
+  dup_out_viejo=$(DEVKIT_PS_BIN="$pslist_dup_viejo" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp_viejo/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp_viejo/run/frontera" \
+    bash "$HERE/devkit-run.sh" task-start DEVKIT-9 2>&1)
+  check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo (línea vieja sin modelo/esfuerzo/ronda)" 1 \
+    "$(printf '%s' "$dup_out_viejo" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9002, log $tmp_viejo/run/task-start-9.log)")"
 
   return $fail
 }
@@ -3214,7 +3232,7 @@ prompt="/$skill $clave"
 # esta comprobación, por ejemplo tras matar a mano el proceso viejo.
 if [ -z "$forzar" ]; then
   if dup_pid=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | lanzamiento_duplicado "$prompt"); then
-    dup_log=$(grep -F "): \"$(prompt_en_linea "$prompt")\" log=" "$WATCH_LOG" 2>/dev/null \
+    dup_log=$(grep -F ": \"$(prompt_en_linea "$prompt")\" log=" "$WATCH_LOG" 2>/dev/null \
       | tail -1 | grep -oE 'log=.*$' | sed 's/^log=//')
     echo "devkit-run: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid, log ${dup_log:-desconocido}); síguelo con \`devkit-run --estado\` (o usa --forzar para lanzarlo igual)." >&2
     exit 68
