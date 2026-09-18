@@ -16,7 +16,7 @@ con `claude -p "/nombre argumentos"`.
 | `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
-| `task-document` | Entrada de Documentación de una card en Lista para merge (o de una Épica cerrada); no cambia el Estado | `watch.sh` tras el OK de `pr-review`; `task-close.sh` si falta |
+| `task-document` | Entrada "decisión" (PR marcado `Tipo: decisión`) o entrada consolidada de una Épica cerrada; no cambia el Estado. La entrada "cambio" ordinaria la escribe `task-document.sh`, sin agente | `watch.sh` si el PR trae la marca; `task-close.sh` solo para una Épica |
 | `project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `template-update` | Sube la versión del template y pone al día `AGENTS.md` | Agente |
 | `template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
@@ -28,6 +28,7 @@ hija desde DEVKIT-56: son scripts bash contra la API de Notion, con el token
 | Script | Transición | Quién lo lanza |
 |---|---|---|
 | `task-close.sh <Clave> [PR]` | Lista para merge → Hecha; cierra la Épica o llama a `task-next.sh` | `watch.sh` tras el merge; humano con `devkit-run task-close` |
+| `task-document.sh <Clave> [PR]` | Escribe o reemplaza la entrada "cambio" de una card, copiando Objetivo, secciones del PR, hallazgos corregidos y marcas de modelo; no cambia el Estado. Idempotente por head | `watch.sh` al OK de `pr-review`; `task-close.sh` al merge |
 | `task-next.sh <Clave>` | Lanza `task-start` de la siguiente hija libre de la Épica: su `Depende de` en `Hecha`, ninguna hermana en curso | `watch.sh` al OK de `pr-review`; `task-close.sh` al merge |
 | `task-block.sh <Clave> <motivo>` | Cualquiera (salvo `Hecha`, que se niega) → Bloqueada | Agente, `watch.sh` y `devkit-run`; humano con `devkit-run task-block` |
 

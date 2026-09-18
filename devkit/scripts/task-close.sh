@@ -26,11 +26,11 @@ RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
 TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$HERE/task-next.sh}"
+TASK_DOCUMENT="${DEVKIT_TASK_DOCUMENT_BIN:-$HERE/task-document.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
-PS_BIN="${DEVKIT_PS_BIN:-ps}"
 # Lo que este script lance (task-document, la siguiente hija vía task-next.sh)
 # aparece en `devkit-run --estado` con origen `task-close` (DEVKIT-57).
 export DEVKIT_ORIGEN=task-close
@@ -51,15 +51,6 @@ estado=$(jq -r '.estado // ""' <<<"$card")
 nivel=$(jq -r '.nivel // ""' <<<"$card")
 
 clave_de() { jq -r --arg c "$codigo" '"\($c)-\(.numero)"' <<<"$1"; }
-
-# ¿Hay un task-document vivo para la Clave? El bucle lo lanza con
-# `devkit-run.sh --sync` y un lanzamiento manual con `--worker`; en ambos la
-# línea del proceso trae "/task-document <Clave>". Sin esta guarda, un merge
-# aprobado mientras task-document escribe la entrada lanzaba un segundo
-# `claude -p` y comentaba en la card que faltaba la entrada (DEVKIT-55, H3).
-documentando() {  # documentando <Clave>
-  "$PS_BIN" -eo args= 2>/dev/null | grep -qE -- "(--sync|--worker|claude -p) /task-document $1( |$)"
-}
 
 # --- Épica -----------------------------------------------------------------
 # Regla de DEVKIT-44: solo se cierra si todas sus hijas están Hecha, la Épica
@@ -152,18 +143,22 @@ if [ "$estado" != "Hecha" ]; then
   [ -n "$(jq -r '.pr // ""' <<<"$card")" ] || props+=("PR=$pr_url")
   "$NOTION" set "$id" "${props[@]}" || { say "no pude pasar $clave a Hecha"; exit 1; }
   transicion=1
+
+  # task-document.sh es idempotente (DEVKIT-92): con la entrada ya escrita
+  # para el head vigente no hace nada y sale con 0, así que se llama siempre,
+  # sin comprobar antes si hace falta. Esto reemplaza el segundo lanzamiento
+  # del agente que pedía DEVKIT-84: si el OK del revisor ya la escribió, este
+  # paso es gratis; si el head cambió después (o el merge llegó antes de que
+  # el bucle documentara), la escribe ahora.
+  doc_out=$("$TASK_DOCUMENT" "$clave" "$pr_url" 2>&1); doc_rc=$?
   if doc=$("$NOTION" documentacion "$id" "$clave"); then
     doc_url=$(jq -r .url <<<"$doc")
     "$NOTION" comentar "$id" "Cerrada. Documentación: $doc_url. $marcas"
-  elif documentando "$clave"; then
-    "$NOTION" comentar "$id" "Cerrada. La entrada de Documentación la está escribiendo task-document. $marcas"
-    say "$clave sin entrada de Documentación todavía; task-document ya corre, no se relanza"
   else
-    "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: se lanza task-document para escribirla. $marcas"
-    "$DEVKIT_RUN" task-document "$clave" >/dev/null 2>&1 \
-      && say "$clave sin entrada de Documentación; lanzado task-document" \
-      || say "$clave sin entrada de Documentación y no pude lanzar task-document"
+    "$NOTION" comentar "$id" "Cerrada. Falta la entrada de Documentación: task-document.sh no pudo escribirla. $marcas"
+    say "$clave sin entrada de Documentación: $doc_out"
   fi
+  [ "$doc_rc" -eq 0 ] || say "task-document.sh terminó con error (rc=$doc_rc): $doc_out"
   say "$clave Hecha"
 else
   say "$clave ya estaba Hecha"

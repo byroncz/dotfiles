@@ -6,7 +6,8 @@
 #   último marcador CAMBIOS para el head, sin respuesta     -> task-fix
 #   último marcador CAMBIOS para el head, respuesta sin push -> pr-review de nuevo
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
-#   último marcador OK para el head, sin devkit-doc del head -> task-document
+#   último marcador OK para el head, sin devkit-doc del head -> task-document.sh
+#                                                                (o la skill, si el PR trae "Tipo: decisión")
 #   último marcador OK para el head                         -> task-next.sh
 #   3 ciclos respondidos y CAMBIOS otra vez en el head      -> task-block.sh
 #   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
@@ -101,6 +102,10 @@ ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 TASK_CLOSE="${DEVKIT_TASK_CLOSE_BIN:-$SCRIPTS_DIR/task-close.sh}"
 TASK_BLOCK="${DEVKIT_TASK_BLOCK_BIN:-$SCRIPTS_DIR/task-block.sh}"
 TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$SCRIPTS_DIR/task-next.sh}"
+# task-document.sh escribe la entrada de tipo "cambio" en bash, sin agente
+# (DEVKIT-92); el agente solo corre cuando el cuerpo del PR trae la marca
+# "Tipo: decisión" (ver documentar_pr más abajo).
+TASK_DOCUMENT="${DEVKIT_TASK_DOCUMENT_BIN:-$SCRIPTS_DIR/task-document.sh}"
 MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
@@ -743,6 +748,38 @@ chain_next() {  # chain_next <num> <Clave>
   [ "$rc" -eq 0 ] || log "ALARMA: task-next-$num terminó con error (rc=$rc); ver $RUN_DIR/task-next-$num.log"
 }
 
+# ¿El cuerpo del PR trae la marca "Tipo: decisión" (DEVKIT-92)? La escribe el
+# agente de `task-submit` cuando la card cambió una decisión de diseño, no
+# solo la implementó; sin ella, la entrada de Documentación es mecánica.
+es_decision() {  # es_decision <cuerpo del PR>
+  printf '%s\n' "$1" | tr -d '\r' | grep -qx 'Tipo: decisión'
+}
+
+# OK del revisor sin documentar (DEVKIT-92): una entrada "decisión" todavía
+# necesita al agente (razona el porqué, no lo copia de ningún lado); una
+# entrada "cambio" la arma task-document.sh, en bash y sin modelo -por eso ya
+# no hay ronda ni modelo que escalar en ella (DEVKIT-83), ni un segundo
+# lanzamiento al cerrar (DEVKIT-84): el propio script decide si hay algo que
+# escribir.
+documentar_pr() {  # documentar_pr <num> <Clave> <head> <cuerpo del PR>
+  local num=$1 key=$2 head=$3 cuerpo=$4 name out rc estado
+  local short=${head:0:7}
+  if es_decision "$cuerpo"; then
+    log "PR #$num ($key) OK en $short, marcado Tipo: decisión: lanzando el agente task-document"
+    run_skill "task-document-$num-$short" "/task-document $key $num" "documentar:$num:$head"
+    return
+  fi
+  name="task-document-$num-$short"
+  log "PR #$num ($key) OK en $short: task-document.sh"
+  out=$("$TASK_DOCUMENT" "$key" "$num" 2>&1)
+  rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/$name.log"
+  estado=terminado
+  [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
+  log "$name $estado: bash :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+  [ "$rc" -eq 0 ] || log "ALARMA: $name terminó con error (rc=$rc); ver $RUN_DIR/$name.log"
+}
+
 # Cierre de un PR mergeado, en bash (DEVKIT-55). La línea de resumen dice
 # cuántos segundos pasaron desde el merge hasta que la card quedó cerrada:
 # es la medida del criterio "menos de un minuto".
@@ -802,6 +839,9 @@ check_merged_prs() {
 #   --fix <num> <Clave> <url> <head> <ref>
 #                           el caso `fix` completo: task-fix, alarma de
 #                           task-fix vacío, relanzamiento y bloqueo
+#   --documentar <num> <Clave> <head> <cuerpo>
+#                           el caso `documentar`: task-document.sh, o el
+#                           agente si el cuerpo trae "Tipo: decisión"
 # Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los
 # siguientes, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
 # DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh; `--fix`, en
@@ -846,6 +886,10 @@ case "${1:-}" in
     chain_next "${2:-}" "${3:-}"
     exit 0
     ;;
+  --documentar)
+    documentar_pr "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    exit 0
+    ;;
   --fix)
     BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
     atender_fix "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
@@ -879,9 +923,11 @@ while true; do
     | while IFS=$'\t' read -r num url title; do
         key=$(key_of "$title" "$CODE") || continue
         [ -n "$BOT" ] || { log "PR #$num: sin login de la cuenta máquina; se omite"; continue; }
-        IFS=$'\t' read -r action head ref extra < <(
-          gh pr view "$num" --json headRefOid,reviews,comments 2>/dev/null | decide "$BOT"
-        )
+        # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92):
+        # es lo único que necesita el caso `documentar` para saber si el PR
+        # trae la marca "Tipo: decisión"; decide() la ignora, sin cambios.
+        pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body 2>/dev/null)
+        IFS=$'\t' read -r action head ref extra < <(printf '%s' "$pr_full" | decide "$BOT")
         [ -n "${action:-}" ] || continue
         short=${head:0:7}
         case "$action" in
@@ -919,8 +965,7 @@ while true; do
           documentar)
             if ! launched "documentar:$num:$head"; then
               mark "documentar:$num:$head"
-              log "PR #$num ($key) OK en $short: lanzando task-document"
-              run_skill "task-document-$num-$short" "/task-document $key $num" "documentar:$num:$head"
+              documentar_pr "$num" "$key" "$head" "$(jq -r '.body // ""' <<<"$pr_full")"
             fi
             # Después de documentar: la hija nueva hace `git switch` y
             # espera el candado, así que no le quita el turno a la entrada.

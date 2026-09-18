@@ -145,7 +145,14 @@ done
 
 # --- 3. Commit y push --------------------------------------------------------
 if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
-  git -C "$WS" add -A -- . ':!.devkit/pr-body.md' || { err "git add falló"; exit 1; }
+  # `git add -A -- . ':!.devkit/pr-body.md'` (la forma obvia de excluirlo)
+  # falla con git 2.47: negar un pathspec que además está en .gitignore hace
+  # que `git add` reporte el archivo como ignorado y salga con 1, aunque la
+  # exclusión sí se aplique. Se evita ese caso agregando todo y desagregando
+  # el archivo después: funciona igual si el .gitignore de un proyecto viejo
+  # todavía no tiene la regla (queda sin comitear, sin más).
+  git -C "$WS" add -A -- . || { err "git add falló"; exit 1; }
+  git -C "$WS" reset -q -- .devkit/pr-body.md 2>/dev/null
   git -C "$WS" commit -q -m "$mensaje" || { err "git commit falló"; exit 1; }
 fi
 push_err=$(mktemp)

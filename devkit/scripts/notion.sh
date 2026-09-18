@@ -17,6 +17,18 @@
 #                                             entrada cuyo Título empieza por
 #                                             "<clave>:" (descarta entradas de
 #                                             referencia con la misma Tarea)
+#   notion.sh crear-doc <tarea_id> <proyecto_id> <titulo> <tipo> [rama] [pr]
+#                                             crea una página en Documentación
+#                                             con esas propiedades y el cuerpo
+#                                             Markdown que llega por stdin
+#                                             como bloques: {id,url}
+#                                             (task-document.sh, DEVKIT-92)
+#   notion.sh reemplazar-doc <page_id> [rama] [pr]
+#                                             vacía los bloques de una página
+#                                             de Documentación y los reemplaza
+#                                             por el Markdown de stdin;
+#                                             actualiza Rama/PR si llegan:
+#                                             {id,url} (DEVKIT-92)
 #   notion.sh hijas <page_id>                 hijas de una Épica (relación
 #                                             Padre), como lista JSON
 #   notion.sh criterios <page_id>             texto de la sección "Criterios
@@ -258,9 +270,12 @@ cmd_set() {  # cmd_set <page_id> Prop=valor...
   api PATCH "/pages/$page_id" "$props" >/dev/null
 }
 
-# rich_text de un comentario: las URL como enlaces, el resto como texto, y
-# cada tramo en trozos de 2000 caracteres, el tope de la API por objeto.
-RICH_TEXT='
+# Un texto a objetos rich_text de Notion: las URL como enlaces, el resto
+# como texto, y cada tramo en trozos de 2000 caracteres, el tope de la API
+# por objeto `text.content`. Compartido con MD_BLOQUES (DEVKIT-92): un
+# bloque de Documentación largo -código, párrafo, viñeta- necesita el mismo
+# recorte que ya aplicaba el comentario del PR.
+TRAMOS_DEF='
 def tramos($t):
   ($t | [match("https?://[^\\s<>()\"]*[^\\s<>()\".,;:]"; "g")]) as $ms
   | (reduce $ms[] as $m ({pos: 0, out: []};
@@ -268,9 +283,14 @@ def tramos($t):
                + [{text: {content: $m.string, link: {url: $m.string}}}]
        | .pos = $m.offset + $m.length)) as $r
   | $r.out + (if ($t | length) > $r.pos then [{text: {content: $t[$r.pos:]}}] else [] end);
-[ tramos($texto)[] | . as $s
-  | range(0; ($s.text.content | length); 2000) as $i
-  | $s | .text.content = $s.text.content[$i:$i + 2000] ]
+def recortar($t):
+  [ tramos($t)[] | . as $s
+    | range(0; ($s.text.content | length); 2000) as $i
+    | $s | .text.content = $s.text.content[$i:$i + 2000] ];
+'
+
+RICH_TEXT="$TRAMOS_DEF"'
+recortar($texto)
 '
 
 cmd_comentar() {  # cmd_comentar <page_id> <texto>
@@ -297,6 +317,121 @@ cmd_documentacion() {  # cmd_documentacion <page_id> [clave]
   fi
   [ -n "$fila" ] || return 1
   jq -c '{id, url}' <<<"$fila"
+}
+
+# Markdown de línea a bloque de Notion (DEVKIT-92): task-document.sh compone
+# el cuerpo de una entrada de Documentación en Markdown plano -lo mismo que ya
+# arma a mano, sin plugin- y esto lo convierte a los cuatro tipos de bloque
+# que ese cuerpo usa: encabezado (#/##/###), párrafo, lista (- o número.) y
+# código (```lenguaje ... ```). Cualquier otra sintaxis de Markdown (tablas,
+# negrita, enlaces) cae a párrafo con el texto tal cual: task-document.sh no
+# la genera, así que no hace falta cubrirla. Una línea que no abre un bloque
+# nuevo (no es encabezado, viñeta, número ni cerca de código) continúa el
+# párrafo o el ítem de lista anterior, unida con un espacio: los cuerpos de
+# PR llegan con las líneas cortadas a columna fija, y sin esto cada una
+# quedaba como su propio párrafo. Una línea en blanco corta esa continuación
+# (flag `corte`, H7 del informe del PR 66): sin ella, dos párrafos separados
+# por línea en blanco -como "Por qué" o "Modelos"- se pegaban en uno solo,
+# porque la línea en blanco no tocaba el estado y la siguiente línea seguía
+# viendo el párrafo anterior como continuable.
+MD_BLOQUES="$TRAMOS_DEF"'
+def bloque($tipo; $contenido):
+  {object: "block", type: $tipo, ($tipo): {rich_text: (recortar($contenido) | map(. + {type: "text"}))}};
+def es_continuable: . == "paragraph" or . == "bulleted_list_item" or . == "numbered_list_item";
+($md | split("\n")) as $lineas
+| (reduce $lineas[] as $l
+    ({items: [], en_codigo: false, codigo: "", lenguaje: "", corte: false};
+      if .en_codigo then
+        if ($l | test("^```")) then
+          .items += [{tipo: "code", contenido: (.codigo | rtrimstr("\n")),
+                      lenguaje: (if .lenguaje == "" then "plain text" else .lenguaje end)}]
+          | .en_codigo = false | .codigo = "" | .lenguaje = "" | .corte = false
+        else
+          .codigo += ($l + "\n")
+        end
+      elif ($l | test("^```")) then
+        .en_codigo = true | .lenguaje = ($l | ltrimstr("```"))
+      elif ($l | test("^### ")) then .items += [{tipo: "heading_3", contenido: ($l | ltrimstr("### "))}] | .corte = false
+      elif ($l | test("^## "))  then .items += [{tipo: "heading_2", contenido: ($l | ltrimstr("## "))}] | .corte = false
+      elif ($l | test("^# "))   then .items += [{tipo: "heading_1", contenido: ($l | ltrimstr("# "))}] | .corte = false
+      elif ($l | test("^[-*] ")) then .items += [{tipo: "bulleted_list_item", contenido: $l[2:]}] | .corte = false
+      elif ($l | test("^[0-9]+\\. ")) then .items += [{tipo: "numbered_list_item", contenido: ($l | sub("^[0-9]+\\. ";""))}] | .corte = false
+      elif ($l | test("^\\s*$")) then .corte = true
+      elif (.corte == false and (.items | length) > 0 and (.items[-1].tipo | es_continuable)) then
+        .items[-1].contenido += (" " + ($l | sub("^\\s+";"")))
+      else
+        .items += [{tipo: "paragraph", contenido: $l}] | .corte = false
+      end)) as $acc
+| [ $acc.items[] | if .tipo == "code" then
+      {object: "block", type: "code",
+       code: {rich_text: (recortar(.contenido) | map(. + {type: "text"})), language: .lenguaje}}
+    else
+      bloque(.tipo; .contenido)
+    end ]
+'
+
+# Borra los bloques hijos de una página, uno por uno (DELETE los archiva:
+# Notion no ofrece "vaciar" de una sola llamada).
+vaciar_bloques() {  # vaciar_bloques <page_id>
+  local id=$1 cursor="" page ids bid
+  while :; do
+    page=$(api GET "/blocks/$id/children?page_size=100${cursor:+&start_cursor=$cursor}") || return
+    ids=$(jq -r '.results[].id' <<<"$page")
+    while IFS= read -r bid; do
+      [ -n "$bid" ] || continue
+      api DELETE "/blocks/$bid" >/dev/null || return
+    done <<<"$ids"
+    [ "$(jq -r '.has_more' <<<"$page")" = "true" ] || break
+    cursor=$(jq -r '.next_cursor' <<<"$page")
+  done
+}
+
+# Agrega el Markdown como bloques hijos, en tandas de 100 (el tope de la API
+# por llamada a /children).
+agregar_bloques() {  # agregar_bloques <page_id> <markdown>
+  local id=$1 md=$2 bloques n total chunk
+  bloques=$(jq -nc --arg md "$md" "$MD_BLOQUES") || return
+  n=$(jq 'length' <<<"$bloques")
+  total=0
+  while [ "$total" -lt "$n" ]; do
+    chunk=$(jq -c ".[$total:$((total + 100))]" <<<"$bloques")
+    api PATCH "/blocks/$id/children" "$(jq -nc --argjson c "$chunk" '{children: $c}')" >/dev/null || return
+    total=$((total + 100))
+  done
+}
+
+cmd_crear_doc() {  # cmd_crear_doc <tarea_id> <proyecto_id> <titulo> <tipo> [rama] [pr]  (cuerpo Markdown por stdin)
+  local tarea=$1 proyecto=$2 titulo=$3 tipo=$4 rama=${5:-} pr=${6:-} cuerpo props page id
+  cuerpo=$(cat)
+  props=$(jq -nc --arg titulo "$titulo" --arg tarea "$tarea" --arg proyecto "$proyecto" \
+    --arg tipo "$tipo" --arg rama "$rama" --arg pr "$pr" --arg db "$(db_id documentacion)" '
+    {parent: {database_id: $db},
+     properties: ({
+       "Título": {title: [{text: {content: $titulo}}]},
+       "Proyecto": {relation: [{id: $proyecto}]},
+       "Tarea": {relation: [{id: $tarea}]},
+       "Tipo": {select: {name: $tipo}}
+     } + (if $rama == "" then {} else {"Rama": {url: $rama}} end)
+       + (if $pr == "" then {} else {"PR": {url: $pr}} end))}') || return
+  page=$(api POST "/pages" "$props") || return
+  id=$(jq -r .id <<<"$page")
+  agregar_bloques "$id" "$cuerpo" || return
+  jq -c '{id, url}' <<<"$page"
+}
+
+cmd_reemplazar_doc() {  # cmd_reemplazar_doc <page_id> [rama] [pr]  (cuerpo Markdown por stdin)
+  local id=$1 rama=${2:-} pr=${3:-} cuerpo props page
+  cuerpo=$(cat)
+  vaciar_bloques "$id" || return
+  agregar_bloques "$id" "$cuerpo" || return
+  if [ -n "$rama" ] || [ -n "$pr" ]; then
+    props=$(jq -nc --arg rama "$rama" --arg pr "$pr" \
+      '{properties: ((if $rama == "" then {} else {"Rama": {url: $rama}} end)
+                    + (if $pr == "" then {} else {"PR": {url: $pr}} end))}')
+    api PATCH "/pages/$id" "$props" >/dev/null || return
+  fi
+  page=$(api GET "/pages/$id") || return
+  jq -c '{id, url}' <<<"$page"
 }
 
 cmd_hijas() {  # cmd_hijas <page_id>
@@ -607,6 +742,105 @@ FIN
   env "${entorno[@]}" bash "$HERE/notion.sh" documentacion card-55 DEVKIT-99 >/dev/null
   check "documentacion: con clave sin entrada propia sale con 1" 1 "$?"
 
+  # MD_BLOQUES: Markdown de task-document.sh a bloques de Notion (DEVKIT-92).
+  # Puro, sin red: encabezados, párrafo, lista y código, con el resto del
+  # Markdown que no genera task-document.sh cayendo a párrafo.
+  got=$(jq -nc --arg md '## Qué cambió
+Una línea de párrafo.
+- uno
+- dos
+```sh
+echo hola
+echo chau
+```
+### Enlaces' "$MD_BLOQUES")
+  check "MD_BLOQUES: tipos de bloque en orden" \
+    '["heading_2","paragraph","bulleted_list_item","bulleted_list_item","code","heading_3"]' \
+    "$(jq -c '[.[].type]' <<<"$got")"
+  check "MD_BLOQUES: el código conserva las dos líneas y el lenguaje" \
+    '{"lang":"sh","texto":"echo hola\necho chau"}' \
+    "$(jq -c '.[4].code | {lang: .language, texto: (.rich_text[0].text.content)}' <<<"$got")"
+  check "MD_BLOQUES: una línea en blanco no deja bloque vacío" 6 "$(jq 'length' <<<"$got")"
+
+  # H3 (informe del PR 66): líneas cortadas a columna fija -como las que
+  # arma task-document.sh a partir del cuerpo del PR- se unen al párrafo o al
+  # ítem de lista anterior, no quedan como bloques sueltos.
+  got=$(jq -nc --arg md 'Primero.
+Segundo.
+Tercero.
+- uno
+  continuación de uno' "$MD_BLOQUES")
+  check "MD_BLOQUES: líneas seguidas de un párrafo se unen con un espacio" \
+    '"Primero. Segundo. Tercero."' \
+    "$(jq -c '.[0].paragraph.rich_text[0].text.content' <<<"$got")"
+  check "MD_BLOQUES: la continuación sangrada de una viñeta se une a su ítem" \
+    '"uno continuación de uno"' \
+    "$(jq -c '.[1].bulleted_list_item.rich_text[0].text.content' <<<"$got")"
+
+  # H7 (informe del PR 66): la línea en blanco corta la continuación, aun
+  # cuando el texto que sigue podría unirse a un párrafo o a una viñeta.
+  got=$(jq -nc --arg md 'Primero.
+
+Segundo.' "$MD_BLOQUES")
+  check "MD_BLOQUES: dos párrafos separados por una línea en blanco no se unen" \
+    '["Primero.","Segundo."]' \
+    "$(jq -c '[.[].paragraph.rich_text[0].text.content]' <<<"$got")"
+  got=$(jq -nc --arg md '- uno
+
+Después de la lista.' "$MD_BLOQUES")
+  check "MD_BLOQUES: una viñeta seguida de línea en blanco y párrafo no se pegan" \
+    '["bulleted_list_item","paragraph"]' \
+    "$(jq -c '[.[].type]' <<<"$got")"
+  check "MD_BLOQUES: el párrafo tras la línea en blanco conserva su propio texto" \
+    '"Después de la lista."' \
+    "$(jq -c '.[1].paragraph.rich_text[0].text.content' <<<"$got")"
+
+  # H2 (informe del PR 66): un bloque de más de 2000 caracteres -código o
+  # texto- se corta en varios objetos rich_text, como ya hacía RICH_TEXT
+  # para los comentarios del PR.
+  largo=$(printf 'a%.0s' $(seq 1 2500))
+  got=$(jq -nc --arg md "\`\`\`
+$largo
+\`\`\`" "$MD_BLOQUES")
+  check "MD_BLOQUES: un bloque de código de más de 2000 caracteres se corta en tramos" \
+    "[2000,500]" \
+    "$(jq -c '.[0].code.rich_text | map(.text.content | length)' <<<"$got")"
+
+  # crear-doc: crea la página con sus propiedades y agrega el Markdown como
+  # bloques hijos.
+  resp POST__pages '{"id":"doc-nueva","url":"https://www.notion.so/docnueva"}'
+  resp PATCH__blocks_doc-nueva_children '{"results":[]}'
+  got=$(printf '## Qué cambió\nAlgo nuevo.' \
+    | env "${entorno[@]}" bash "$HERE/notion.sh" crear-doc card-55 proy-1 "DEVKIT-55: Notion por token" cambio \
+        https://github.com/o/r/tree/feat/DEVKIT-55-x https://github.com/o/r/pull/9)
+  check "crear-doc: {id,url} de la página nueva" '{"id":"doc-nueva","url":"https://www.notion.so/docnueva"}' "$got"
+  check "crear-doc: propiedades con Tarea, Proyecto, Tipo, Rama y PR" \
+    '{"parent":{"database_id":"dbdoc"},"properties":{"Título":{"title":[{"text":{"content":"DEVKIT-55: Notion por token"}}]},"Proyecto":{"relation":[{"id":"proy-1"}]},"Tarea":{"relation":[{"id":"card-55"}]},"Tipo":{"select":{"name":"cambio"}},"Rama":{"url":"https://github.com/o/r/tree/feat/DEVKIT-55-x"},"PR":{"url":"https://github.com/o/r/pull/9"}}}' \
+    "$(grep '^POST /pages ' "$tmp/llamadas" | tail -1 | cut -d' ' -f3-)"
+  check "crear-doc: agrega el cuerpo como bloques hijos de la página nueva" 1 \
+    "$(grep -c '^PATCH /blocks/doc-nueva/children' "$tmp/llamadas")"
+
+  # reemplazar-doc: vacía los bloques existentes (DELETE, uno por uno),
+  # agrega los nuevos y solo toca Rama/PR si llegan.
+  resp GET__blocks_doc-1_children '{"results":[{"id":"b1"},{"id":"b2"}],"has_more":false}'
+  resp DELETE__blocks_b1 '{"id":"b1"}'
+  resp DELETE__blocks_b2 '{"id":"b2"}'
+  resp PATCH__blocks_doc-1_children '{"results":[]}'
+  resp PATCH__pages_doc-1 '{"object":"page"}'
+  resp GET__pages_doc-1 '{"id":"doc-1","url":"https://www.notion.so/doc1"}'
+  : >"$tmp/llamadas"
+  got=$(printf '## Qué cambió\nOtra vez.' \
+    | env "${entorno[@]}" bash "$HERE/notion.sh" reemplazar-doc doc-1 "" https://github.com/o/r/pull/10)
+  check "reemplazar-doc: {id,url} de la página" '{"id":"doc-1","url":"https://www.notion.so/doc1"}' "$got"
+  check "reemplazar-doc: borra cada bloque existente" 2 "$(grep -cE '^DELETE /blocks/b[12] ' "$tmp/llamadas")"
+  check "reemplazar-doc: agrega el Markdown nuevo" 1 "$(grep -c '^PATCH /blocks/doc-1/children' "$tmp/llamadas")"
+  check "reemplazar-doc: sin Rama, solo actualiza PR" '{"properties":{"PR":{"url":"https://github.com/o/r/pull/10"}}}' \
+    "$(grep '^PATCH /pages/doc-1 ' "$tmp/llamadas" | cut -d' ' -f3-)"
+  : >"$tmp/llamadas"
+  got=$(printf 'x' | env "${entorno[@]}" bash "$HERE/notion.sh" reemplazar-doc doc-1)
+  check "reemplazar-doc: sin Rama ni PR no toca las propiedades de la página" 0 \
+    "$(grep -c '^PATCH /pages/doc-1 ' "$tmp/llamadas")"
+
   # criterios: la sección entre su encabezado y el siguiente.
   local bloques='[
     {"type":"heading_2","heading_2":{"rich_text":[{"plain_text":"Objetivo"}]}},
@@ -771,6 +1005,8 @@ case "${1:-}" in
   set) shift; cmd_set "$@" ;;
   comentar) cmd_comentar "${2:?page_id}" "${3:-}" ;;
   documentacion) cmd_documentacion "${2:?page_id}" "${3:-}" ;;
+  crear-doc) cmd_crear_doc "${2:?tarea_id}" "${3:?proyecto_id}" "${4:?titulo}" "${5:?tipo}" "${6:-}" "${7:-}" ;;
+  reemplazar-doc) cmd_reemplazar_doc "${2:?page_id}" "${3:-}" "${4:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
   contenido) cmd_contenido "${2:?page_id}" ;;

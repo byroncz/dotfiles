@@ -442,9 +442,10 @@ siguiente_modelo() {  # siguiente_modelo <alias>
 # --- Escalera de modelos por ronda (DEVKIT-61) ------------------------------
 # La ronda de un lanzamiento de implementación es cuántas veces se corrigió ya
 # su PR, más uno: task-start y task-submit son siempre la 1 (todavía no hay
-# PR); task-fix y task-document cuentan los comentarios `<!-- devkit-fix` del
-# PR de la card. `implementacion.rondas` en roles.toml dice qué modelo y
-# esfuerzo toca en cada ronda. Revisión no tiene ronda: imprime "-".
+# PR); task-fix cuenta los comentarios `<!-- devkit-fix` del PR de la card.
+# `implementacion.rondas` en roles.toml dice qué modelo y esfuerzo toca en
+# cada ronda. Revisión no tiene ronda: imprime "-". task-document tampoco
+# escala (DEVKIT-83, DEVKIT-92): siempre es la ronda 1, sin consultar el PR.
 
 ronda_aviso() {  # ronda_aviso <prompt> <texto>
   printf '%s devkit-run ronda de "%s": %s\n' "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$2" \
@@ -489,7 +490,10 @@ ronda_de() {  # ronda_de <prompt>
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   case "$skill" in
     pr-review|epic-plan) printf -- '-'; return 0 ;;
-    task-fix|task-document) ;;
+    # task-document ya no escala (DEVKIT-83): el bucle solo la lanza como
+    # agente para una entrada "decisión" o una Épica, ninguna de las dos es
+    # una corrección que deba costar más caro en la ronda siguiente.
+    task-fix) ;;
     *) printf '1'; return 0 ;;
   esac
   clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
@@ -2501,7 +2505,10 @@ FIN
   prs_con 3
   check "ronda 4 repite el último elemento de la lista" "modelo-fuerte high 40 4" \
     "$(ronda_env model_effort_of '/task-fix DEVKIT-7')"
-  check "task-document también cuenta la ronda" "modelo-fuerte high 40 4" \
+  # task-document ya no escala por ronda (DEVKIT-83, DEVKIT-92): siempre es
+  # la ronda 1, así que siempre le toca el primer elemento de la lista, sin
+  # importar cuántos devkit-fix tenga el PR.
+  check "task-document no escala: siempre ronda 1" "modelo-barato low 40 1" \
     "$(ronda_env model_effort_of '/task-document DEVKIT-7 7')"
   : >"$RONDA_DIR/gh-llamadas"
   check "task-start es ronda 1 sin consultar el PR" "modelo-barato low 40 1 0" \
