@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/workspace/devkit/scripts/pr-guard.sh"
+            "command": "/opt/devkit/template/scripts/pr-guard.sh"
           }
         ]
       }
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/workspace/devkit/scripts/hook-post-edit.sh"
+            "command": "/opt/devkit/template/scripts/hook-post-edit.sh"
           }
         ]
       }
@@ -95,7 +95,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/workspace/devkit/scripts/hook-stop.sh"
+            "command": "/opt/devkit/template/scripts/hook-stop.sh"
           }
         ]
       }
