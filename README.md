@@ -23,19 +23,19 @@ autenticado con un token por proyecto.
 | Herramienta | Para qué se usa aquí | Versión |
 |---|---|---|
 | Docker + Compose | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa) y `proxy` (única salida, con lista blanca). | — |
-| Debian trixie-slim | Imagen base sin lenguaje. Usuario `dev` sin `sudo`. | trixie-slim |
-| tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | 3.22 |
+| Debian | Imagen base sin lenguaje. Usuario `dev` sin `sudo`. | debian:trixie-slim |
+| tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | alpine 3.22 |
 | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. | 0.12.7 |
 | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. | — |
 | openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. | 1.109.5 |
-| zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. | 1.24.2 |
+| zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. | starship 1.24.2 |
 | Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. | — |
 | Codex | Segundo agente, preparado pero no instalado: mismo `AGENTS.md` y skills. | — |
-| GitHub + gh | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge activado. | 2.100.0 |
+| GitHub + gh | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge activado. | gh 2.100.0 |
 | Git | Una rama por card, Conventional Commits con la Clave como ámbito. | — |
 | Notion | Centro de tareas: bases Proyectos, Tareas y Documentación. | — |
-| Bitwarden Secrets Manager | Único lugar de los secretos del proyecto. | 2.1.0 |
-| rclone + Dropbox | Respaldo continuo de `sandbox.local/`, cada minuto. | 1.75.1 |
+| Bitwarden Secrets Manager | Único lugar de los secretos del proyecto. | bws 2.1.0 |
+| rclone + Dropbox | Respaldo continuo de `sandbox.local/`, cada minuto. | rclone 1.75.1 |
 | Terminal.app | Terminal de macOS; ahí corre el comando `devkit`. | — |
 
 Generada por `gen-readme.sh` (verificado con `--check`), no a mano:
@@ -83,7 +83,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 
 | Comando | Qué hace |
 |---|---|
-| `gen-stack.sh` | Genera la línea de extensiones y de versiones de la sección Stack del README. |
+| `gen-stack.sh` | Genera la tabla Stack y la línea de extensiones del README. |
 | `gen-readme.sh` | Genera y verifica `README.md` completo desde la plantilla. |
 | `devkit-run.sh` | Único punto de lanzamiento de una skill (ver `devkit-run` más arriba). |
 | `watch.sh` | Bucle que revisa PRs abiertos y cierra los mergeados, lanzando la skill que toca. |
