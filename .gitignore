@@ -18,3 +18,8 @@
 # devkit-run.sh en cada lanzamiento, vive fuera de tmpfs a propósito (por eso
 # no está en /run/devkit) pero no es código ni algo que el repo deba versionar.
 /.devkit/costos.log
+
+# Cuerpo del PR que redacta la skill task-submit, en tránsito hacia
+# task-submit.sh (DEVKIT-91): la skill lo escribe, el script lo lee y lo
+# borra al terminar. No es código del repo.
+/.devkit/pr-body.md

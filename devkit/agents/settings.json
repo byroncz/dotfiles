@@ -39,6 +39,7 @@
       "Bash(fd:*)",
       "Bash(devkit-net-denied:*)",
       "Bash(touch /run/devkit/poke)",
+      "Bash(\"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-submit.sh\":*)",
       "mcp__plugin_Notion_notion",
       "mcp__plugin_Notion_notion__*",
       "mcp__claude_ai_Notion",
@@ -73,7 +74,28 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/workspace/devkit/scripts/pr-guard.sh"
+            "command": "/opt/devkit/template/scripts/pr-guard.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/devkit/template/scripts/hook-post-edit.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/opt/devkit/template/scripts/hook-stop.sh"
           }
         ]
       }
