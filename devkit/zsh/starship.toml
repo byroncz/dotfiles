@@ -8,7 +8,8 @@
 #
 # `${custom.devkit}` corre devkit/scripts/prompt-status.sh, que arma la línea
 # completa en un solo proceso (detalle y presupuesto de 50 ms por módulo en
-# docs/ARCHITECTURE.md 4.4). `style = ""` es necesario: sin él, starship
+# la entrada de Documentación "Arquitectura del devkit" (Notion), sección
+# 4.4). `style = ""` es necesario: sin él, starship
 # envuelve la salida del módulo con su propio estilo por defecto y pisa el
 # color por prefijo que el script ya deja en ANSI crudo.
 format = """${custom.devkit}$character"""

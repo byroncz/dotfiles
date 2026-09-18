@@ -5,9 +5,6 @@ lo operen agentes de IA con un humano como única compuerta. El Mac solo
 necesita Docker; todo lo demás vive en un contenedor que se reconstruye desde
 este repo, y las tareas se gestionan en Notion.
 
-Diseño completo y decisiones: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-Cambios por versión: [`devkit/CHANGELOG.md`](devkit/CHANGELOG.md).
-
 ## Cómo funciona, en una vuelta
 
 1. Tú mueves una Épica de **Backlog** a **Lista** en Notion.
@@ -38,7 +35,7 @@ ti.
 | ![tinyproxy](https://img.shields.io/badge/tinyproxy-555555) | **tinyproxy** | Proxy de salida con lista blanca de dominios (`devkit/proxy/allowlist.base` más `domains` de `.devkit/devkit.toml`). `devkit-net-denied` muestra qué se bloqueó. |
 | ![uv](https://img.shields.io/badge/uv-DE5FE9?logo=astral&logoColor=white) | **uv** | Instala la versión de Python que declara `.devkit/devkit.toml` y gestiona dependencias y entornos (`uv add`, `uv sync`, `uv run`). |
 | ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white) | **Python** | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. `ruff` y `basedpyright` llegan como herramientas de `uv`. |
-| ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Único editor del devkit: `devkit code <proyecto>` abre la URL con token, ya en `/workspace`. Con la extensión Claude Code instalada desde Open VSX. Trae `"chat.disableAIFeatures": true` para apagar el chat integrado de VS Code, pero en esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta; limitación conocida, sin arreglo (DEVKIT-66). Claude Code es una extensión aparte y no depende de este ajuste. Su terminal integrada abre ahí mismo y sostiene la sesión: si cierras la pestaña, se reconecta hasta tres horas después. Las skills solo funcionan desde `/workspace` (regla de `AGENTS.md`), así que la terminal integrada ya arranca en el lugar correcto. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden ([amenazas y mitigaciones](docs/ARCHITECTURE.md#8-seguridad)). |
+| ![VS Code](https://img.shields.io/badge/openvscode--server-2F80ED?logo=visualstudiocode&logoColor=white) | **openvscode-server** | Único editor del devkit: `devkit code <proyecto>` abre la URL con token, ya en `/workspace`. Con la extensión Claude Code instalada desde Open VSX. Trae `"chat.disableAIFeatures": true` para apagar el chat integrado de VS Code, pero en esta build de openvscode-server (1.109.5) el ajuste no oculta el comando `Chat: Open Chat` de la paleta; limitación conocida, sin arreglo (DEVKIT-66). Claude Code es una extensión aparte y no depende de este ajuste. Su terminal integrada abre ahí mismo y sostiene la sesión: si cierras la pestaña, se reconecta hasta tres horas después. Las skills solo funcionan desde `/workspace` (regla de `AGENTS.md`), así que la terminal integrada ya arranca en el lugar correcto. Publicado solo en `127.0.0.1` del Mac y gateado por un token de conexión por proyecto, en Bitwarden. |
 | ![zsh](https://img.shields.io/badge/zsh_+_starship-F15A24?logo=zsh&logoColor=white) | **zsh + starship** | Shell y prompt de una sola línea: proyecto, rama corta con color, cambios sin commit, agentes vivos y alarmas nuevas (ver "Dentro del contenedor" más abajo). `devkit shell` abre una shell suelta, sin la persistencia del editor. |
 | ![Claude Code](https://img.shields.io/badge/Claude_Code-D97757?logo=claude&logoColor=white) | **Claude Code** | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. En modo headless (`claude -p`) revisa, corrige y cierra cards sin intervención. |
 | ![Codex](https://img.shields.io/badge/Codex-000000?logo=openai&logoColor=white) | **Codex** | Segundo agente, preparado pero no instalado: lee el mismo `AGENTS.md` y las mismas skills (estándar Agent Skills). |
@@ -56,7 +53,7 @@ openvscode-server 1.109.5.
 Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropic.claude-code latest, GitHub.vscode-pull-request-github 0.128.0.
 La línea de arriba la genera y verifica `devkit/scripts/gen-stack.sh --check`;
 `latest` se resuelve contra Open VSX solo al construir, con `devkit
-up/recreate/rebuild/update` (ver `docs/ARCHITECTURE.md`, sección 9).
+up/recreate/rebuild/update`.
 
 ## Comandos
 
@@ -113,8 +110,7 @@ calza, en vez de construir a ciegas. Sin red para este chequeo, una versión
 fija se instala sin comprobar, igual que antes de este chequeo.
 `devkit update` además se detiene si el `compose.yaml` del proyecto no declara
 el build arg `EXTENSIONS` (quedó de antes de este versionado): pide reinstalar
-con `new-project.sh <proyecto> --version <x>` antes de actualizar. Detalle de
-diseño en `docs/ARCHITECTURE.md`, sección 9.
+con `new-project.sh <proyecto> --version <x>` antes de actualizar.
 
 #### Zona horaria del Mac dentro del contenedor
 
@@ -300,8 +296,8 @@ no lanzan modelo, así que el rol `contabilidad` que los agrupaba se retiró.
 El esfuerzo es `high` en todos los roles salvo `epic-plan`, que sube a `max`,
 y salvo que `rondas` fije uno distinto por ronda: un mal desglose se paga en
 todas sus hijas. El `Tipo` de la card (`feature`, `bug`, `chore`) ya no elige
-modelo ni esfuerzo; sigue eligiendo el prefijo de rama y la sección del
-CHANGELOG. La disponibilidad de cada modelo se comprueba una sola vez por
+modelo ni esfuerzo; sigue eligiendo el prefijo de rama. La disponibilidad de
+cada modelo se comprueba una sola vez por
 arranque del contenedor y el resultado queda cacheado en
 `/run/devkit/frontera/<alias>` (tmpfs: se vuelve a comprobar en cada `devkit
 recreate`). Un `si` vale todo el arranque; un `no` caduca a los 600 s
@@ -425,8 +421,7 @@ está en la lista `allow` de `settings.json` corre igual en modo headless, con
 salida queda vacío en ambos casos). La lista `allow` no es una lista blanca
 que restrinja nada en `-p`: solo evita el diálogo de confirmación en una
 sesión interactiva. La compuerta real en headless es la lista `deny` de
-`settings.json` más el hook `pr-guard.sh`, como ya documenta
-`docs/ARCHITECTURE.md` (sección 8.2); por eso el registro de denegaciones que
+`settings.json` más el hook `pr-guard.sh`; por eso el registro de denegaciones que
 pedía DEVKIT-45 vive en `pr-guard.sh` (cada bloqueo suyo, en
 `/run/devkit/denials.log`) y no en un intento de hacer cumplir la lista
 `allow`, que no bloquea nada que hacer cumplir.
@@ -761,8 +756,7 @@ con el marcador
 `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->`. Con `OK` mueve la
 card a `Lista para merge` y te pide el review con `gh pr edit --add-reviewer`,
 que exige que el token de la cuenta máquina tenga el alcance `read:org` además
-de `repo` (sección 8.1 de `docs/ARCHITECTURE.md`); sin él, el comando falla
-con 403 aunque el repo no tenga organización. Con `CAMBIOS` deja los
+de `repo`; sin él, el comando falla con 403 aunque el repo no tenga organización. Con `CAMBIOS` deja los
 hallazgos en un bloque `devkit-findings` (una línea por hallazgo:
 `id | severidad | archivo:línea | qué falla | qué hacer`) para que `task-fix`
 los atienda. El revisor nunca corrige ni aprueba: el hook `pr-guard.sh`
@@ -773,8 +767,7 @@ como segunda barrera. Es una inspección de texto: reduce las evasiones
 accidentales o perezosas, no las garantiza contra variables de shell, alias
 de `gh` o una API que el hook no conozca. La compuerta real es GitHub: la
 cuenta máquina no puede aprobar sus propios PRs y el ruleset de `main` exige
-PR y aprobación humana. El detalle está en `docs/ARCHITECTURE.md`, secciones
-8.2 y 12b.
+PR y aprobación humana.
 
 Si el último informe fue `CAMBIOS` para el head vigente y `task-fix` ya
 respondió sin empujar commits (descartó todos los hallazgos, o solo

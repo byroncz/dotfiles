@@ -29,8 +29,8 @@
 #  .devkit/devkit.toml (en el repo del proyecto, no en devkit.env): declara
 #  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`,
 #  `domains` y `reviewer` (usuario de GitHub que aprueba los PRs; lo lee la
-#  skill pr-review). Es la única fuente de esos valores; ver
-#  docs/ARCHITECTURE.md sección 5.2.
+#  skill pr-review). Es la única fuente de esos valores; ver la entrada de
+#  Documentación "Arquitectura del devkit" (Notion), sección 5.2.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -264,8 +264,9 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 fi
 # Editor VS Code (openvscode-server), gateado por token de conexión. El
 # secreto vive en Bitwarden (clave vscode-token) y llega como archivo, nunca
-# como variable de entorno (ver docs/ARCHITECTURE.md sección 8.1). Sin él no
-# se inventa un token: el editor simplemente no arranca.
+# como variable de entorno (ver la entrada de Documentación "Arquitectura del
+# devkit" (Notion), sección 8.1). Sin él no se inventa un token: el editor
+# simplemente no arranca.
 VSCODE_TOKEN="$RUN_DIR/vscode-token"
 if [ -s "$VSCODE_TOKEN" ]; then
   # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server

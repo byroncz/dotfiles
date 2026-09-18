@@ -32,6 +32,13 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
    ## Cómo probarlo
    Comandos u observaciones, en orden.
 
+   ## Cambios requeridos
+   Qué debe hacer un proyecto instanciado para adoptar este cambio
+   (`devkit recreate`, reinstalar el comando del Mac, un secreto nuevo en
+   Bitwarden...), o "Ninguno" si no aplica. Es la única fuente de este dato:
+   de aquí lo toman la entrada de Documentación de la card y las notas de la
+   próxima release.
+
    ## Card
    <URL de la card en Notion>
 

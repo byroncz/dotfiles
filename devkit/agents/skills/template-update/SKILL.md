@@ -13,11 +13,12 @@ Argumento: versión destino `X.Y.Z`.
    `.devkit/devkit.toml` (una sola vez; migración de DEVKIT-53) y dilo en el
    comentario de la card. Lee la clave `template` de `.devkit/devkit.toml`.
    Si ya es la destino, termina.
-2. Descarga el changelog del template:
-   `curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/v<X.Y.Z>/devkit/CHANGELOG.md`.
-   Extrae las entradas entre la versión actual y la destino.
-3. Si el salto es MAJOR (cambia el primer número), lee en el changelog qué
-   hay que tocar fuera del template (`devkit.env`, volúmenes, secretos) y
+2. Lee las notas de la versión destino:
+   `gh release view v<X.Y.Z> --repo byroncz/dotfiles --json body --jq .body`.
+   Si hay versiones intermedias entre la actual y la destino, repite la
+   consulta para cada una.
+3. Si el salto es MAJOR (cambia el primer número), lee en esas notas qué hay
+   que tocar fuera del template (`devkit.env`, volúmenes, secretos) y
    escríbelo en el comentario del PR. No apliques esos cambios tú: son del
    humano en su Mac.
 4. Trabaja como una card: si no existe, créala con `task-create` (Tipo
@@ -43,8 +44,8 @@ Argumento: versión destino `X.Y.Z`.
        deja la fusión al humano.
 7. Commit `chore(<Clave>): actualizar template a <X.Y.Z>` con
    `.devkit/devkit.toml` y, si el paso anterior lo tocó, `AGENTS.md`.
-8. `task-submit`. En el cuerpo del PR incluye el resumen del changelog y, si
-   aplica, los cambios manuales requeridos.
+8. `task-submit`. En el cuerpo del PR incluye el resumen de las notas de la
+   versión y, si aplica, los cambios manuales requeridos.
 9. Actualiza en Notion la fila del proyecto: `Versión del template` = destino.
 10. Una vez mergeado, en el Mac: `devkit update <proyecto>`. Lee `template`
     desde el contenedor, descarga esa versión y reconstruye; el `.env` del
