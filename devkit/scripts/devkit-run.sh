@@ -3008,6 +3008,31 @@ FIN
     "$([ -s "$tb_dir/run/task-start-3.log" ] && echo 1 || echo 0)"
   check "H1: no llama a task-block.sh" 1 \
     "$([ -e "$tmp/bloqueo.args" ] && echo 0 || echo 1)"
+
+  # H6 del informe sobre el PR #64 (esta card): la rama ya existe -local y en
+  # origin- porque un intento anterior la creó y subió, pero el `set` de
+  # Notion falló a mitad de camino y la card se quedó Lista, sin Rama. Antes,
+  # `switch -c` fallaba con "¿ya existe?" y la card quedaba trabada hasta que
+  # el humano borrara la rama a mano; ahora la reutiliza.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" switch -q -c feat/DEVKIT-9097-probar-rama-existente
+  git -C "$tb_dir/ws" push -q -u origin feat/DEVKIT-9097-probar-rama-existente
+  git -C "$tb_dir/ws" switch -q main
+  printf '{"id":"pagina-9097","estado":"Lista","tipo":"feature","titulo":"Probar rama existente"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9097.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9097 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-4.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "H6: una rama que ya existe (intento anterior) se reutiliza en vez de fallar" \
+    "feat/DEVKIT-9097-probar-rama-existente" "$(git -C "$tb_dir/ws" rev-parse --abbrev-ref HEAD)"
+  # Tercera vez que este `tb_dir` deja una card lista por este camino (la
+  # primera fue DEVKIT-9093, la segunda DEVKIT-9095 en el caso de H1): la
+  # cuenta es acumulada sobre el mismo `set-llamadas`, no específica de esta
+  # card.
+  check "H6: termina de dejar la card En progreso, con Agente y Rama en Notion" 3 \
+    "$(grep -c 'Estado=En progreso Agente=claude Rama=' "$tb_dir/ronda/set-llamadas" 2>/dev/null)"
+  check "H6: el agente sí llega a arrancar" 1 \
+    "$([ -s "$tb_dir/run/task-start-4.log" ] && echo 1 || echo 0)"
   rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script

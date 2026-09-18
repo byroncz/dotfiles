@@ -126,6 +126,12 @@ if [ "$reanudacion" = 1 ]; then
   git -C "$WS" fetch -q origin "$rama" 2>/dev/null
   if git -C "$WS" show-ref --verify --quiet "refs/heads/$rama"; then
     git -C "$WS" switch -q "$rama" || { err "no pude cambiar a la rama $rama (reanudación)."; exit 1; }
+    # La rama local puede haber quedado atrás de origin (otra sesión, u otro
+    # intento de esta misma card): sin este pull, la reanudación seguía
+    # trabajando sobre un punto de partida viejo (H6 de pr-review en
+    # DEVKIT-90). Si diverge de verdad (raro: implicaría un push --force
+    # sobre la rama de la card), no es fatal, ya queda sobre una rama válida.
+    git -C "$WS" pull -q --ff-only 2>/dev/null || true
   elif git -C "$WS" show-ref --verify --quiet "refs/remotes/origin/$rama"; then
     git -C "$WS" switch -q -c "$rama" --track "origin/$rama" \
       || { err "no pude cambiar a la rama $rama (reanudación)."; exit 1; }
@@ -154,12 +160,24 @@ else
   esac
   slug=$("$SLUGIFY" "$titulo")
   rama="$prefijo/$clave-$slug"
-  if ! git -C "$WS" switch -q -c "$rama" 2>/dev/null; then
-    err "no pude crear la rama $rama (¿ya existe?)."
+  # Si la rama ya existe (local o en origin), no es un choque de nombres: es
+  # un relanzamiento tras un intento anterior que la creó y subió pero no
+  # llegó a actualizar Notion (el `set` de más abajo falló a mitad de
+  # camino). Antes, `switch -c` fallaba con "¿ya existe?" y la card quedaba
+  # trabada -Lista o En progreso sin Rama- hasta que el humano borrara la
+  # rama a mano (H6 de pr-review en DEVKIT-90). Ahora la reutiliza.
+  if git -C "$WS" show-ref --verify --quiet "refs/heads/$rama"; then
+    git -C "$WS" switch -q "$rama" || { err "no pude cambiar a la rama $rama, que ya existía."; exit 1; }
+  elif git -C "$WS" fetch -q origin "$rama" 2>/dev/null \
+      && git -C "$WS" show-ref --verify --quiet "refs/remotes/origin/$rama"; then
+    git -C "$WS" switch -q -c "$rama" --track "origin/$rama" \
+      || { err "no pude cambiar a la rama $rama, que ya existía en origin."; exit 1; }
+  elif ! git -C "$WS" switch -q -c "$rama" 2>/dev/null; then
+    err "no pude crear la rama $rama."
     exit 1
   fi
   if ! git -C "$WS" push -q -u origin "$rama" 2>/dev/null; then
-    err "creé la rama $rama, pero no pude subirla (git push)."
+    err "la rama $rama existe, pero no pude subirla (git push)."
     exit 1
   fi
   base_remoto=$(url_remoto) || base_remoto=""
