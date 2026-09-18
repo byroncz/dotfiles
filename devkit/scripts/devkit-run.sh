@@ -4625,6 +4625,24 @@ FIN
     "$([ -e "$ts_dir/set-llamadas" ] && echo 0 || echo 1)"
   check "task-submit (verificación falla): conserva .devkit/pr-body.md" 1 \
     "$([ -e "$ts_dir/ws/.devkit/pr-body.md" ] && echo 1 || echo 0)"
+
+  # Clave explícita que no coincide con la rama actual (H5): rechaza antes de
+  # tocar Notion o hacer push, no solo cuando falta en el nombre de la rama.
+  rm -f "$ts_dir/ws/roto.sh" "$ts_dir/set-llamadas"
+  ts_err=$(env "${ts_env[@]}" bash "$HERE/task-submit.sh" DEVKIT-9999 --mensaje "feat(DEVKIT-9999): no debería pasar" 2>&1 >/dev/null)
+  check "task-submit (Clave no coincide con la rama): sale con 1" 1 "$?"
+  check "task-submit (Clave no coincide con la rama): lo dice en el error" 1 \
+    "$(printf '%s' "$ts_err" | grep -c 'no es una rama de card válida')"
+  check "task-submit (Clave no coincide con la rama): no toca la card" 1 \
+    "$([ -e "$ts_dir/set-llamadas" ] && echo 0 || echo 1)"
+
+  # Rama main (H5): el script nunca debe entregar directo desde main.
+  git -C "$ts_dir/ws" switch -q main
+  ts_err=$(env "${ts_env[@]}" bash "$HERE/task-submit.sh" DEVKIT-9301 --mensaje "feat(DEVKIT-9301): no debería pasar" 2>&1 >/dev/null)
+  check "task-submit (rama main): sale con 1" 1 "$?"
+  check "task-submit (rama main): lo dice en el error" 1 \
+    "$(printf '%s' "$ts_err" | grep -c 'no es una rama de card válida')"
+  git -C "$ts_dir/ws" switch -q feat/DEVKIT-9301-probar-task-submit
   rm -rf "$ts_dir"
 
   # --- hook-post-edit.sh (DEVKIT-91) -----------------------------------------

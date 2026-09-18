@@ -72,6 +72,10 @@ if [ -z "$clave" ]; then
   err "no pude deducir la Clave de la rama $rama; pásala como primer argumento"
   exit 1
 fi
+if [ "$rama" = main ] || ! printf '%s' "$rama" | grep -qE "^(feat|fix|chore)/${clave}-"; then
+  err "la rama $rama no es una rama de card válida para $clave (se espera feat/, fix/ o chore/ con /$clave- en el nombre)"
+  exit 1
+fi
 
 # --- 1. La card, En progreso ------------------------------------------------
 card=$("$NOTION" card "$clave") || { err "no pude leer $clave en Notion"; exit 1; }
