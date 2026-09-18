@@ -1,6 +1,6 @@
 ---
 name: template-update
-description: Sube la versión del template devkit que usa este proyecto: cambia `template` en devkit.toml, actualiza la fila del proyecto en Notion y explica qué cambia según el changelog. Úsala cuando el arranque avise de una versión nueva o el humano lo pida. Argumento: la versión destino, por ejemplo 1.4.0.
+description: Sube la versión del template devkit que usa este proyecto: cambia `template` en devkit.toml, actualiza la fila del proyecto en Notion y explica qué cambia según las notas de la release. Úsala cuando el arranque avise de una versión nueva o el humano lo pida. Argumento: la versión destino, por ejemplo 1.4.0.
 ---
 
 # template-update
