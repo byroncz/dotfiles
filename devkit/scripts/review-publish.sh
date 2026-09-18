@@ -102,7 +102,7 @@ que_cambia=$(awk '
   $0 == "## Qué cambia" { activo = 1; next }
   /^## / { activo = 0 }
   activo && NF { print }
-' <<<"$cuerpo_pr")
+' <<<"$cuerpo_pr" | head -2)
 [ -n "$que_cambia" ] || que_cambia="(el PR no trae la sección \"## Qué cambia\")"
 
 no_verificado=$(awk '
