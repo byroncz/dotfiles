@@ -2002,7 +2002,9 @@ costos_totales_card() {  # costos_totales_card <Clave>
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
 costos_tabla_card() {
   local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0
-  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 16)" "$(rellenar FECHA 21)" "$(rellenar MODELO/ESFUERZO/RONDA 28)" \
+  # FECHA mide 27, no 21 (H7 de pr-review en DEVKIT-89): el timestamp con
+  # zona (`2026-09-18T10:05:00-05:00`) mide 25, y `rellenar` no trunca.
+  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 16)" "$(rellenar FECHA 27)" "$(rellenar MODELO/ESFUERZO/RONDA 28)" \
     "$(rellenar TURNOS 8)" "$(rellenar COSTO 10)" MIN
   while IFS=$'\t' read -r ts c_clave skill id modelo esfuerzo ronda t c d; do
     [ -n "$skill" ] || continue
@@ -2012,7 +2014,7 @@ costos_tabla_card() {
     else modelo_col="$modelo/$esfuerzo r$ronda"; fi
     min=-
     [ "$d" = - ] || min=$((d / 60))
-    printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 16)" "$(rellenar "$ts" 21)" "$(rellenar "$modelo_col" 28)" \
+    printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 16)" "$(rellenar "$ts" 27)" "$(rellenar "$modelo_col" 28)" \
       "$(rellenar "$t" 8)" "$(rellenar "$c" 10)" "$min"
   done < <(costos_filas "$COSTOS_LOG" "$clave")
   if [ "$filas" = 0 ]; then
@@ -2021,7 +2023,7 @@ costos_tabla_card() {
   fi
   local turnos_tot costo_tot min_tot revisiones
   IFS=$'\t' read -r turnos_tot costo_tot min_tot revisiones < <(costos_totales_card "$clave")
-  printf '%s%s%s%s%s%s\n' "$(rellenar TOTAL 16)" "$(rellenar - 21)" "$(rellenar - 28)" \
+  printf '%s%s%s%s%s%s\n' "$(rellenar TOTAL 16)" "$(rellenar - 27)" "$(rellenar - 28)" \
     "$(rellenar "$turnos_tot" 8)" "$(rellenar "$costo_tot" 10)" "$min_tot ($revisiones revisiones)"
 }
 
@@ -4190,6 +4192,8 @@ FIN
     "$(costos_tabla_card DEVKIT-77 | grep -c '^TOTAL.*14.*0.3600.*3 (1 revisiones)')"
   check "costos_tabla_card muestra modelo/esfuerzo/ronda por fila" 1 \
     "$(costos_tabla_card DEVKIT-77 | grep -c 'modelo-medio/medium r2')"
+  check "costos_tabla_card no pega la fecha con zona horaria a la columna siguiente (H7)" 1 \
+    "$(costos_tabla_card DEVKIT-77 | grep -c '2026-09-10T10:00:00-05:00 ')"
 
   check "costos_tabla_card de una Clave sin lanzamientos no revienta" 1 \
     "$(costos_tabla_card DEVKIT-999 | grep -c 'Sin lanzamientos de DEVKIT-999')"
