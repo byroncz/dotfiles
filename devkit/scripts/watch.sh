@@ -425,11 +425,13 @@ run_skill() {
   local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea
   logf="$RUN_DIR/$name.log"
   # `--rol` antes de la línea "lanzando" (DEVKIT-81): la fila de --estado
-  # muestra modelo y esfuerzo desde que aparece, no solo al terminar. La sonda
-  # de modelo que corre adentro deja su propia línea en watch.log mientras
-  # tanto, así que el lanzamiento no queda invisible durante la espera (la
-  # ampliación de DEVKIT-57, "aunque espere ... a la sonda de modelos", pasa
-  # a cubrirla esa línea de la sonda en vez de esta).
+  # muestra modelo y esfuerzo desde que aparece, no solo al terminar. Costo:
+  # mientras `--rol` espera la sonda de modelo (`modelo_disponible`), hasta
+  # `MODEL_CHECK_TIMEOUT` por modelo de `frontera`, el lanzamiento no tiene
+  # ninguna línea en watch.log -la de la sonda recién se escribe cuando esta
+  # termina, no mientras corre- y por lo tanto no aparece en `--estado`. Es la
+  # misma espera que ya describía la ampliación de DEVKIT-57 ("aunque
+  # espere ... a la sonda de modelos"), sin cubrirla.
   read -r modelo esfuerzo presupuesto ronda < <("$DEVKIT_RUN" --rol "$prompt")
   [ -z "$forzado" ] || modelo=$forzado
   ULTIMO_MODELO=$modelo
