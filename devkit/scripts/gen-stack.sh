@@ -1,9 +1,11 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
-#  devkit: línea de extensiones de la sección Stack del README, generada
-#  desde devkit/vscode/extensions.toml.
+#  devkit: líneas de versiones de la sección Stack del README, generadas
+#  desde devkit/vscode/extensions.toml y devkit/Dockerfile. Las usa
+#  gen-readme.sh al armar el README completo.
 #
-#    gen-stack.sh              imprime la línea
+#    gen-stack.sh              imprime la línea de extensiones
+#    gen-stack.sh --versiones  imprime la línea de versiones del Dockerfile
 #    gen-stack.sh --check      sale con 1 si el README quedó viejo
 #    gen-stack.sh --test       autoprueba, sin tocar el README
 #
@@ -32,6 +34,20 @@ linea() {  # linea <extensions.toml>
   ids="$(sed -n 's/^"\([^"]*\)"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1 \2/p' "$1" \
     | awk '{printf "%s%s %s", (NR>1?", ":""), $1, $2}')"
   printf 'Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: %s.\n' "$ids"
+}
+
+# Las herramientas listadas son las que trae la imagen con una versión fija en
+# el Dockerfile (ARG ..._VERSION); no incluye Debian ni Python, sin versión
+# propia fijada ahí.
+versiones() {  # versiones <Dockerfile>
+  uv="$(sed -n 's/^ARG UV_VERSION=\(.*\)/\1/p' "$1")"
+  gh="$(sed -n 's/^ARG GH_VERSION=\(.*\)/\1/p' "$1")"
+  rclone="$(sed -n 's/^ARG RCLONE_VERSION=\(.*\)/\1/p' "$1")"
+  bws="$(sed -n 's/^ARG BWS_VERSION=\(.*\)/\1/p' "$1")"
+  starship="$(sed -n 's/^ARG STARSHIP_VERSION=\(.*\)/\1/p' "$1")"
+  openvscode="$(sed -n 's/^ARG OPENVSCODE_VERSION=\(.*\)/\1/p' "$1")"
+  printf 'Versiones fijadas en `devkit/Dockerfile`: uv %s, gh %s, rclone %s, bws %s, starship %s, openvscode-server %s.\n' \
+    "$uv" "$gh" "$rclone" "$bws" "$starship" "$openvscode"
 }
 
 # --- Autoprueba --------------------------------------------------------------
@@ -85,12 +101,25 @@ if [ "${1:-}" = "--test" ]; then
     sh "$HERE/scripts/gen-stack.sh" --check >/dev/null 2>&1
   check "--check con el README viejo sale 1" 1 "$?"
 
+  printf 'ARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile"
+  check "versiones desde el Dockerfile" \
+    'Versiones fijadas en `devkit/Dockerfile`: uv 1.2.3, gh 4.5.6, rclone 7.8.9, bws 1.0.0, starship 2.0.0, openvscode-server 3.0.0.' \
+    "$(versiones "$tmp/Dockerfile")"
+
   exit $fail
 fi
 
 # --- Uso normal / --check -----------------------------------------------------
 TOML="${DEVKIT_GEN_STACK_TOML:-$HERE/vscode/extensions.toml}"
 README="${DEVKIT_GEN_STACK_README:-$(pwd)/README.md}"
+DOCKERFILE="${DEVKIT_GEN_STACK_DOCKERFILE:-$HERE/Dockerfile}"
+
+if [ "${1:-}" = "--versiones" ]; then
+  [ -f "$DOCKERFILE" ] || { echo "gen-stack.sh: no existe $DOCKERFILE" >&2; exit 2; }
+  versiones "$DOCKERFILE"
+  exit 0
+fi
+
 [ -f "$TOML" ] || { echo "gen-stack.sh: no existe $TOML" >&2; exit 2; }
 
 if [ "${1:-}" = "--check" ]; then

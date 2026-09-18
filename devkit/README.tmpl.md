@@ -1,0 +1,66 @@
+# devkit
+
+Entorno de desarrollo reproducible para proyectos de datos, pensado para que
+lo operen agentes de IA con un humano como única compuerta. El Mac solo
+necesita Docker; todo lo demás vive en un contenedor que se reconstruye desde
+este repo, y las tareas se gestionan en Notion.
+
+## Instalación en el Mac
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.sh | sh -s -- <proyecto> --version X.Y.Z
+devkit up <proyecto>
+devkit code <proyecto>
+```
+
+El primer comando instala `~/.devkit/bin/devkit` y deja el proyecto listo en
+`~/.devkit/<proyecto>/`. El segundo levanta los contenedores y construye la
+imagen la primera vez. El tercero abre el editor en el navegador, ya
+autenticado con un token por proyecto.
+
+## Stack
+
+{{STACK}}
+
+## Comandos
+
+{{COMANDOS}}
+
+## Skills (comandos `/nombre` dentro de `claude`)
+
+{{SKILLS}}
+
+Detalle y convenciones de cada transición:
+[`devkit/agents/skills/README.md`](devkit/agents/skills/README.md).
+
+## Integraciones
+
+- **Notion**: centro de tareas (bases Proyectos, Tareas y Documentación). Los
+  agentes leen y escriben con el plugin oficial de Notion para Claude Code;
+  los scripts bash (`notion.sh`, `task-close.sh`, `task-block.sh`) usan la
+  API de Notion con el token del secreto `notion_token`. Identificadores de
+  las bases en `.claude/devkit-notion.json`.
+- **GitHub**: código, PRs y la compuerta humana (`main` exige PR con una
+  aprobación, auto-merge activado). Los agentes actúan con la cuenta máquina
+  `byroncz-bot`; su token llega como secreto de Bitwarden.
+- **Bitwarden Secrets Manager**: único lugar de los secretos del proyecto. Un
+  token en `~/.devkit/bws-token` del Mac los trae al arrancar a un `tmpfs`
+  que muere con el contenedor.
+- **Dropbox**: respaldo continuo de `sandbox.local/`, vía `rclone`. Se
+  autoriza una vez con `dropbox-setup.sh`, que genera el secreto
+  `rclone_conf_b64`.
+- **Open VSX**: registro de extensiones del editor. Se declaran en
+  `devkit/vscode/extensions.toml` y se resuelven contra Open VSX al
+  construir la imagen.
+
+## Documentación
+
+Diseño, decisiones y la entrada de cada card: base
+[Documentación](https://app.notion.com/p/8670f0a8753a4e798e7aa7ab5a9d207d) de
+Notion, proyecto `DEVKIT`. Resumen de este README, para quien no tiene el
+repo a mano: entrada
+["Stack y comandos del devkit"](https://app.notion.com/p/3d427957d23d81c48debd29c70f68bcd).
+
+Este README se genera con `devkit/scripts/gen-readme.sh` y solo cambia en la
+card de release de cada versión; ninguna card ordinaria lo edita (regla
+completa en [`AGENTS.md`](AGENTS.md)).

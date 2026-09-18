@@ -79,6 +79,13 @@ versión, y ninguna card ordinaria los edita. Un cambio que afecte a los
 proyectos instanciados se declara en la sección "Cambios requeridos" del
 cuerpo del PR: de ahí lo toman la entrada de Documentación de la card y, más
 adelante, la card de release.
+- El único modo de tocar `README.md` es `devkit/scripts/gen-readme.sh`:
+  arma el archivo desde `devkit/README.tmpl.md`, `devkit/scripts/comandos.txt`
+  y la `description` de cada `SKILL.md`, reusando `devkit/scripts/gen-stack.sh`
+  para las versiones del Dockerfile y las extensiones del editor. Nunca se
+  edita a mano. `gen-readme.sh --check` sale con 1 si el README commiteado
+  quedó viejo. La card de release lo corre y actualiza también la entrada
+  "Stack y comandos del devkit" con el mismo resumen.
 
 ## Guía de redacción
 
