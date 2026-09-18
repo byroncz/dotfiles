@@ -2563,6 +2563,82 @@ FIN
   check "nada que revisar: no llama a claude -p (cero turnos de Opus)" 0 \
     "$(wc -l <"$tmp/claude-llamadas" | tr -d ' ')"
 
+  # --- review-prep.sh de verdad: worktree y entorno heredado (DEVKIT-93, H1 y
+  # H2 de la revisión del PR 67) ---------------------------------------------
+  # Los dobles de más arriba nunca tocan gh, Notion ni crean un worktree de
+  # verdad: acá se invoca el binario real sobre un PR simulado con un origin
+  # local, dos veces seguidas, para probar que un worktree que sobrevive a un
+  # ciclo interrumpido no deja el PR sin revisión para siempre (H1); y una
+  # tercera vez con las variables que `watch.sh:495` exporta al `--sync`,
+  # para probar que no se filtran a las comprobaciones mecánicas (H2).
+  local rp_dir rp_head
+  rp_dir=$(mktemp -d)
+  git init -q --bare "$rp_dir/origin.git"
+  git init -q "$rp_dir/ws"
+  git -C "$rp_dir/ws" config user.email test@example.com
+  git -C "$rp_dir/ws" config user.name test
+  git -C "$rp_dir/ws" remote add origin "$rp_dir/origin.git"
+  mkdir -p "$rp_dir/ws/.devkit" "$rp_dir/ws/devkit/scripts"
+  cat >"$rp_dir/ws/.devkit/devkit.toml" <<'FIN'
+project = "DEVKIT"
+FIN
+  echo "echo real" >"$rp_dir/ws/devkit/scripts/devkit-run.sh"
+  git -C "$rp_dir/ws" add -A
+  git -C "$rp_dir/ws" commit -q -m init --no-gpg-sign
+  git -C "$rp_dir/ws" branch -q -m main
+  git -C "$rp_dir/ws" push -q -u origin main
+  git -C "$rp_dir/ws" switch -q -c feat/DEVKIT-9302-probar-review-prep
+  # Un devkit-run.sh de mentira: falla si `DEVKIT_RONDA` sigue exportada
+  # cuando la comprobación mecánica "devkit-run.sh --test" lo corre, para que
+  # H2 delate si review-prep.sh no anuló el entorno heredado.
+  cat >"$rp_dir/ws/devkit/scripts/devkit-run.sh" <<'FIN'
+#!/usr/bin/env bash
+if [ "${DEVKIT_RONDA:-}" = "-" ]; then
+  echo "DEVKIT_RONDA se filtró a la comprobación mecánica" >&2
+  exit 1
+fi
+exit 0
+FIN
+  git -C "$rp_dir/ws" add -A
+  git -C "$rp_dir/ws" commit -q -m 'feat(DEVKIT-9302): probar review-prep.sh' --no-gpg-sign
+  git -C "$rp_dir/ws" push -q -u origin feat/DEVKIT-9302-probar-review-prep
+  rp_head=$(git -C "$rp_dir/ws" rev-parse HEAD)
+  git -C "$rp_dir/origin.git" update-ref "refs/pull/9302/head" "$rp_head"
+  mkdir -p "$rp_dir/run"
+  cat >"$rp_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9302","estado":"Revisión automática"}' ;;
+  contenido) echo "## Objetivo
+Probar review-prep.sh de verdad." ;;
+esac
+FIN
+  chmod +x "$rp_dir/notion-doble"
+  cat >"$rp_dir/gh-doble" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pr view") printf '{"state":"OPEN","title":"DEVKIT-9302: probar review-prep.sh","body":"cuerpo","headRefOid":"$rp_head","headRefName":"feat/DEVKIT-9302-probar-review-prep","reviews":[],"comments":[]}' ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$rp_dir/gh-doble"
+  local rp_env=(DEVKIT_WS="$rp_dir/ws" DEVKIT_NOTION_BIN="$rp_dir/notion-doble" DEVKIT_GH_BIN="$rp_dir/gh-doble" \
+    DEVKIT_REVIEW_WORKTREE_DIR="$rp_dir/worktrees")
+
+  env "${rp_env[@]}" bash "$HERE/review-prep.sh" 9302 >/dev/null 2>"$rp_dir/salida-1.err"
+  check "review-prep.sh de verdad: primera corrida sale con 0" 0 "$?"
+  # Sin `review-publish.sh` de por medio (nadie llamó a `git worktree
+  # remove`), el worktree queda atascado: el ciclo siguiente vuelve a correr
+  # review-prep.sh contra el mismo número de PR, tal como haría `devkit-run`
+  # en el siguiente tick.
+  env "${rp_env[@]}" bash "$HERE/review-prep.sh" 9302 >"$rp_dir/salida-2.out" 2>"$rp_dir/salida-2.err"
+  check "review-prep.sh de verdad: un worktree atascado no bloquea el ciclo siguiente (H1)" 0 "$?"
+
+  env "${rp_env[@]}" DEVKIT_RONDA=- DEVKIT_MODELO_FORZADO=modelo-x DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch \
+    bash "$HERE/review-prep.sh" 9302 >"$rp_dir/salida-3.out" 2>"$rp_dir/salida-3.err"
+  check "review-prep.sh de verdad: DEVKIT_RONDA=- no se filtra a devkit-run.sh --test (H2)" 1 \
+    "$(grep -c '\*\*devkit-run.sh --test\*\*: Verificado' "$rp_dir/salida-3.out")"
+
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
   # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.

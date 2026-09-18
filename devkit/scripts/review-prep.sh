@@ -30,6 +30,14 @@ UV="${DEVKIT_UV_BIN:-uv}"
 # que la autoprueba no deje worktrees de verdad.
 WORKTREE_DIR="${DEVKIT_REVIEW_WORKTREE_DIR:-/tmp}"
 
+# Este script corre antes de que `run_claude` arme el entorno limpio del
+# `claude -p` hijo (DEVKIT-93, H2 de la revisión del PR 67): hereda tal cual
+# lo que `watch.sh:495` exportó para su propio `--sync`. Sin anularlas, las
+# comprobaciones mecánicas de más abajo (devkit-run.sh --test, watch-test.sh)
+# ven una ronda o un modelo forzado que no es el suyo y reportan `Falla` que
+# no existen.
+unset DEVKIT_RONDA DEVKIT_MODELO_FORZADO DEVKIT_LOCK_HELD DEVKIT_LANZADOR DEVKIT_ORIGEN
+
 err() { printf 'review-prep: %s\n' "$*" >&2; }
 
 numero="${1:-}"
@@ -148,7 +156,9 @@ worktree=""
 resultado_mecanico=""
 if [ "$clasificacion" = codigo ]; then
   worktree="$WORKTREE_DIR/devkit-review-$numero"
+  git -C "$WS" worktree remove --force "$worktree" 2>/dev/null
   rm -rf "$worktree" 2>/dev/null
+  git -C "$WS" worktree prune 2>/dev/null
   if ! git -C "$WS" worktree add --detach "$worktree" "$head_sha" >/dev/null 2>&1; then
     err "no pude crear el worktree en $worktree"
     exit 1
