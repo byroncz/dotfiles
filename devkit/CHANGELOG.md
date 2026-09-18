@@ -36,6 +36,10 @@ versión que usa un proyecto y la destino.
   consultas -activas, bloqueos y epicas-, no una sola (revisión de
   `pr-review`: antes salía plano y sin "bloquea a" la primera vez). `--seguir`
   refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+- Si el worker de un `--seguir` muere sin dejar su línea de cierre en
+  `watch.log` (`SIGKILL`, sin memoria), el monitor no espera para siempre:
+  pasado un margen corto sin resumen, lo dice y sale con error (revisión de
+  `pr-review`).
 - Motivo: los dos pedidos del humano del 2026-09-16 que quedaron en el
   grupo 3 de la Épica DEVKIT-59 sin card hija (`epic-plan` alcanzó a crear
   DEVKIT-63 y no las dos ampliaciones posteriores).

@@ -171,6 +171,11 @@ INTERVALO_BUCLE="${DEVKIT_WATCH_INTERVAL:-300}"
 # Notion -cada vuelta hace al menos una consulta real, a diferencia de
 # `--estado`, que solo toca Notion para "bloquea a"/Épica, cacheado 30 s.
 TABLERO_INTERVALO="${DEVKIT_TABLERO_INTERVALO:-30}"
+# Margen de `seguir_lanzamiento` (H3, DEVKIT-82) entre que el worker deja de
+# responder a `kill -0` y se da por muerto sin resumen: `watch.log` puede
+# tardar un instante en terminar de escribirse, así que no basta con un solo
+# chequeo fallido.
+MARGEN_LANZAMIENTO_MUERTO="${DEVKIT_MARGEN_LANZAMIENTO_MUERTO:-10}"
 # `-ww` en todo `ps` que lee argumentos (`args=`), acá y en watch.sh: sin
 # ella, `ps` corta cada línea al ancho de COLUMNS/LINES del entorno aunque la
 # salida vaya a una tubería, y una terminal integrada (la del editor) los
@@ -1623,8 +1628,13 @@ seguir_estado() {
 # con terminal: un doble sin tty en la autoprueba también necesita el aviso.
 # No mata al worker -nada en este trap lo toca-: ya nació en su propia sesión
 # con `setsid`, así que una señal real de la terminal no lo alcanza.
-seguir_lanzamiento() {  # seguir_lanzamiento <id>
-  local id=$1 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final
+# <pid> (H3, DEVKIT-82) es el PID del worker que lanzó `$!`: si `kill -0`
+# falla (murió por SIGKILL, OOM u otra causa que no deja resumen) y sigue
+# fallando pasado `MARGEN_LANZAMIENTO_MUERTO`, el monitor no espera para
+# siempre -antes se quedaba corriendo hasta que algo externo lo cortara-, lo
+# dice y sale con un código distinto de cero.
+seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
+  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
@@ -1648,6 +1658,17 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id>
       [ -t 1 ] && tput cnorm 2>/dev/null
       printf '%s\n' "$resumen_final"
       return 0
+    fi
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+      if [ "$muerto_desde" -eq 0 ]; then
+        muerto_desde=$ahora
+      elif [ "$((ahora - muerto_desde))" -ge "$MARGEN_LANZAMIENTO_MUERTO" ]; then
+        [ -t 1 ] && tput cnorm 2>/dev/null
+        printf 'devkit-run: el lanzamiento "%s" murió sin dejar resumen en %s\n' "$id" "$WATCH_LOG"
+        return 71
+      fi
+    else
+      muerto_desde=0
     fi
     sleep "$ESTADO_INTERVALO"
   done
@@ -3579,6 +3600,27 @@ FIN
   check "--tablero sin \"project\" en devkit.toml: lo avisa" si \
     "$(printf '%s' "$tablero_err" | grep -q 'no encuentro' && echo si || echo no)"
 
+  # H3 (pr-review sobre DEVKIT-82): si el worker muere sin dejar su línea de
+  # cierre en watch.log (SIGKILL, OOM), `seguir_lanzamiento` no espera para
+  # siempre: pasado MARGEN_LANZAMIENTO_MUERTO desde que `kill -0` empieza a
+  # fallar, lo dice y sale con un código distinto de cero. `h3_pid_muerto` es
+  # un PID real ya cosechado con `wait`, así que `kill -0` falla desde ya.
+  local h3_watch h3_pid_muerto h3_salida h3_rc
+  h3_watch="$tmp/h3-watch.log"
+  : >"$h3_watch"
+  (: ) & h3_pid_muerto=$!
+  wait "$h3_pid_muerto" 2>/dev/null
+  h3_salida=$(CLAUDE_BIN="$doble" PS_BIN="$pslist_vacio" \
+    CUOTA_CACHE="$tmp/cuota-h3/cuota.cache" CUOTA_LOCK="$tmp/cuota-h3/cuota.lock" \
+    BLOQUEOS_CACHE="$tmp/bloqueos-h3/bloqueos.cache" BLOQUEOS_LOCK="$tmp/bloqueos-h3/bloqueos.lock" \
+    EPICAS_CACHE="$tmp/epicas-h3/epicas.cache" EPICAS_LOCK="$tmp/epicas-h3/epicas.lock" \
+    WATCH_LOG="$h3_watch" ESTADO_INTERVALO=1 MARGEN_LANZAMIENTO_MUERTO=1 \
+    seguir_lanzamiento h3-lanzamiento "$h3_pid_muerto" 2>&1)
+  h3_rc=$?
+  check "--seguir H3: worker muerto sin resumen sale con error" 1 "$([ "$h3_rc" -ne 0 ] && echo 1 || echo 0)"
+  check "--seguir H3: worker muerto sin resumen lo dice" si \
+    "$(printf '%s\n' "$h3_salida" | grep -q 'murió sin dejar resumen' && echo si || echo no)"
+
   # DEVKIT-79: un lanzamiento duplicado (mismo prompt, worker vivo o
   # esperando el candado) no se lanza dos veces. Doble de `ps` que informa un
   # worker ya corriendo para "/task-start DEVKIT-9"; sin --forzar, el
@@ -3885,6 +3927,6 @@ echo "lanzado: $prompt"
 echo "modelo=$modelo esfuerzo=$esfuerzo ronda=$ronda log=$logf pid=$worker"
 confirmar_arranque "$worker" "$prompt" "$logf" || exit 70
 if [ -n "$seguir_tras_lanzar" ]; then
-  seguir_lanzamiento "$(basename "$logf" .log)"
+  seguir_lanzamiento "$(basename "$logf" .log)" "$worker"
   exit $?
 fi
