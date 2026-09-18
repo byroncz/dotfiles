@@ -51,19 +51,29 @@ clave=$(printf '%s' "$rama" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
 motivo=""
 if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
   motivo="hay cambios sin commitear"
-elif ! git -C "$WS" ls-remote --exit-code --heads origin "$rama" >/dev/null 2>&1; then
-  motivo="la rama $rama no está subida a origin"
 else
-  card=$("$NOTION" card "$clave" 2>/dev/null) || exit 0
-  estado=$(jq -r '.estado // ""' <<<"$card")
-  pr=$(jq -r '.pr // ""' <<<"$card")
-  if [ "$estado" = "En progreso" ] && [ -z "$pr" ]; then
-    motivo="la card $clave sigue En progreso sin PR"
+  remoto_sha=$(git -C "$WS" ls-remote origin "refs/heads/$rama" 2>/dev/null | cut -f1)
+  if [ -z "$remoto_sha" ]; then
+    motivo="la rama $rama no está subida a origin"
+  elif [ "$remoto_sha" != "$(git -C "$WS" rev-parse HEAD 2>/dev/null)" ]; then
+    motivo="hay commits sin subir a origin"
+  else
+    card=$("$NOTION" card "$clave" 2>/dev/null) || exit 0
+    estado=$(jq -r '.estado // ""' <<<"$card")
+    pr=$(jq -r '.pr // ""' <<<"$card")
+    if [ "$estado" = "En progreso" ] && [ -z "$pr" ]; then
+      motivo="la card $clave sigue En progreso sin PR"
+    fi
   fi
 fi
 [ -n "$motivo" ] || exit 0
 
 echo $((bloqueos + 1)) > "$contador" 2>/dev/null
-razon="La sesión termina sin entregar $clave: $motivo. Ejecuta \"$SCRIPTS_DIR/task-submit.sh\" --mensaje \"<tipo>($clave): <resumen>\" para entregarlo; si no puedes terminarlo, bloquéalo con \"$SCRIPTS_DIR/task-block.sh\" $clave \"<motivo>\"."
+if [ "${DEVKIT_SKILL:-}" = task-fix ]; then
+  instruccion="Comitea lo pendiente y haz \"git push origin $rama\""
+else
+  instruccion="Ejecuta \"$SCRIPTS_DIR/task-submit.sh\" --mensaje \"<tipo>($clave): <resumen>\""
+fi
+razon="La sesión termina sin entregar $clave: $motivo. $instruccion para entregarlo; si no puedes terminarlo, bloquéalo con \"$SCRIPTS_DIR/task-block.sh\" $clave \"<motivo>\"."
 jq -nc --arg r "$razon" '{decision: "block", reason: $r}'
 exit 0

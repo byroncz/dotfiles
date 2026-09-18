@@ -4695,6 +4695,19 @@ FIN
   check "hook-stop: rama subida y card con PR, no bloquea" "" \
     "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run3" \
        DEVKIT_NOTION_BIN="$hs_dir/notion-con-pr" bash "$HERE/hook-stop.sh")"
+
+  echo "cambio sin commitear" >>"$hs_dir/ws/algo.txt"
+  mkdir -p "$hs_dir/run4"
+  check "hook-stop: en task-fix, la instrucción es comitear y pushear (no task-submit.sh)" true \
+    "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run4" bash "$HERE/hook-stop.sh" \
+       | jq -r '(.reason | contains("git push origin")) and ((.reason | contains("task-submit.sh")) | not)')"
+  rm -f "$hs_dir/ws/algo.txt"
+
+  git -C "$hs_dir/ws" commit -q --allow-empty -m "commit local sin subir" --no-gpg-sign
+  mkdir -p "$hs_dir/run5"
+  check "hook-stop: commit local sin subir a origin, bloquea nombrando el motivo" true \
+    "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run5" bash "$HERE/hook-stop.sh" \
+       | jq -r '.decision == "block" and (.reason | contains("commits sin subir"))')"
   rm -rf "$hs_dir"
 
   return $fail
