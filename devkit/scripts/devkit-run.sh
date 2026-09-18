@@ -47,7 +47,12 @@
 #     fila por lanzamiento (skill, fecha, modelo/esfuerzo/ronda, turnos,
 #     costo, minutos) y una fila TOTAL. Sin Clave: una fila por card cerrada
 #     en los últimos 30 días, más el promedio. Solo suma lo que ya está en el
-#     log; nunca estima.
+#     log; nunca estima. "Card cerrada" se detecta solo por la línea
+#     `task-close-N terminado` que deja el bucle (`watch.sh`): un
+#     `devkit-run task-close` manual o un cierre resuelto por
+#     `project-status` no la dejan, así que esas cards no aparecen en la
+#     tabla sin Clave (H6 de pr-review en DEVKIT-89), aunque sí en
+#     `--costos <Clave>`.
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
