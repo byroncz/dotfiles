@@ -15,69 +15,53 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    baja). Toma la primera.
 4. Si no hay ninguna, responde "No hay cards libres en Lista" y termina.
 
-## Pasos
+## La card, ya lista para trabajar
 
-1. Verifica el Estado de la card. Es una lectura de Notion, antes de tocar el
-   workspace: así un relanzamiento por error responde en este mismo turno
-   pase lo que pase en `git status`, en vez de detenerse antes de llegar a la
-   frase de estado por un árbol sucio o por otro agente vivo (DEVKIT-76: un
-   `task-start` sobre una card `Hecha` volvió a `main`, gastó 8 turnos y
-   terminó preguntando qué hacer, y la barrera de pregunta abierta la
-   bloqueó sin motivo real).
-   - `Lista`: sigue al paso 2.
-   - `En progreso` con `Rama` asignada: es una reanudación. Sigue al paso 2
-     sin cambiar de rama todavía: el cambio de rama va después de comprobar
-     que el árbol está limpio y que ningún otro agente lo ocupa, no antes
-     (H6 de la revisión: cambiarse de rama antes de esa comprobación es
-     justo lo que rompe si hay otro agente vivo o cambios sin commit).
-   - `En progreso` sin `Rama` (se bloqueó o cortó antes de crear la rama):
-     trátala como `Lista`, sigue al paso 2.
-   - `Backlog`: responde `<Clave> está en Backlog; el humano debe moverla a
-     Lista.` y termina, sin tocar git ni Notion.
-   - `Hecha`, `Lista para merge` o `Revisión automática`: responde
-     `<Clave> ya está en <Estado> (PR <url>); no hay nada que hacer.` y
-     termina, sin tocar git ni Notion.
-   - `Bloqueada`: responde `<Clave> está bloqueada; el humano debe moverla a
-     En progreso antes de relanzar.` y termina, sin tocar git ni Notion.
-2. Verifica que el workspace está limpio: `git status --porcelain` vacío. Si
-   hay cambios sin commit, detente y explica; no mezcles trabajo de dos cards.
-   La única comprobación válida de si hay otro agente trabajando el mismo
-   workspace es `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh"
-   --otros-agentes`: sale 0 si está libre y 1 si lo ocupa otro, e imprime los
-   procesos ajenos y, si corres dentro de un agente, una línea
-   `propio: <pid> claude -p "<prompt>"` con tu propio proceso ya identificado.
-   Tu propio `claude -p` aparece en cualquier `ps` con el mismo prompt de esta
-   card y `PPID` 1 (el efecto del `nohup` de quien te lanzó, no un indicio de
-   que sea otro agente): nunca corras tu propio `ps`/`pgrep` para desconfiar
-   del resultado de `--otros-agentes`, ni interpretes ese proceso como ajeno.
-   Nunca uses `pgrep -f <Clave>` a secas: la Clave viaja en los argumentos de
-   tu propio lanzador, así que te encuentras a ti mismo cuatro veces (el
-   `devkit-run.sh --worker`, su subshell, su vigilante y tu `claude -p`). Eso
-   bloqueó DEVKIT-54 sin motivo, y desconfiar del resultado y correr un `ps`
-   aparte cortó DEVKIT-63 sin PR y sin bloquear (DEVKIT-77).
-   Si el paso 1 marcó la card como reanudación (`En progreso` con `Rama`),
-   termina aquí: `git fetch origin && git switch <rama>` y salta directo al
-   paso 7. Los pasos 3 a 6 son solo para cards que arrancan desde `main`.
-3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
-4. Nombre de rama: prefijo por `Tipo` (`feature` → `feat/`, `bug` → `fix/`,
-   `chore` → `chore/`), la Clave tal cual (en mayúsculas) y un slug corto
-   del título en minúsculas con guiones. Ejemplo:
-   `feat/DEVKIT-3-skills-del-flujo`.
-5. `git switch -c <rama>` y `git push -u origin <rama>`.
-6. Actualiza la card: `Estado` = `En progreso`, `Agente` = tu nombre
-   (`claude` o `codex`), `Rama` = `https://github.com/<owner>/<repo>/tree/<rama>`.
-7. Lee los comentarios de la card completa, no solo Objetivo y Criterios de
-   aceptación. Cualquier comentario que amplíe, corrija o precise el alcance
-   original es una ampliación: anótala para el plan del paso siguiente.
-   Ignorar un comentario dejó las notas de la versión `1.0.0` con un dato
-   falso (DEVKIT-41).
-8. Comenta en la card el plan en dos a cuatro líneas: qué vas a cambiar y en
-   qué orden. Si el paso anterior encontró ampliaciones, una línea por cada
-   una, citando qué comentario la originó. Sin justificaciones largas.
-9. Trabaja la card, incluidas las ampliaciones del paso 7. Commits con
-   Conventional Commits y la Clave como ámbito:
-   `feat(DEVKIT-3): crear skill task-start`. Haz push con frecuencia.
-10. Al cumplir los criterios de aceptación, ejecuta `task-submit`.
+Los pasos mecánicos (workspace limpio, la card por Notion, la rama, el
+Estado) los corre `devkit/scripts/task-begin.sh` en bash, antes de que
+existas: `devkit-run` lo ejecuta antes de lanzarte y agrega su salida al
+final de este prompt bajo un encabezado `## Card`, con las propiedades de la
+card, su Objetivo, Criterios de aceptación, Notas y todos sus comentarios en
+orden -los que amplían el alcance cuentan, DEVKIT-41-.
+
+- Si ese bloque `## Card` está en este prompt: la card ya quedó `En
+  progreso`, con su rama creada y en uso (o, en una reanudación, ya estás
+  sobre ella). No vuelvas a consultar Notion ni a tocar git para nada de
+  esto: ya está hecho. Sigue directo a "Comenta el plan".
+- Si no está -te invocaron a mano, sin pasar por `devkit-run`, por ejemplo
+  desde una sesión interactiva- ejecútalo tú mismo:
+  `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-begin.sh" <Clave>`
+  Sale con 0 y el mismo volcado en stdout si dejó la card lista: úsalo
+  exactamente igual que el bloque `## Card`. Si sale con 1, el motivo va en
+  stderr; responde según cuál sea, sin tocar git ni Notion más allá de lo
+  que ya hizo el script:
+  - `<Clave> está en Backlog; el humano debe moverla a Lista.` → responde
+    eso y termina.
+  - `<Clave> ya está en <Estado> ...; no hay nada que hacer.` (Hecha, Lista
+    para merge o Revisión automática) → responde eso y termina.
+  - `<Clave> está bloqueada; el humano debe moverla a En progreso antes de
+    relanzar.` → responde eso y termina.
+  - Cualquier otro motivo (workspace con cambios sin commit, otro agente
+    ocupando el workspace, un fallo de git o de Notion): bloquea la card con
+    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "<motivo que dio task-begin.sh>"`
+    y termina.
+
+## Comenta el plan
+
+Comenta en la card el plan en dos a cuatro líneas: qué vas a cambiar y en
+qué orden. Si los comentarios de la card (ya los tienes, del bloque `## Card`
+o de `task-begin.sh`) traen una ampliación, corrección o precisión del
+alcance original, una línea por cada una, citando qué comentario la
+originó. Sin justificaciones largas. Ignorar un comentario dejó las notas de
+la versión `1.0.0` con un dato falso (DEVKIT-41).
+
+## Trabaja la card
+
+Incluidas las ampliaciones que encontraste en los comentarios. Commits con
+Conventional Commits y la Clave como ámbito: `feat(DEVKIT-3): crear skill
+task-start`. Haz push con frecuencia.
+
+Al cumplir los criterios de aceptación, ejecuta `task-submit`.
 
 ## Modo headless
 
@@ -86,9 +70,9 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
 No hay quien conteste: si terminas preguntando, el proceso muere con la card
 `En progreso` y nadie trabajándola.
 
-- No hagas preguntas. Tras comentar el plan (paso 8) sigue de largo:
-  implementa la card hasta cumplir todos los criterios de aceptación y
-  termina ejecutando `task-submit`.
+- No hagas preguntas. Tras comentar el plan sigue de largo: implementa la
+  card hasta cumplir todos los criterios de aceptación y termina ejecutando
+  `task-submit`.
 - Una ejecución que no deja la card en `Revisión automática` o `Bloqueada`
   es un corte, no un avance.
 - Si falta una decisión, un acceso o un criterio de aceptación, o te bloqueas

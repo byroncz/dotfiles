@@ -21,6 +21,16 @@
 #                                             Padre), como lista JSON
 #   notion.sh criterios <page_id>             texto de la sección "Criterios
 #                                             de aceptación" de la página
+#   notion.sh contenido <page_id>             toda la página en Markdown
+#                                             plano: encabezados y texto de
+#                                             cada bloque, en orden (lo usa
+#                                             task-begin.sh, DEVKIT-90, para
+#                                             pasarle Objetivo, Criterios de
+#                                             aceptación y Notas al agente sin
+#                                             que consulte Notion)
+#   notion.sh comentarios <page_id>           todos los comentarios de la
+#                                             página, en orden cronológico,
+#                                             uno por bloque de texto
 #   notion.sh bloqueos <código>               por cada card en Lista para
 #                                             merge del proyecto, las Claves
 #                                             en Lista que dependen de ella
@@ -416,6 +426,61 @@ cmd_criterios() {  # cmd_criterios <page_id>
   jq -r "$CRITERIOS" <<<"$acc"
 }
 
+# Toda la página en Markdown plano (DEVKIT-90): a diferencia de CRITERIOS, que
+# recorta a una sección, esto recorre todos los bloques de nivel superior y
+# los vuelca en orden. Cubre los tipos de bloque que aparecen en una card
+# (encabezados, párrafos, listas, cita, código); cualquier otro tipo cae al
+# texto plano de su rich_text, que suele bastar.
+#
+# No desciende a los hijos de un bloque (una sub-viñeta, un toggle, una
+# columna): H5 de pr-review en esta misma card. En vez de perder ese
+# contenido en silencio, marca la línea para que quien lea el volcado (el
+# agente de task-start, sin acceso a Notion) sepa que falta algo en vez de
+# asumir que el bloque no tenía más que su primera línea.
+CONTENIDO='
+def texto: (.[.type].rich_text // []) | map(.plain_text) | join("");
+def linea:
+  if .type == "heading_1" then "# " + texto
+  elif .type == "heading_2" then "## " + texto
+  elif .type == "heading_3" then "### " + texto
+  elif .type == "bulleted_list_item" or .type == "numbered_list_item" or .type == "to_do" then "- " + texto
+  elif .type == "quote" then "> " + texto
+  else texto
+  end;
+[ .[] | linea as $l |
+  if $l != "" then
+    if .has_children then $l + "\n  (bloque con contenido anidado omitido)" else $l end
+  elif .has_children then "(bloque con contenido anidado omitido)"
+  else empty
+  end
+] | join("\n")
+'
+
+cmd_contenido() {  # cmd_contenido <page_id>
+  local cursor="" page acc='[]'
+  while :; do
+    page=$(api GET "/blocks/$1/children?page_size=100${cursor:+&start_cursor=$cursor}") || return
+    acc=$(jq -c --argjson p "$page" '. + $p.results' <<<"$acc")
+    [ "$(jq -r '.has_more' <<<"$page")" = "true" ] || break
+    cursor=$(jq -r '.next_cursor' <<<"$page")
+  done
+  jq -r "$CONTENIDO" <<<"$acc"
+}
+
+# Comentarios de la página, en orden cronológico (el orden que ya devuelve la
+# API). Paginado aparte de query_all: /comments no va por POST con filtro,
+# sino por GET con start_cursor en la query string.
+cmd_comentarios() {  # cmd_comentarios <page_id>
+  local cursor="" page acc='[]'
+  while :; do
+    page=$(api GET "/comments?block_id=$1&page_size=100${cursor:+&start_cursor=$cursor}") || return
+    acc=$(jq -c --argjson p "$page" '. + $p.results' <<<"$acc")
+    [ "$(jq -r '.has_more' <<<"$page")" = "true" ] || break
+    cursor=$(jq -r '.next_cursor' <<<"$page")
+  done
+  jq -r '[ .[] | ((.rich_text // []) | map(.plain_text) | join("")) | select(. != "") ] | join("\n\n")' <<<"$acc"
+}
+
 run_tests() {
   local fail=0 tmp got
   check() {
@@ -559,6 +624,55 @@ dos" "$(jq -r "$CRITERIOS" <<<"$bloques")"
   check "criterios: sección al final de la página" "tres" \
     "$(jq -r "$CRITERIOS" <<<'[{"type":"heading_3","heading_3":{"rich_text":[{"plain_text":"Criterios de aceptación"}]}},{"type":"to_do","to_do":{"rich_text":[{"plain_text":"tres"}]}}]')"
 
+  # contenido: toda la página, no solo una sección (DEVKIT-90).
+  resp GET__blocks_card-90_children "{\"results\":$bloques,\"has_more\":false}"
+  check "contenido: encabezados y texto de toda la página, en orden" \
+    "## Objetivo
+algo
+## Criterios de aceptación
+- uno
+- dos
+## Notas
+fuera" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-90)"
+
+  # contenido: un bloque con hijos (sub-viñeta, toggle, columna) no desciende
+  # a ellos, así que avisa en vez de perder ese contenido en silencio (H5 de
+  # pr-review en DEVKIT-90).
+  resp GET__blocks_card-91_children '{"results":[
+    {"type":"bulleted_list_item","has_children":true,"bulleted_list_item":{"rich_text":[{"plain_text":"uno con hijos"}]}},
+    {"type":"paragraph","paragraph":{"rich_text":[{"plain_text":"sin hijos"}]}}],"has_more":false}'
+  check "contenido: un bloque con hijos avisa que quedó contenido anidado sin volcar" \
+    "- uno con hijos
+  (bloque con contenido anidado omitido)
+sin hijos" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-91)"
+
+  # contenido: un bloque sin texto propio (column_list, table, toggle vacío)
+  # también avisa en vez de desaparecer sin dejar rastro (H8 de pr-review en
+  # DEVKIT-90, reapertura de H5: `select($l != "")` lo descartaba antes de
+  # mirar has_children).
+  resp GET__blocks_card-92_children '{"results":[
+    {"type":"column_list","has_children":true,"column_list":{}},
+    {"type":"paragraph","paragraph":{"rich_text":[{"plain_text":"después"}]}}],"has_more":false}'
+  check "contenido: un bloque sin texto propio pero con hijos avisa igual" \
+    "(bloque con contenido anidado omitido)
+después" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-92)"
+
+  # comentarios: orden cronológico, tal como los devuelve la API.
+  resp GET__comments '{"results":[
+    {"rich_text":[{"plain_text":"Primer comentario"}]},
+    {"rich_text":[{"plain_text":"Segundo, con "},{"plain_text":"dos tramos"}]}
+  ],"has_more":false}'
+  check "comentarios: todos, en el orden de la API" \
+    "Primer comentario
+
+Segundo, con dos tramos" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" comentarios card-90)"
+  check "comentarios: filtra por block_id en la query" 1 \
+    "$(grep -c '^GET /comments?block_id=card-90' "$tmp/llamadas")"
+
   # Errores: el mensaje de Notion, sin la petición; reintento en 429.
   resp GET__pages_roto '{"object":"error","message":"Could not find page"}' 404
   got=$(env "${entorno[@]}" bash "$HERE/notion.sh" pagina roto 2>&1 >/dev/null)
@@ -659,6 +773,8 @@ case "${1:-}" in
   documentacion) cmd_documentacion "${2:?page_id}" "${3:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
+  contenido) cmd_contenido "${2:?page_id}" ;;
+  comentarios) cmd_comentarios "${2:?page_id}" ;;
   bloqueos) cmd_bloqueos "${2:?código}" ;;
   epicas) cmd_epicas "${2:?código}" ;;
   activas) cmd_activas "${2:?código}" ;;
