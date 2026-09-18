@@ -447,8 +447,12 @@ def linea:
   elif .type == "quote" then "> " + texto
   else texto
   end;
-[ .[] | linea as $l | select($l != "")
-  | if .has_children then $l + "\n  (bloque con contenido anidado omitido)" else $l end
+[ .[] | linea as $l |
+  if $l != "" then
+    if .has_children then $l + "\n  (bloque con contenido anidado omitido)" else $l end
+  elif .has_children then "(bloque con contenido anidado omitido)"
+  else empty
+  end
 ] | join("\n")
 '
 
@@ -643,6 +647,18 @@ fuera" \
   (bloque con contenido anidado omitido)
 sin hijos" \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-91)"
+
+  # contenido: un bloque sin texto propio (column_list, table, toggle vacío)
+  # también avisa en vez de desaparecer sin dejar rastro (H8 de pr-review en
+  # DEVKIT-90, reapertura de H5: `select($l != "")` lo descartaba antes de
+  # mirar has_children).
+  resp GET__blocks_card-92_children '{"results":[
+    {"type":"column_list","has_children":true,"column_list":{}},
+    {"type":"paragraph","paragraph":{"rich_text":[{"plain_text":"después"}]}}],"has_more":false}'
+  check "contenido: un bloque sin texto propio pero con hijos avisa igual" \
+    "(bloque con contenido anidado omitido)
+después" \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" contenido card-92)"
 
   # comentarios: orden cronológico, tal como los devuelve la API.
   resp GET__comments '{"results":[
