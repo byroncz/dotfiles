@@ -541,11 +541,11 @@ devkit-run --estado --seguir   # refresca cada 3 s, sin parpadear
 # devkit-run --estado  16:12:24 |  (cada 3s; Ctrl-C para salir)
 # bucle: vivo, último tick hace 2m
 #
-# SKILL          CARD        LANZÓ       HACE    ESTADO      MODELO          DETALLE
-# pr-review      DEVKIT-56   bucle       1h00m   terminó     opus/high       -
-# task-start     DEVKIT-59   epic-plan   30m     bloqueada   fable/max r1    Qué intenté: X. Qué necesito: ...
-# task-start     DEVKIT-60   humano      20m     no arrancó  -               sin proceso, log ni resumen tras 20m
-# -              -           -           -       sin registro -             claude -p vivo (pid 4821) sin línea lanzando: /pr-review 61
+# SKILL          CARD        LANZÓ       HACE    ESTADO        MODELO          DETALLE
+# pr-review      DEVKIT-56   bucle       1h00m   terminó       opus/high       -
+# task-start     DEVKIT-59   epic-plan   30m     bloqueada     fable/max r1    Qué intenté: X. Qué necesito: ...
+# task-start     DEVKIT-60   humano      20m     no arrancó    -               sin proceso, log ni resumen tras 20m
+# -              -           -           -       sin registro  -               claude -p vivo (pid 4821) sin línea lanzando: /pr-review 61
 #
 # Consumo (cuota oficial, leída 16:12:24)
 #   sesión: 30% usada, reinicia Sep 17, 5:10pm (UTC)
