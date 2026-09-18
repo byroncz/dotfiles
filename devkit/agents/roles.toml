@@ -25,8 +25,10 @@ frontera = ["fable", "opus", "sonnet"]
 # tokens de entrada/salida) y la evidencia de Opus como implementador ya
 # está: los PR 39 a 43 necesitaron 1, 1, 0, 0 y 0 ciclos de corrección
 # (DEVKIT-54). `max_turns` es un presupuesto, no un límite: la CLI instalada
-# (2.1.270) no expone `--max-turns`, así que devkit-run compara `num_turns`
-# del resultado contra este número y solo avisa en el log si se excede.
+# no expone `--max-turns`, así que devkit-run compara `num_turns` del
+# resultado contra este número. `presupuesto.pr-review`, más abajo, lo anula
+# y hace el tope exigible: si se excede, corta y bloquea la card con
+# `task-block.sh` (DEVKIT-94) en vez de solo avisar en watch.log.
 #
 # `resolver_modelo` solo avanza desde `model_index` hacia el final de la
 # lista, nunca hacia atrás: si Opus no responde, cae a Sonnet y ahí se queda,
@@ -76,13 +78,13 @@ implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
 # `presupuesto.<skill> = N` como TOML de clave punteada válido. Antes, el
 # único presupuesto era el de `implementacion.max_turns`/`revision.max_turns`
 # (arriba) y `resumen()` solo lo escribía en watch.log como aviso: la card
-# seguía su curso aunque se pasara. Ahora `devkit-run --worker` compara los
-# turnos reales contra el valor de aquí y, si se excede, corta y bloquea la
-# card con `task-block.sh` en vez de dejarla avanzar sin límite. La CLI
-# instalada (2.1.274) sigue sin exponer `--max-turns` (igual que a los
-# 2.1.270 del comentario de `revision.max_turns`), así que el corte es
-# posterior a la ejecución, no un límite que Claude Code aplique mientras
-# corre.
+# seguía su curso aunque se pasara. Ahora `devkit-run --worker` (task-start
+# manual, task-close, epic-plan) y `run_skill`/`--sync` en watch.sh (el ciclo
+# automático: pr-review, task-fix, task-document) comparan los turnos reales
+# contra el valor de aquí y, si se excede, cortan y bloquean la card con
+# `task-block.sh` en vez de dejarla avanzar sin límite. La CLI instalada
+# sigue sin exponer `--max-turns`, así que el corte es posterior a la
+# ejecución, no un límite que Claude Code aplique mientras corre.
 #
 # Valores iniciales, decididos por el humano en DEVKIT-94 con las medidas de
 # las hijas 87 a 90: pr-review entre 16 y 33 turnos, task-fix entre 30
