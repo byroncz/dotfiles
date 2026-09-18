@@ -121,7 +121,7 @@ principal() {
     say "$clave sin PR; comentado en la card"
     return 1
   fi
-  if ! pr_json=$("$GH" pr view "$pr" --json number,url,state,headRefOid,headRefName,mergeCommit,body,reviews,comments 2>&1); then
+  if ! pr_json=$("$GH" pr view "$pr" --json number,url,state,headRefOid,headRefName,body,reviews,comments 2>&1); then
     say "gh no pudo leer el PR $pr: $pr_json"
     return 1
   fi
@@ -174,16 +174,13 @@ $lineas_revision"
   modelos="$modelos
 Documentado con script task-document.sh"
 
-  local rama card_url pr_url merge_sha enlaces
+  local rama card_url pr_url enlaces
   rama=$(jq -r '.rama // ""' <<<"$card")
   card_url=$(jq -r .url <<<"$card")
   pr_url=$(jq -r .url <<<"$pr_json")
   enlaces="- Card: $card_url
 - Rama: ${rama:-sin rama}
 - PR: $pr_url"
-  merge_sha=$(jq -r '.mergeCommit.oid // ""' <<<"$pr_json")
-  [ -z "$merge_sha" ] || enlaces="$enlaces
-- Commit de merge: $merge_sha"
 
   local cuerpo
   cuerpo="## Qué cambió
