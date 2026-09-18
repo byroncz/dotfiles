@@ -270,9 +270,12 @@ cmd_set() {  # cmd_set <page_id> Prop=valor...
   api PATCH "/pages/$page_id" "$props" >/dev/null
 }
 
-# rich_text de un comentario: las URL como enlaces, el resto como texto, y
-# cada tramo en trozos de 2000 caracteres, el tope de la API por objeto.
-RICH_TEXT='
+# Un texto a objetos rich_text de Notion: las URL como enlaces, el resto
+# como texto, y cada tramo en trozos de 2000 caracteres, el tope de la API
+# por objeto `text.content`. Compartido con MD_BLOQUES (DEVKIT-92): un
+# bloque de Documentación largo -código, párrafo, viñeta- necesita el mismo
+# recorte que ya aplicaba el comentario del PR.
+TRAMOS_DEF='
 def tramos($t):
   ($t | [match("https?://[^\\s<>()\"]*[^\\s<>()\".,;:]"; "g")]) as $ms
   | (reduce $ms[] as $m ({pos: 0, out: []};
@@ -280,9 +283,14 @@ def tramos($t):
                + [{text: {content: $m.string, link: {url: $m.string}}}]
        | .pos = $m.offset + $m.length)) as $r
   | $r.out + (if ($t | length) > $r.pos then [{text: {content: $t[$r.pos:]}}] else [] end);
-[ tramos($texto)[] | . as $s
-  | range(0; ($s.text.content | length); 2000) as $i
-  | $s | .text.content = $s.text.content[$i:$i + 2000] ]
+def recortar($t):
+  [ tramos($t)[] | . as $s
+    | range(0; ($s.text.content | length); 2000) as $i
+    | $s | .text.content = $s.text.content[$i:$i + 2000] ];
+'
+
+RICH_TEXT="$TRAMOS_DEF"'
+recortar($texto)
 '
 
 cmd_comentar() {  # cmd_comentar <page_id> <texto>
@@ -317,33 +325,45 @@ cmd_documentacion() {  # cmd_documentacion <page_id> [clave]
 # que ese cuerpo usa: encabezado (#/##/###), párrafo, lista (- o número.) y
 # código (```lenguaje ... ```). Cualquier otra sintaxis de Markdown (tablas,
 # negrita, enlaces) cae a párrafo con el texto tal cual: task-document.sh no
-# la genera, así que no hace falta cubrirla.
-MD_BLOQUES='
+# la genera, así que no hace falta cubrirla. Una línea que no abre un bloque
+# nuevo (no es encabezado, viñeta, número ni cerca de código) continúa el
+# párrafo o el ítem de lista anterior, unida con un espacio: los cuerpos de
+# PR llegan con las líneas cortadas a columna fija, y sin esto cada una
+# quedaba como su propio párrafo.
+MD_BLOQUES="$TRAMOS_DEF"'
 def bloque($tipo; $contenido):
-  {object: "block", type: $tipo, ($tipo): {rich_text: [{type: "text", text: {content: $contenido}}]}};
+  {object: "block", type: $tipo, ($tipo): {rich_text: (recortar($contenido) | map(. + {type: "text"}))}};
+def es_continuable: . == "paragraph" or . == "bulleted_list_item" or . == "numbered_list_item";
 ($md | split("\n")) as $lineas
-| reduce $lineas[] as $l
-    ({bloques: [], en_codigo: false, codigo: "", lenguaje: ""};
+| (reduce $lineas[] as $l
+    ({items: [], en_codigo: false, codigo: "", lenguaje: ""};
       if .en_codigo then
         if ($l | test("^```")) then
-          .bloques += [{object: "block", type: "code",
-                        code: {rich_text: [{type: "text", text: {content: (.codigo | rtrimstr("\n"))}}],
-                               language: (if .lenguaje == "" then "plain text" else .lenguaje end)}}]
+          .items += [{tipo: "code", contenido: (.codigo | rtrimstr("\n")),
+                      lenguaje: (if .lenguaje == "" then "plain text" else .lenguaje end)}]
           | .en_codigo = false | .codigo = "" | .lenguaje = ""
         else
           .codigo += ($l + "\n")
         end
       elif ($l | test("^```")) then
         .en_codigo = true | .lenguaje = ($l | ltrimstr("```"))
-      elif ($l | test("^### ")) then .bloques += [bloque("heading_3"; ($l | ltrimstr("### ")))]
-      elif ($l | test("^## "))  then .bloques += [bloque("heading_2"; ($l | ltrimstr("## ")))]
-      elif ($l | test("^# "))   then .bloques += [bloque("heading_1"; ($l | ltrimstr("# ")))]
-      elif ($l | test("^[-*] ")) then .bloques += [bloque("bulleted_list_item"; $l[2:])]
-      elif ($l | test("^[0-9]+\\. ")) then .bloques += [bloque("numbered_list_item"; ($l | sub("^[0-9]+\\. ";"")))]
+      elif ($l | test("^### ")) then .items += [{tipo: "heading_3", contenido: ($l | ltrimstr("### "))}]
+      elif ($l | test("^## "))  then .items += [{tipo: "heading_2", contenido: ($l | ltrimstr("## "))}]
+      elif ($l | test("^# "))   then .items += [{tipo: "heading_1", contenido: ($l | ltrimstr("# "))}]
+      elif ($l | test("^[-*] ")) then .items += [{tipo: "bulleted_list_item", contenido: $l[2:]}]
+      elif ($l | test("^[0-9]+\\. ")) then .items += [{tipo: "numbered_list_item", contenido: ($l | sub("^[0-9]+\\. ";""))}]
       elif ($l | test("^\\s*$")) then .
-      else .bloques += [bloque("paragraph"; $l)]
-      end)
-| .bloques
+      elif ((.items | length) > 0 and (.items[-1].tipo | es_continuable)) then
+        .items[-1].contenido += (" " + ($l | sub("^\\s+";"")))
+      else
+        .items += [{tipo: "paragraph", contenido: $l}]
+      end)) as $acc
+| [ $acc.items[] | if .tipo == "code" then
+      {object: "block", type: "code",
+       code: {rich_text: (recortar(.contenido) | map(. + {type: "text"})), language: .lenguaje}}
+    else
+      bloque(.tipo; .contenido)
+    end ]
 '
 
 # Borra los bloques hijos de una página, uno por uno (DELETE los archiva:
@@ -737,6 +757,32 @@ echo chau
     '{"lang":"sh","texto":"echo hola\necho chau"}' \
     "$(jq -c '.[4].code | {lang: .language, texto: (.rich_text[0].text.content)}' <<<"$got")"
   check "MD_BLOQUES: una línea en blanco no deja bloque vacío" 6 "$(jq 'length' <<<"$got")"
+
+  # H3 (informe del PR 66): líneas cortadas a columna fija -como las que
+  # arma task-document.sh a partir del cuerpo del PR- se unen al párrafo o al
+  # ítem de lista anterior, no quedan como bloques sueltos.
+  got=$(jq -nc --arg md 'Primero.
+Segundo.
+Tercero.
+- uno
+  continuación de uno' "$MD_BLOQUES")
+  check "MD_BLOQUES: líneas seguidas de un párrafo se unen con un espacio" \
+    '"Primero. Segundo. Tercero."' \
+    "$(jq -c '.[0].paragraph.rich_text[0].text.content' <<<"$got")"
+  check "MD_BLOQUES: la continuación sangrada de una viñeta se une a su ítem" \
+    '"uno continuación de uno"' \
+    "$(jq -c '.[1].bulleted_list_item.rich_text[0].text.content' <<<"$got")"
+
+  # H2 (informe del PR 66): un bloque de más de 2000 caracteres -código o
+  # texto- se corta en varios objetos rich_text, como ya hacía RICH_TEXT
+  # para los comentarios del PR.
+  largo=$(printf 'a%.0s' $(seq 1 2500))
+  got=$(jq -nc --arg md "\`\`\`
+$largo
+\`\`\`" "$MD_BLOQUES")
+  check "MD_BLOQUES: un bloque de código de más de 2000 caracteres se corta en tramos" \
+    "[2000,500]" \
+    "$(jq -c '.[0].code.rich_text | map(.text.content | length)' <<<"$got")"
 
   # crear-doc: crea la página con sus propiedades y agrega el Markdown como
   # bloques hijos.
