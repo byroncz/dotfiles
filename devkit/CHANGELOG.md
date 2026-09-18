@@ -14,6 +14,32 @@ versión que usa un proyecto y la destino.
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
 
+### devkit-run --estado muestra modelo/esfuerzo/ronda desde el lanzamiento, fila `sin registro`, señal de vida y redibujo sin parpadeo (DEVKIT-81)
+
+- La línea `lanzando` de `watch.log` lleva `modelo=<alias> esfuerzo=<x>
+  ronda=<n>`, resueltos antes de escribirla (`devkit-run` ya los conocía;
+  `run_skill` en `watch.sh` adelanta su `--rol` al mismo punto, antes de
+  tomar el candado). `--estado` suma una columna `MODELO` (`sonnet/high r1`)
+  visible desde que la fila aparece, no solo al terminar. Una línea vieja sin
+  esos campos -un `watch.sh` en memoria, sin `recreate` todavía- se sigue
+  leyendo, con la columna en `-`.
+- Regla sin excepción: `--estado` agrega una fila `sin registro` cuando `ps`
+  encuentra un `claude -p` vivo sin ninguna línea `lanzando` que lo explique.
+  La sonda de modelo (`-p "ok"`) y la lectura de cuota (`-p "/usage"`) se
+  excluyen por su prompt: no son skills.
+- Una fila `en curso` que pasa `DEVKIT_WATCH_SKILL_TIMEOUT` se marca `lento`,
+  la misma alarma que `watch_long_running` deja en `watch.log`.
+- `--estado --seguir` no parpadea: arma el cuadro completo en memoria antes
+  de imprimirlo, con el cursor de vuelta al origen y borrado (`\033[J`) solo
+  al final, oculto con `tput civis`/`cnorm` (Ctrl-C incluido). La cabecera
+  suma un girador y `bucle: vivo, último tick hace <N>` o `bucle: SIN SEÑAL`
+  si `watch.sh` no aparece en `ps` o su último tick "consultando GitHub" pasa
+  el doble de su intervalo.
+- Motivo: criterios del grupo 3 de la Épica DEVKIT-59 que quedaron sin card
+  hija al planificarla (`epic-plan` creó DEVKIT-63 media hora antes de que se
+  agregaran); el humano los pidió el 2026-09-16 y volvió a preguntar por
+  ellos el 2026-09-17 al no verlos.
+
 ### devkit-run --estado agrupa por Épica de origen cuando hay más de una En progreso (DEVKIT-80)
 
 - `notion.sh epicas <código>`: por cada Épica `En progreso` del proyecto, una
