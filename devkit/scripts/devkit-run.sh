@@ -4649,6 +4649,17 @@ FIN
   check "task-submit (rama main): lo dice en el error" 1 \
     "$(printf '%s' "$ts_err" | grep -c 'no es una rama de card válida')"
   git -C "$ts_dir/ws" switch -q feat/DEVKIT-9301-probar-task-submit
+
+  # Sin .devkit/pr-body.md (H7): falla antes de comitear y subir, no después.
+  rm -f "$ts_dir/ws/.devkit/pr-body.md"
+  echo "cambio que no debería subirse" >>"$ts_dir/ws/archivo.txt"
+  cabeza_previa=$(git -C "$ts_dir/ws" rev-parse HEAD)
+  ts_err=$(env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): no debería pasar" 2>&1 >/dev/null)
+  check "task-submit (sin pr-body.md): sale con 1" 1 "$?"
+  check "task-submit (sin pr-body.md): lo dice en el error" 1 \
+    "$(printf '%s' "$ts_err" | grep -c 'falta .*pr-body.md')"
+  check "task-submit (sin pr-body.md): no comitea" "$cabeza_previa" \
+    "$(git -C "$ts_dir/ws" rev-parse HEAD)"
   rm -rf "$ts_dir"
 
   # --- hook-post-edit.sh (DEVKIT-91) -----------------------------------------

@@ -130,6 +130,19 @@ while IFS= read -r f; do
   fi
 done < <(sh_tocados)
 
+# El cuerpo del PR, antes de comitear y subir nada: si falta o le faltan
+# secciones, mejor fallar aquí que dejar la rama subida sin PR (H7).
+if [ ! -f "$PR_BODY_FILE" ]; then
+  err "falta $PR_BODY_FILE; escribe primero las secciones Qué cambia, Cómo probarlo y Cambios requeridos"
+  exit 1
+fi
+for encabezado in "## Qué cambia" "## Cómo probarlo" "## Cambios requeridos"; do
+  grep -qF "$encabezado" "$PR_BODY_FILE" || {
+    err "$PR_BODY_FILE no tiene la sección \"$encabezado\""
+    exit 1
+  }
+done
+
 # --- 3. Commit y push --------------------------------------------------------
 if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
   git -C "$WS" add -A -- . ':!.devkit/pr-body.md' || { err "git add falló"; exit 1; }
@@ -143,16 +156,6 @@ fi
 rm -f "$push_err"
 
 # --- 4. Cuerpo del PR y creación/actualización -------------------------------
-if [ ! -f "$PR_BODY_FILE" ]; then
-  err "falta $PR_BODY_FILE; escribe primero las secciones Qué cambia, Cómo probarlo y Cambios requeridos"
-  exit 1
-fi
-for encabezado in "## Qué cambia" "## Cómo probarlo" "## Cambios requeridos"; do
-  grep -qF "$encabezado" "$PR_BODY_FILE" || {
-    err "$PR_BODY_FILE no tiene la sección \"$encabezado\""
-    exit 1
-  }
-done
 cuerpo="$(cat "$PR_BODY_FILE")
 
 ## Card
