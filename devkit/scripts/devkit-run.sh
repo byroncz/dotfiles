@@ -1377,8 +1377,10 @@ rellenar() {  # rellenar <texto> <ancho>
 }
 
 encabezado_tabla() {
+  # ESTADO mide 14, no 12 (DEVKIT-81 H7): "sin registro" ya mide 12, y sin
+  # margen queda pegado a la columna MODELO.
   printf '%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" "$(rellenar MODELO 16)" DETALLE
+    "$(rellenar HACE 8)" "$(rellenar ESTADO 14)" "$(rellenar MODELO 16)" DETALLE
 }
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
@@ -1391,7 +1393,7 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <d
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
   fi
   printf '%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$(rellenar "$modelo" 16)" "$detalle"
+    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 14)" "$(rellenar "$modelo" 16)" "$detalle"
 }
 
 mostrar_estado() {
