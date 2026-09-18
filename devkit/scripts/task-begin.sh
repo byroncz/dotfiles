@@ -172,8 +172,20 @@ else
 fi
 
 # --- Card lista: el volcado que evita que el agente consulte Notion --------
-contenido=$("$NOTION" contenido "$id" 2>/dev/null)
-comentarios=$("$NOTION" comentarios "$id" 2>/dev/null)
+# La card ya quedó En progreso, con la rama creada y subida (o, en una
+# reanudación, ya en uso): un fallo de Notion aquí no debe salir con 0 y
+# dejar al agente sin Objetivo ni Criterios, o creyendo que "(sin
+# comentarios)" significa que no hay ninguno cuando en realidad Notion no
+# respondió -el mismo fallo silencioso de DEVKIT-41. El relanzamiento entra
+# por la reanudación, así que no se pierde nada.
+if ! contenido=$("$NOTION" contenido "$id" 2>/dev/null); then
+  err "la card $clave quedó En progreso, pero no pude leer su contenido en Notion (Objetivo/Criterios); relanza para reintentar."
+  exit 1
+fi
+if ! comentarios=$("$NOTION" comentarios "$id" 2>/dev/null); then
+  err "la card $clave quedó En progreso, pero no pude leer sus comentarios en Notion; relanza para reintentar."
+  exit 1
+fi
 
 cat <<EOF
 - Clave: $clave
