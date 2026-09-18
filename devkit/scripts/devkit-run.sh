@@ -2572,7 +2572,7 @@ FIN
   # tercera vez con las variables que `watch.sh:495` exporta al `--sync`,
   # para probar que no se filtran a las comprobaciones mecánicas (H2).
   local rp_dir rp_head
-  rp_dir=$(mktemp -d)
+  rp_dir=$(mktemp -d "$tmp/rp.XXXXXX")
   git init -q --bare "$rp_dir/origin.git"
   git init -q "$rp_dir/ws"
   git -C "$rp_dir/ws" config user.email test@example.com
