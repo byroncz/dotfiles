@@ -1863,10 +1863,30 @@ seguir_tablero() {
 
 # Clave de un PR, por su título (mismo patrón que `key_of` en watch.sh). "-"
 # si `gh` no responde o el título no trae Clave: nunca se inventa.
+# `CLAVE_DE_PR_CACHE`, si está seteada, apunta a un archivo "num<TAB>clave"
+# que evita repetir `gh pr view` por cada línea de pr-review/task-close que
+# comparte PR (H3 de pr-review en DEVKIT-89): `costos_filas` y
+# `costos_resumen_proyecto` llaman a esta función una vez por card y por
+# fila dentro de un `< <(...)`, así que un array en memoria no sobrevive
+# entre esas invocaciones; un archivo sí, sin importar el subshell. La
+# arman `mostrar_costos` y `--costos-totales`, dueños de la corrida
+# completa.
 clave_de_pr() {  # clave_de_pr <número de PR>
-  local titulo
-  titulo=$("$GH_BIN" pr view "$1" --json title --jq .title 2>/dev/null)
-  printf '%s' "$(printf '%s' "$titulo" | grep -oE '^[A-Z][A-Z0-9]+-[0-9]+' | head -1)"
+  local num=$1 titulo clave hit
+  if [ -n "${CLAVE_DE_PR_CACHE:-}" ] && [ -f "$CLAVE_DE_PR_CACHE" ]; then
+    hit=$(grep -m1 -E "^$num	" "$CLAVE_DE_PR_CACHE" 2>/dev/null | cut -f2)
+    if [ -n "$hit" ]; then
+      [ "$hit" = - ] && return 0
+      printf '%s' "$hit"
+      return 0
+    fi
+  fi
+  titulo=$("$GH_BIN" pr view "$num" --json title --jq .title 2>/dev/null)
+  clave=$(printf '%s' "$titulo" | grep -oE '^[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  if [ -n "${CLAVE_DE_PR_CACHE:-}" ]; then
+    printf '%s\t%s\n' "$num" "${clave:--}" >> "$CLAVE_DE_PR_CACHE" 2>/dev/null
+  fi
+  printf '%s' "$clave"
 }
 
 # Clave de un lanzamiento. task-start/task-fix/task-document/epic-plan la
@@ -4080,6 +4100,28 @@ FIN
   check "costos_filas trae las cuatro filas de la card (task-close incluido)" 4 \
     "$(costos_filas "$COSTOS_LOG" DEVKIT-77 | wc -l)"
 
+  # H3 de pr-review en DEVKIT-89: pr-review-31 y task-close-31 comparten el
+  # PR 31; con CLAVE_DE_PR_CACHE, la segunda resolución sale del archivo y no
+  # de un segundo `gh pr view`.
+  local llamadas_gh=$costos_tmp/llamadas-gh cache_pr
+  : > "$llamadas_gh"
+  cat >"$costos_tmp/gh-contador" <<FIN
+#!/usr/bin/env bash
+echo x >> "$llamadas_gh"
+if [ "\$1" = pr ] && [ "\$2" = view ] && [ "\$3" = 31 ]; then
+  echo "DEVKIT-77 algo de prueba"
+  exit 0
+fi
+exit 1
+FIN
+  chmod +x "$costos_tmp/gh-contador"
+  cache_pr=$(mktemp)
+  GH_BIN="$costos_tmp/gh-contador" CLAVE_DE_PR_CACHE="$cache_pr" costos_filas "$COSTOS_LOG" DEVKIT-77 >/dev/null
+  rm -f "$cache_pr"
+  GH_BIN="$costos_tmp/gh-doble"
+  check "clave_de_pr con caché llama a gh una sola vez pese a dos líneas del mismo PR" 1 \
+    "$(wc -l < "$llamadas_gh")"
+
   check "costos_totales_card suma turnos, costo y minutos; cuenta 1 revisión" \
     "14	0.3600	3	1" \
     "$(costos_totales_card DEVKIT-77)"
@@ -4282,15 +4324,24 @@ case "${1:-}" in
     exit $?
     ;;
   --costos)
+    # CLAVE_DE_PR_CACHE vive solo esta corrida (H3 de pr-review en
+    # DEVKIT-89): sin ella, `clave_de_pr` llama a `gh pr view` una vez por
+    # línea de pr-review/task-close, aunque compartan PR.
+    CLAVE_DE_PR_CACHE=$(mktemp)
     mostrar_costos "${2:-}"
-    exit 0
+    rc=$?
+    rm -f "$CLAVE_DE_PR_CACHE"
+    exit $rc
     ;;
   --costos-totales)
     # Para task-close.sh (DEVKIT-89): "turnos costo minutos revisiones" de la
     # card, sin tabla, misma función que la fila TOTAL de `--costos <Clave>`.
     [ -n "${2:-}" ] || exit 64
+    CLAVE_DE_PR_CACHE=$(mktemp)
     costos_totales_card "$2"
-    exit 0
+    rc=$?
+    rm -f "$CLAVE_DE_PR_CACHE"
+    exit $rc
     ;;
   --test)
     run_tests
