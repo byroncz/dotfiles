@@ -1268,8 +1268,11 @@ claude_descendiente() {  # claude_descendiente <raíz> <prompt>
 # su `claude -p` o espera el candado). Si murió, solo vale como arranque si
 # dejó su resumen "terminado" en watch.log: una skill muy corta. En otro
 # caso imprime el final del log y las alarmas, y devuelve falso.
+# Devuelve 0 si arrancó (o terminó de verdad), 2 si task-begin.sh la cortó
+# antes de `claude -p` ("no lanzó", H8 del informe sobre el PR #64 de
+# DEVKIT-90) y 1 en cualquier otro caso de no arranque.
 confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
-  local pid=$1 prompt=$2 logf=$3 id t=0 pasos claude_pid alarmas
+  local pid=$1 prompt=$2 logf=$3 id t=0 pasos claude_pid alarmas cierre motivo_no_lanzo
   id=$(basename "$logf" .log)
   pasos=$((ARRANQUE_ESPERA * 5))
   while [ "$t" -lt "$pasos" ] && kill -0 "$pid" 2>/dev/null; do
@@ -1285,7 +1288,15 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
     fi
     return 0
   fi
-  if grep -qF "terminado [$id]:" "$WATCH_LOG" 2>/dev/null; then
+  cierre=$(grep -F "terminado [$id]:" "$WATCH_LOG" 2>/dev/null | tail -1)
+  if [ -n "$cierre" ]; then
+    case "$cierre" in
+      *"no lanzó: "*)
+        motivo_no_lanzo=${cierre#*no lanzó: }
+        printf 'devkit-run: "%s" no lanzó: %s\n' "$prompt" "$motivo_no_lanzo" >&2
+        return 2
+        ;;
+    esac
     echo "arrancó y ya terminó; resumen en $WATCH_LOG"
     return 0
   fi
@@ -2928,6 +2939,31 @@ FIN
     "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'cambios sin commit')"
   rm -f "$tmp/sucio.txt" "$RONDA_DIR/card-DEVKIT-9098.json"
 
+  # H8 del informe sobre el PR #64 (esta card): dos lanzamientos seguidos que
+  # fallan en task-begin.sh no deben reutilizar el mismo id de log -si no se
+  # reserva el número, el "lanzando" huérfano del primero se empareja con el
+  # cierre del segundo y --costos duplica el costo del siguiente task-start
+  # real (DEVKIT-89 H2 del mismo tipo, ahora sobre este camino de fallo)-.
+  local h8_run="$tmp/run-h8" h8_costos="$tmp/costos-h8.log"
+  mkdir -p "$h8_run"
+  : >"$h8_run/ready"
+  printf '{"estado":"Hecha","pr":"https://github.com/o/r/pull/9"}\n' \
+    >"$RONDA_DIR/card-DEVKIT-9099.json"
+  : >"$h8_run/watch.log"
+  for _ in 1 2; do
+    DEVKIT_CLAUDE_BIN=/bin/false DEVKIT_TASK_BEGIN_BIN="$HERE/task-begin.sh" DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+      DEVKIT_RUN_DIR="$h8_run" DEVKIT_WS="$tmp" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+      DEVKIT_FRONTERA_CACHE_DIR="$h8_run/frontera" DEVKIT_COSTOS_LOG="$h8_costos" \
+      bash "$HERE/devkit-run.sh" task-start DEVKIT-9099 >/dev/null 2>&1
+  done
+  check "H8: dos fallos seguidos de task-begin.sh reservan dos ids de log distintos" 2 \
+    "$(ls "$h8_run"/task-start-*.log 2>/dev/null | wc -l | tr -d ' ')"
+  check "H8: costos.log no duplica el cierre del primer id" 1 \
+    "$(grep -c 'terminado \[task-start-1\]' "$h8_costos" 2>/dev/null)"
+  check "H8: el segundo fallo también queda en costos.log, con su propio id" 1 \
+    "$(grep -c 'terminado \[task-start-2\]' "$h8_costos" 2>/dev/null)"
+  rm -f "$RONDA_DIR/card-DEVKIT-9099.json"
+
   # --- task-begin.sh de verdad (no el doble), con notion.sh simulado -------
   # Lista y En progreso con Rama: los dos casos que sí tocan git y Notion,
   # de punta a punta, a través del propio `devkit-run.sh task-start` (no
@@ -4514,6 +4550,13 @@ case "${1:-}" in
         linea_fin=$(printf '%s devkit-run "%s" %s [%s]: %s' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" terminado \
           "$(basename "$logf" .log)" "no lanzó: ${begin_motivo:-task-begin.sh no dejó lista la card}")
         printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
+        costos_log "$linea_fin"
+        # H8 del informe sobre el PR #64 (esta card): sin este archivo, el
+        # `while [ -e "$RUN_DIR/$skill-$n.log" ]` del lanzador no ve ocupado
+        # este número y el siguiente task-start real lo reutiliza, con lo que
+        # `--costos` empareja su cierre con esta "lanzando" huérfana y duplica
+        # el costo.
+        printf '%s\n' "${begin_motivo:-task-begin.sh no dejó lista la card}" > "$logf" 2>/dev/null
         flock -u 9
         exec 9>&-
         exit 71
@@ -4766,7 +4809,13 @@ worker=$!
 disown
 echo "lanzado: $prompt"
 echo "modelo=$modelo esfuerzo=$esfuerzo ronda=$ronda log=$logf pid=$worker"
-confirmar_arranque "$worker" "$prompt" "$logf" || exit 70
+confirmar_arranque "$worker" "$prompt" "$logf"
+rc_confirmar=$?
+# 2 = task-begin.sh cortó antes de claude -p: el motivo ya salió por stderr
+# (H8 del informe sobre el PR #64) y el lanzador sale con el mismo código
+# que usó el worker, en vez del 70 genérico de "no arrancó".
+[ "$rc_confirmar" -ne 2 ] || exit 71
+[ "$rc_confirmar" -eq 0 ] || exit 70
 if [ -n "$seguir_tras_lanzar" ]; then
   seguir_lanzamiento "$(basename "$logf" .log)" "$worker"
   exit $?
