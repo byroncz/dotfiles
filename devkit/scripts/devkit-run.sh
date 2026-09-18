@@ -1457,22 +1457,28 @@ mostrar_estado() {
 # `watch.sh` siga en `ps` y que su último tick "consultando GitHub" en
 # watch.log no pase del doble de INTERVALO_BUCLE. Por `ps` de PS_BIN, como el
 # resto de este archivo, para poder fijarlo en la autoprueba.
-senal_bucle() {  # senal_bucle <watch.log> <ahora epoch>
-  local wlog=$1 ahora=$2 procesos tick t0 edad
+# <color> no vacío pinta las tres ramas de SIN SEÑAL en rojo (DEVKIT-81 H4,
+# mismo patrón que ROJO/RESET en prompt-status.sh). senal_bucle no puede
+# decidirlo por su cuenta con `[ -t 1 ]`: seguir_estado la llama siempre
+# dentro de `$(...)`, donde el descriptor 1 nunca es una terminal aunque la
+# de verdad sí lo sea.
+senal_bucle() {  # senal_bucle <watch.log> <ahora epoch> [color]
+  local wlog=$1 ahora=$2 color=${3:-} procesos tick t0 edad rojo='' reset=''
+  if [ -n "$color" ]; then rojo=$'\033[31m'; reset=$'\033[0m'; fi
   procesos=$("$PS_BIN" -eo args= -ww 2>/dev/null)
   if ! grep -qF 'watch.sh' <<<"$procesos"; then
-    printf 'bucle: SIN SEÑAL, no encuentro watch.sh en ps\n'
+    printf '%sbucle: SIN SEÑAL, no encuentro watch.sh en ps%s\n' "$rojo" "$reset"
     return 0
   fi
   tick=$(grep -E '^[^ ]+ consultando GitHub$' "$wlog" 2>/dev/null | tail -1 | awk '{print $1}')
   if [ -z "$tick" ]; then
-    printf 'bucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía\n'
+    printf '%sbucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía%s\n' "$rojo" "$reset"
     return 0
   fi
   t0=$(date -d "$tick" +%s 2>/dev/null || echo "$ahora")
   edad=$((ahora - t0))
   if [ "$edad" -gt "$((2 * INTERVALO_BUCLE))" ]; then
-    printf 'bucle: SIN SEÑAL hace %s\n' "$(hace "$edad")"
+    printf '%sbucle: SIN SEÑAL hace %s%s\n' "$rojo" "$(hace "$edad")" "$reset"
   else
     printf 'bucle: vivo, último tick hace %s\n' "$(hace "$edad")"
   fi
@@ -1493,18 +1499,19 @@ cuadro_sin_parpadeo() {  # cuadro_sin_parpadeo <cuadro>
 }
 
 seguir_estado() {
-  local giros='|/-\' i=0 c frame ahora
+  local giros='|/-\' i=0 c frame ahora color_tty=''
   if [ -t 1 ]; then
     tput civis 2>/dev/null
     trap 'tput cnorm 2>/dev/null' EXIT
     trap 'tput cnorm 2>/dev/null; exit 130' INT TERM
+    color_tty=1
   fi
   while true; do
     c=${giros:$((i % ${#giros})):1}
     i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s\n\n' \
-      "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora")")
+      "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
     frame+=$(mostrar_estado)
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -2771,6 +2778,23 @@ FIN
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" | grep -c 'SIN SEÑAL hace')"
   check "senal_bucle: SIN SEÑAL si watch.sh no está en ps" 1 \
     "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" | grep -c 'no encuentro watch.sh en ps')"
+  # DEVKIT-81 H4: con color pedido (terminal), las tres ramas SIN SEÑAL van en
+  # rojo; sin él (autoprueba, sin terminal), sin códigos de color -ya cubierto
+  # por los tres checks de arriba, que no piden color.
+  check "senal_bucle: SIN SEÑAL sin watch.sh en ps, en rojo si se pide" \
+    $'\033[31mbucle: SIN SEÑAL, no encuentro watch.sh en ps\033[0m' \
+    "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" 1)"
+  local sin_tick_log
+  sin_tick_log="$tmp/sin-tick-watch.log"
+  : >"$sin_tick_log"
+  check "senal_bucle: SIN SEÑAL sin ningún tick, en rojo si se pide" \
+    $'\033[31mbucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía\033[0m' \
+    "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$sin_tick_log" "$ahora" 1)"
+  check "senal_bucle: SIN SEÑAL con un tick viejo, en rojo si se pide" \
+    $'\033[31mbucle: SIN SEÑAL hace 11m\033[0m' \
+    "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" 1)"
+  check "senal_bucle: vivo no se pinta aunque se pida color" "bucle: vivo, último tick hace 1m" \
+    "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_log" "$ahora" 1)"
 
   # DEVKIT-81 H3: cada renglón del cuadro lleva `\033[K` al final -incluido el
   # último, antes del salto de línea que agrega `printf`-, para que un
