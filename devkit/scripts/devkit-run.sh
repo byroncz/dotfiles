@@ -2518,9 +2518,12 @@ FIN
     "$(grep -oE 'ALARMA: terminó sin entregar ni bloquear \(DEVKIT-63\): card sigue En progreso, sin PR ni bloqueo' "$tmp/run/watch.log" | head -1)"
 
   # DEVKIT-76, los tres relanzamientos posibles sobre una card ya no libre:
-  # el paso 2 de la skill (nueva) responde en un turno y centavos, sin
-  # pregunta ni alarma. Cada doble de `claude` imita esa respuesta corta;
-  # `resumen()` deja el costo y los turnos reales en watch.log.
+  # comprueba que ninguno deja ALARMA y que `resumen()` reporta bien el
+  # costo y los turnos que le devuelve `claude -p`. H1 de la revisión: el
+  # doble de `claude` fija ese costo y esos turnos a mano, así que esto no
+  # mide cuánto gasta de verdad el modelo con la skill nueva; esa evidencia
+  # sale de una corrida real de `devkit-run task-start`, comentada en la
+  # card.
   corto_devkit76() {  # corto_devkit76 <nombre> <resultado>
     local nombre=$1 resultado=$2
     cat >"$tmp/claude-corto-$nombre" <<FIN
@@ -2541,7 +2544,7 @@ FIN
     sleep 0.1
     espera=$((espera + 1))
   done
-  check "relanzamiento sobre Hecha: un turno, centavos, sin alarma" \
+  check "relanzamiento sobre Hecha: devkit-run reporta costo/turnos del doble" \
     'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
     "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
        "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
@@ -2560,7 +2563,7 @@ FIN
     sleep 0.1
     espera=$((espera + 1))
   done
-  check "relanzamiento sobre Bloqueada: un turno, centavos, sin alarma" \
+  check "relanzamiento sobre Bloqueada: devkit-run reporta costo/turnos del doble" \
     'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
     "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
        "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
@@ -2579,7 +2582,7 @@ FIN
     sleep 0.1
     espera=$((espera + 1))
   done
-  check "relanzamiento sobre Revisión automática: un turno, centavos, sin alarma" \
+  check "relanzamiento sobre Revisión automática: devkit-run reporta costo/turnos del doble" \
     'terminado [task-start-1]: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1' \
     "$(grep -oE 'terminado \[task-start-[0-9]+\]: modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^ ]+ costo=0.01 turnos=1' \
        "$tmp/run/watch.log" | head -1 | sed -E 's/\[task-start-[0-9]+\]/[task-start-1]/')"
