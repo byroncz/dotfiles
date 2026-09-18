@@ -233,18 +233,47 @@ if [ "$clasificacion" = codigo ]; then
   # aparecen en una línea borrada y no en ninguna línea agregada. Si sobrevive
   # una referencia al nombre viejo en el árbol nuevo, es un hallazgo (H1 de
   # pr-review típico de un rename a medias).
-  borrados=$(printf '%s\n' "$diff_completo" | grep -E '^-[^-]' \
-    | sed -E 's/^-//' \
-    | grep -oE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)|^[[:space:]]*[A-Z_][A-Z0-9_]*=' \
-    | grep -oE '[a-zA-Z_][a-zA-Z0-9_]*' | sort -u)
-  agregados=$(printf '%s\n' "$diff_completo" | grep -E '^\+[^+]' \
-    | sed -E 's/^\+//' \
-    | grep -oE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\(\)|^[[:space:]]*[A-Z_][A-Z0-9_]*=' \
-    | grep -oE '[a-zA-Z_][a-zA-Z0-9_]*' | sort -u)
+  #
+  # `definiciones_de` solo cuenta una definición real: la línea entera es
+  # `nombre() {` (con `function` opcional) o una sola asignación `NOMBRE=`
+  # (con `readonly`/`export`/`local` opcional) sin otra asignación después.
+  # Descarta así una lista de variables delante de un comando, ej.
+  # `DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \` (H3 de la revisión del PR
+  # 67): esa línea no define nada, solo arma el entorno de una invocación.
+  definiciones_de() {
+    awk '
+      {
+        linea = $0
+        if (match(linea, /^[[:space:]]*(function[[:space:]]+)?[a-zA-Z_][a-zA-Z0-9_]*\(\)[[:space:]]*\{?[[:space:]]*$/)) {
+          resto = linea
+          sub(/^[[:space:]]*(function[[:space:]]+)?/, "", resto)
+          sub(/\(\).*/, "", resto)
+          print resto
+          next
+        }
+        resto = linea
+        sub(/^[[:space:]]*(readonly[[:space:]]+|export[[:space:]]+|local[[:space:]]+)?/, "", resto)
+        if (match(resto, /^[A-Z_][A-Z0-9_]*=/)) {
+          nombre = substr(resto, 1, RLENGTH - 1)
+          despues = substr(resto, RLENGTH + 1)
+          if (despues !~ /[[:space:]][A-Za-z_][A-Za-z0-9_]*=/) print nombre
+        }
+      }
+    '
+  }
+  borrados=$(printf '%s\n' "$diff_completo" | grep -E '^-[^-]' | sed -E 's/^-//' | definiciones_de | sort -u)
+  agregados=$(printf '%s\n' "$diff_completo" | grep -E '^\+[^+]' | sed -E 's/^\+//' | definiciones_de | sort -u)
   while IFS= read -r id; do
     [ -n "$id" ] || continue
     grep -qxF "$id" <<<"$agregados" && continue
-    if sobrevive=$(git -C "$worktree" grep -n -F "$id" -- . 2>/dev/null); then
+    # Sigue definido en el árbol nuevo, aunque no en una línea agregada de
+    # este diff (ej. se borró una reasignación duplicada y la definición de
+    # verdad vive sin tocar en otra parte del archivo): no es un rename a
+    # medias, nada que reportar.
+    if git -C "$worktree" grep -qE "^[[:space:]]*(function[[:space:]]+)?${id}\\(\\)|^[[:space:]]*(readonly[[:space:]]+|export[[:space:]]+|local[[:space:]]+)?${id}=" -- . 2>/dev/null; then
+      continue
+    fi
+    if sobrevive=$(git -C "$worktree" grep -n -F -w "$id" -- . 2>/dev/null); then
       agregar_fila "git grep $id (renombrado o borrado)" Falla "$sobrevive"
     else
       agregar_fila "git grep $id (renombrado o borrado)" Verificado
