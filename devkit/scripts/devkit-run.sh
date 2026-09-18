@@ -7,9 +7,9 @@
 #
 # Uso normal, para un humano o para task-close al tomar la siguiente hija:
 #   devkit-run <skill> <Clave> [texto extra...]
-#     Arma el prompt "/<skill> <Clave> [texto extra]", lo lanza con `nohup`
-#     desde /workspace y vuelve en cuanto confirma que arrancó. Log en
-#     /run/devkit/<skill>-<n>.log (n crece si ya hay uno); al terminar,
+#     Arma el prompt "/<skill> <Clave> [texto extra]", lo lanza con `nohup
+#     setsid` desde /workspace y vuelve en cuanto confirma que arrancó. Log
+#     en /run/devkit/<skill>-<n>.log (n crece si ya hay uno); al terminar,
 #     agrega el resumen de costo a watch.log, igual que una skill lanzada por
 #     el bucle.
 #     Antes de lanzar espera el marcador /run/devkit/ready del arranque del
@@ -17,6 +17,14 @@
 #     sin resumen "terminado", imprime las últimas líneas del log y sale con
 #     70 (DEVKIT-57). Un `task-start` lanzado con el editor recién abierto
 #     imprimió su PID y nunca corrió, y nadie lo supo hasta ir a mirar.
+#   devkit-run --seguir <skill> <Clave> [texto extra...]
+#     Lanza igual que el uso normal y, en vez de devolver el prompt, se queda
+#     mostrando `--estado` hasta que ESTE lanzamiento termine o hasta Ctrl-C
+#     (DEVKIT-82). Ctrl-C no mata al lanzamiento -corre con `setsid` desde
+#     antes de este bucle, en su propia sesión, fuera del alcance de una
+#     señal de la terminal-: solo cierra el monitor, y lo dice en una línea.
+#     La última línea al terminar es el resumen de watch.log de ese
+#     lanzamiento (`terminado [...]: modelo=... costo=...`).
 #
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
 #   devkit-run --estado [--seguir]
@@ -26,6 +34,13 @@
 #     (sesión y semana), leído con `claude -p "/usage"` (DEVKIT-62): es la
 #     misma cifra oficial de una sesión interactiva, no una estimación desde
 #     watch.log. `--seguir` refresca todo cada 3 s hasta Ctrl-C.
+#   devkit-run --tablero [--seguir]
+#     Cards activas del proyecto (Lista, En progreso, Revisión automática,
+#     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
+#     Tipo, PR y "bloquea a" (columna de DEVKIT-63), agrupadas por Épica de
+#     origen cuando hay más de una Épica En progreso (DEVKIT-80). Una sola
+#     consulta a Notion por refresco (DEVKIT-82). `--seguir` la refresca
+#     cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
@@ -123,6 +138,14 @@ TASK_CLOSE_BIN="${DEVKIT_TASK_CLOSE_BIN:-$HERE/task-close.sh}"
 # URL del PR, y gh cuenta sus comentarios devkit-fix. Sustituibles por dobles.
 NOTION_BIN="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 GH_BIN="${DEVKIT_GH_BIN:-gh}"
+# El worker (`nohup ... &`) nace en el mismo grupo de proceso que este script
+# (comprobado: sin `set -m`, un `&` no crea grupo propio), así que una señal
+# real de la terminal -Ctrl-C- lo alcanzaría igual que a este proceso, aunque
+# `nohup` solo ignora SIGHUP. Antes eso no importaba: el script confirmaba el
+# arranque y salía en segundos. `--seguir <skill> <Clave>` (DEVKIT-82) lo deja
+# corriendo minutos, así que el worker nace con `setsid` en su propia sesión,
+# fuera del grupo de la terminal, y una señal a este proceso ya no lo toca.
+SETSID_BIN="${DEVKIT_SETSID_BIN:-setsid}"
 # Arranque y estado de los lanzamientos (DEVKIT-57). READY lo escribe
 # entrypoint.sh como último paso del arranque; `devkit shell` y `devkit code`
 # ya lo esperan desde el host, y ahora también `devkit-run`.
@@ -143,6 +166,11 @@ ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 # valor por defecto y misma variable que INTERVAL en watch.sh: los dos
 # scripts no se importan entre sí, así que el valor se repite a propósito.
 INTERVALO_BUCLE="${DEVKIT_WATCH_INTERVAL:-300}"
+# Refresco de `--tablero --seguir` (DEVKIT-82): 30 s, no los 3 s de `--estado
+# --seguir`, para no gastar el límite de peticiones por minuto de la API de
+# Notion -cada vuelta hace al menos una consulta real, a diferencia de
+# `--estado`, que solo toca Notion para "bloquea a"/Épica, cacheado 30 s.
+TABLERO_INTERVALO="${DEVKIT_TABLERO_INTERVALO:-30}"
 # `-ww` en todo `ps` que lee argumentos (`args=`), acá y en watch.sh: sin
 # ella, `ps` corta cada línea al ancho de COLUMNS/LINES del entorno aunque la
 # salida vaya a una tubería, y una terminal integrada (la del editor) los
@@ -1542,6 +1570,148 @@ seguir_estado() {
       printf '%s\n' "$frame"
     fi
     sleep "$ESTADO_INTERVALO"
+  done
+}
+
+# `--seguir <skill> <Clave>` (DEVKIT-82): en vez de devolver el prompt tras
+# lanzar, se queda mostrando `--estado` -mismo redibujo sin parpadeo que
+# `seguir_estado`- hasta que ESTE lanzamiento (identificado por <id>, el
+# nombre del log sin ".log") deje su línea de cierre en watch.log, y esa
+# línea es la última que imprime. El trap de Ctrl-C corre siempre, no solo
+# con terminal: un doble sin tty en la autoprueba también necesita el aviso.
+# No mata al worker -nada en este trap lo toca-: ya nació en su propia sesión
+# con `setsid`, así que una señal real de la terminal no lo alcanza.
+seguir_lanzamiento() {  # seguir_lanzamiento <id>
+  local id=$1 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final
+  if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
+  trap '
+    [ -t 1 ] && tput cnorm 2>/dev/null
+    printf "devkit-run: Ctrl-C cierra el monitor; el lanzamiento \"%s\" sigue en curso (síguelo con devkit-run --estado)\n" "$id"
+    exit 130
+  ' INT TERM
+  while true; do
+    c=${giros:$((i % ${#giros})):1}
+    i=$((i + 1))
+    ahora=${DEVKIT_AHORA:-$(date +%s)}
+    frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s\n\n' \
+      "$id" "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+    frame+=$(mostrar_estado)
+    if [ -t 1 ]; then
+      cuadro_sin_parpadeo "$frame"
+    else
+      printf '%s\n' "$frame"
+    fi
+    resumen_final=$(grep -E "devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:" "$WATCH_LOG" 2>/dev/null | tail -1)
+    if [ -n "$resumen_final" ]; then
+      [ -t 1 ] && tput cnorm 2>/dev/null
+      printf '%s\n' "$resumen_final"
+      return 0
+    fi
+    sleep "$ESTADO_INTERVALO"
+  done
+}
+
+# Tabla de `--tablero` (DEVKIT-82): Clave, Estado, Tipo y PR.
+encabezado_tablero() {
+  printf '%s%s%s%s%s\n' "$(rellenar CLAVE 12)" "$(rellenar ESTADO 22)" "$(rellenar TIPO 10)" \
+    "$(rellenar PR 40)" 'BLOQUEA A'
+}
+
+formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr>
+  local clave=$1 estado=$2 tipo=$3 pr=$4 frena
+  frena=$(bloquea_a "$clave")
+  printf '%s%s%s%s%s\n' "$(rellenar "$clave" 12)" "$(rellenar "$estado" 22)" "$(rellenar "$tipo" 10)" \
+    "$(rellenar "$pr" 40)" "${frena#bloquea a: }"
+}
+
+# Cards activas del proyecto (DEVKIT-82): una sola consulta a Notion
+# (`notion.sh activas`), agrupadas por Épica de origen cuando hay más de una
+# Épica `En progreso` -mismo patrón que `mostrar_estado` (DEVKIT-80)-, y
+# "bloquea a" con la misma caché que `--estado` (`bloquea_a`, DEVKIT-63): no
+# duplica la llamada si ya está tibia.
+mostrar_tablero() {
+  local codigo filas
+  codigo=$(project_code)
+  if [ -z "$codigo" ]; then
+    echo "devkit-run --tablero: no encuentro \"project\" en $WS/.devkit/devkit.toml"
+    return 1
+  fi
+  if ! filas=$("$NOTION_BIN" activas "$codigo" 2>&1); then
+    printf 'devkit-run --tablero: no se pudo leer Notion: %s\n' "$filas" >&2
+    return 1
+  fi
+  if [ "$(jq 'length' <<<"$filas" 2>/dev/null)" = 0 ]; then
+    echo "sin cards activas en el proyecto $codigo"
+    return 0
+  fi
+  local clave estado tipo pr
+  local -A epica_de_clave
+  local -a orden_epicas=()
+  while IFS= read -r clave; do
+    [ -n "$clave" ] || continue
+    epica_de_clave[$clave]=$(epica_de "$clave")
+    if [ -n "${epica_de_clave[$clave]}" ]; then
+      local encontrada=0 e
+      for e in "${orden_epicas[@]}"; do [ "$e" = "${epica_de_clave[$clave]}" ] && { encontrada=1; break; }; done
+      [ "$encontrada" = 1 ] || orden_epicas+=("${epica_de_clave[$clave]}")
+    fi
+  done < <(jq -r '.[].clave' <<<"$filas")
+
+  if [ "${#orden_epicas[@]}" -ge 2 ]; then
+    local primero=1
+    for e in "${orden_epicas[@]}"; do
+      [ "$primero" = 1 ] || echo
+      primero=0
+      printf '%s\n' "$e"
+      encabezado_tablero
+      while IFS=$'\t' read -r clave estado tipo pr; do
+        [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+      done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+    done
+    local hay_sin=0
+    while IFS=$'\t' read -r clave estado tipo pr; do
+      [ -n "${epica_de_clave[$clave]:-}" ] && continue
+      if [ "$hay_sin" = 0 ]; then
+        echo
+        echo "(sin Épica)"
+        encabezado_tablero
+        hay_sin=1
+      fi
+      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+    done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+  else
+    encabezado_tablero
+    while IFS=$'\t' read -r clave estado tipo pr; do
+      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+    done < <(jq -r '.[] | [.clave, .estado, .tipo, (.pr // "-")] | @tsv' <<<"$filas")
+  fi
+}
+
+# `--tablero --seguir` (DEVKIT-82): mismo redibujo sin parpadeo y cursor
+# oculto que `seguir_estado`, pero cada `TABLERO_INTERVALO` (30 s, no 3: cada
+# vuelta paga una consulta real a Notion, sin la caché de 30 s que sí
+# protege a `--estado`).
+seguir_tablero() {
+  local giros='|/-\' i=0 c frame ahora color_tty=''
+  if [ -t 1 ]; then
+    tput civis 2>/dev/null
+    trap 'tput cnorm 2>/dev/null' EXIT
+    trap 'tput cnorm 2>/dev/null; exit 130' INT TERM
+    color_tty=1
+  fi
+  while true; do
+    c=${giros:$((i % ${#giros})):1}
+    i=$((i + 1))
+    ahora=${DEVKIT_AHORA:-$(date +%s)}
+    frame=$(printf 'devkit-run --tablero  %s %s  (cada %ss; Ctrl-C para salir)\n%s\n\n' \
+      "$(date +%T)" "$c" "$TABLERO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+    frame+=$(mostrar_tablero)
+    if [ -t 1 ]; then
+      cuadro_sin_parpadeo "$frame"
+    else
+      printf '%s\n' "$frame"
+    fi
+    sleep "$TABLERO_INTERVALO"
   done
 }
 
@@ -3208,6 +3378,117 @@ FIN
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
 
+  # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
+  # queda mostrando --estado hasta que termina; la última línea es el
+  # resumen de watch.log de ese lanzamiento. DEVKIT_ESTADO_INTERVALO baja a
+  # 1 s para no esperar los 3 s de verdad; el doble de claude responde al
+  # instante, así que el propio lanzamiento ya terminó cuando entra al bucle.
+  local seguir_out
+  seguir_out=$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_ESTADO_INTERVALO=1 \
+    timeout 15 bash "$HERE/devkit-run.sh" --seguir task-start DEVKIT-97 2>&1)
+  check "--seguir <skill> <Clave>: la última línea es el resumen terminado del lanzamiento" si \
+    "$(printf '%s\n' "$seguir_out" | tail -1 \
+        | grep -qE 'devkit-run "/task-start DEVKIT-97" terminado \[task-start-[0-9]+\]: modelo=.*costo=' \
+        && echo si || echo no)"
+
+  # Ctrl-C durante --seguir no mata al agente (DEVKIT-82): una señal al
+  # monitor solo lo cierra, con un aviso; el doble de "claude" -que tarda en
+  # responder, para que siga vivo cuando llega la señal- sigue corriendo.
+  # El lanzamiento real ya nace con `setsid` (más arriba en el script), así
+  # que ni siquiera una señal de la terminal entera lo alcanzaría; esta
+  # prueba cubre la parte que sí se puede probar sin una tty real: que el
+  # propio monitor no lo toca.
+  local doble_lento pid_seguir out_seguir rc_seguir vivo_tras intento
+  doble_lento="$tmp/claude-seguir-lento"
+  cat >"$doble_lento" <<'FIN'
+#!/usr/bin/env bash
+sleep 6
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
+FIN
+  chmod +x "$doble_lento"
+  out_seguir="$tmp/seguir-ctrlc.out"
+  : >"$out_seguir"
+  (
+    DEVKIT_CLAUDE_BIN="$doble_lento" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+      DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+      DEVKIT_ESTADO_INTERVALO=1 DEVKIT_ARRANQUE_ESPERA=1 \
+      bash "$HERE/devkit-run.sh" --seguir task-start DEVKIT-98 >"$out_seguir" 2>&1
+  ) &
+  pid_seguir=$!
+  for intento in $(seq 1 20); do
+    grep -qE 'devkit-run --seguir task-start-[0-9]+' "$out_seguir" 2>/dev/null && break
+    sleep 0.3
+  done
+  kill -INT "$pid_seguir" 2>/dev/null
+  wait "$pid_seguir" 2>/dev/null; rc_seguir=$?
+  vivo_tras=$(pgrep -f "$doble_lento" >/dev/null 2>&1 && echo si || echo no)
+  check "Ctrl-C en --seguir: sale con 130" 130 "$rc_seguir"
+  check "Ctrl-C en --seguir: avisa que cierra el monitor sin matar el lanzamiento" si \
+    "$(grep -qE 'Ctrl-C cierra el monitor.*sigue en curso.*devkit-run --estado' "$out_seguir" && echo si || echo no)"
+  check "Ctrl-C en --seguir: el agente (doble de claude) sigue vivo" si "$vivo_tras"
+  pkill -f "$doble_lento" 2>/dev/null
+  wait 2>/dev/null
+
+  # --tablero (DEVKIT-82): una sola consulta a notion.sh `activas`, con
+  # "bloquea a" (misma caché de DEVKIT-63) y agrupada por Épica de origen
+  # cuando hay más de una Épica En progreso (misma caché de DEVKIT-80).
+  # Cachés ya tibias, mismo criterio que las pruebas de --estado de arriba:
+  # sin llamar a Notion en el propio check.
+  local tablero_ws tablero_fixture notion_tablero tablero_bloq tablero_epic salida_tablero
+  tablero_ws="$tmp/tablero-ws"
+  mkdir -p "$tablero_ws/.devkit"
+  printf 'project = "DEVKIT"\n' >"$tablero_ws/.devkit/devkit.toml"
+  tablero_fixture="$tmp/tablero-activas.json"
+  cat >"$tablero_fixture" <<'JSON'
+[{"clave":"DEVKIT-57","estado":"En progreso","tipo":"feature","pr":""},{"clave":"DEVKIT-58","estado":"Lista para merge","tipo":"bug","pr":"https://github.com/o/r/pull/9"},{"clave":"DEVKIT-59","estado":"En progreso","tipo":"chore","pr":""}]
+JSON
+  notion_tablero="$tmp/notion-tablero"
+  cat >"$notion_tablero" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = activas ] && cat "$tablero_fixture"
+FIN
+  chmod +x "$notion_tablero"
+  tablero_bloq="$tmp/tablero-bloqueos"
+  mkdir -p "$tablero_bloq"
+  printf '%s\t%s\n' "$(date +%s)" '[{"clave":"DEVKIT-58","bloquea_a":["DEVKIT-61"]}]' >"$tablero_bloq/bloqueos.cache"
+  tablero_epic="$tmp/tablero-epicas"
+  mkdir -p "$tablero_epic"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Alfa"},{"clave":"DEVKIT-58","epica":"DEVKIT-51","epica_titulo":"Beta"}]' \
+    >"$tablero_epic/epicas.cache"
+  salida_tablero=$(NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    mostrar_tablero)
+  check "--tablero: agrupa por Épica de origen con más de una En progreso" \
+    "Épica DEVKIT-50: Alfa
+Épica DEVKIT-51: Beta" \
+    "$(printf '%s\n' "$salida_tablero" | grep '^Épica ')"
+  check "--tablero: DEVKIT-58 trae bloquea a en su fila" si \
+    "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -q 'DEVKIT-61' && echo si || echo no)"
+  check "--tablero: DEVKIT-59 sin Épica activa cae en el bloque final" si \
+    "$(printf '%s\n' "$salida_tablero" | awk '/^\(sin Épica\)$/{f=1} f' | grep -q 'DEVKIT-59' && echo si || echo no)"
+
+  local notion_tablero_vacio
+  notion_tablero_vacio="$tmp/notion-tablero-vacio"
+  cat >"$notion_tablero_vacio" <<'FIN'
+#!/usr/bin/env bash
+[ "$1" = activas ] && echo '[]'
+FIN
+  chmod +x "$notion_tablero_vacio"
+  check "--tablero sin cards activas lo dice" "sin cards activas en el proyecto DEVKIT" \
+    "$(NOTION_BIN="$notion_tablero_vacio" WS="$tablero_ws" mostrar_tablero)"
+
+  local ws_sin_proyecto tablero_err rc_sin_proyecto
+  ws_sin_proyecto="$tmp/sin-proyecto"
+  mkdir -p "$ws_sin_proyecto"
+  tablero_err=$(WS="$ws_sin_proyecto" mostrar_tablero); rc_sin_proyecto=$?
+  check "--tablero sin \"project\" en devkit.toml: sale con error" 1 "$rc_sin_proyecto"
+  check "--tablero sin \"project\" en devkit.toml: lo avisa" si \
+    "$(printf '%s' "$tablero_err" | grep -q 'no encuentro' && echo si || echo no)"
+
   # DEVKIT-79: un lanzamiento duplicado (mismo prompt, worker vivo o
   # esperando el candado) no se lanza dos veces. Doble de `ps` que informa un
   # worker ya corriendo para "/task-start DEVKIT-9"; sin --forzar, el
@@ -3386,15 +3667,17 @@ case "${1:-}" in
     mostrar_estado
     exit 0
     ;;
+  --tablero)
+    if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
+    mostrar_tablero
+    exit $?
+    ;;
   --agentes)
     # Para el segmento `agentes:<a>` del prompt: `agentes_en_curso_rapido`,
     # no `estado_filas` (ver el comentario junto a su definición). Tampoco
     # toca la red: solo lee watch.log y `ps`.
     agentes_en_curso_rapido "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}"
     exit 0
-    ;;
-  --seguir)
-    seguir_estado
     ;;
   --siguiente-modelo)
     siguiente_modelo "${2:-}"
@@ -3421,25 +3704,24 @@ falta_valor() {  # falta_valor <valor>
   esac
 }
 
-modelo_manual="" esfuerzo_manual="" forzar=""
+uso() {
+  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
+  echo "     devkit-run --estado [--seguir] | --tablero [--seguir] | --test" >&2
+}
+
+modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
 while true; do
   case "${1:-}" in
     --modelo)
-      if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
-        echo "     devkit-run --test   corre la autoprueba" >&2
-        exit 64
-      fi
+      if falta_valor "${2:-}"; then uso; exit 64; fi
       modelo_manual="$2"; shift 2 ;;
     --esfuerzo)
-      if falta_valor "${2:-}"; then
-        echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
-        echo "     devkit-run --test   corre la autoprueba" >&2
-        exit 64
-      fi
+      if falta_valor "${2:-}"; then uso; exit 64; fi
       esfuerzo_manual="$2"; shift 2 ;;
     --forzar)
       forzar=1; shift ;;
+    --seguir)
+      seguir_tras_lanzar=1; shift ;;
     *) break ;;
   esac
 done
@@ -3447,8 +3729,7 @@ done
 skill="${1:-}"
 clave="${2:-}"
 if [ -z "$skill" ] || [ -z "$clave" ]; then
-  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] <skill> <Clave> [texto extra...]" >&2
-  echo "     devkit-run --test   corre la autoprueba" >&2
+  uso
   exit 64
 fi
 shift 2 2>/dev/null
@@ -3505,7 +3786,7 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 # La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
 # para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
 linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" "$modelo" "$esfuerzo" "$ronda" >> "$WATCH_LOG" 2>/dev/null
-nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
+"$SETSID_BIN" nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
   "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
   >/dev/null 2>&1 &
 worker=$!
@@ -3513,3 +3794,7 @@ disown
 echo "lanzado: $prompt"
 echo "modelo=$modelo esfuerzo=$esfuerzo ronda=$ronda log=$logf pid=$worker"
 confirmar_arranque "$worker" "$prompt" "$logf" || exit 70
+if [ -n "$seguir_tras_lanzar" ]; then
+  seguir_lanzamiento "$(basename "$logf" .log)"
+  exit $?
+fi

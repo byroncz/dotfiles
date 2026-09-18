@@ -809,6 +809,45 @@ hasta el final de la pantalla) solo al terminar -nunca un `clear` completo
 seguido de un redibujo-, y lo oculta con `tput civis` mientras refresca,
 restaurado con `tput cnorm` al salir, Ctrl-C incluido.
 
+`devkit-run --seguir <skill> <Clave>` (DEVKIT-82) reusa ese mismo redibujo
+para un caso distinto: no mirar lanzamientos en general, sino quedarse con
+UNO -el que se acaba de pedir- hasta que su línea de cierre aparezca en
+`watch.log` (`[<id>] terminado: ...` o `falló (rc=...)`), que es la última
+línea que imprime. Antes de esta card, `devkit-run` siempre devolvía el
+prompt apenas confirmaba el arranque, así que nadie necesitaba proteger al
+worker de una señal real de la terminal: la ventana entre lanzar y salir
+duraba segundos. Con `--seguir` esa ventana pasa a durar lo que tarde la
+skill, y ahí apareció un supuesto sin probar: sin `set -m` (el caso normal de
+un script no interactivo), un proceso en segundo plano (`cmd &`) no recibe un
+grupo de proceso propio, se queda en el mismo que su script -comprobado con
+`ps -o pid,pgid` sobre un `nohup sleep & disown` real-, así que una señal de
+la terminal (Ctrl-C) llega a los dos por igual, y `nohup` por sí solo no lo
+evita: solo ignora `SIGHUP`, no `SIGINT`. La corrección es lanzar el worker
+con `setsid` (antes de `nohup`, sin `-f`: como el proceso que lo invoca no es
+líder de su grupo, `setsid` hace `exec` directo en vez de bifurcar, así que
+`$!` sigue siendo el PID real del worker y `confirmar_arranque` no cambia) en
+vez de solo `nohup`, para todo lanzamiento, no solo bajo `--seguir`: es la
+misma garantía que ya se daba por sentada. El monitor de `--seguir` instala
+su propio trap de `INT`/`TERM` que no toca al worker -ya aislado- y solo
+imprime que cierra el monitor antes de salir con 130.
+
+`devkit-run --tablero` (DEVKIT-82) responde una pregunta distinta a
+`--estado`: no qué está lanzado, sino qué card está activa en Notion en este
+momento, sin dedicar una pantalla al tablero de la web. Reusa a propósito el
+mismo par de cachés de `--estado` para "bloquea a" (DEVKIT-63) y la Épica de
+origen (DEVKIT-80) -mismas variables, mismo TTL de 30 s-, así que un
+`--tablero` corriendo junto a un `--estado --seguir` no duplica esas dos
+llamadas. Lo que sí es nuevo es la lista de cards en sí (`notion.sh activas
+<código>`, una consulta por refresco): a diferencia de "bloquea a"/Épica, que
+son datos accesorios de una tabla que igual tiene algo que mostrar sin ellos
+(los procesos, el log), en `--tablero` esa consulta es el contenido entero,
+así que no tiene sentido el patrón de caché con refresco en segundo plano de
+`Consumo` (DEVKIT-62): el primer llamado a `--tablero` esperaría igual una
+lectura vacía. `--seguir` refresca cada 30 s y no 3 (`DEVKIT_TABLERO_INTERVALO`,
+distinto de `DEVKIT_ESTADO_INTERVALO`) porque, a diferencia de `--estado`,
+cada vuelta paga una consulta real a la API de Notion, que limita peticiones
+por minuto.
+
 ## 7. Modelo de datos en Notion
 
 Tres bases de datos bajo un árbol "Ingeniería".

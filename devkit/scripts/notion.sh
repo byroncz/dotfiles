@@ -31,6 +31,13 @@
 #                                             su Épica siga activa (agrupación
 #                                             de `devkit-run --estado`,
 #                                             DEVKIT-80)
+#   notion.sh activas <código>                cards activas del proyecto
+#                                             (Lista, En progreso, Revisión
+#                                             automática, Lista para merge,
+#                                             Bloqueada) con Clave, Estado,
+#                                             Tipo y PR, en una sola consulta
+#                                             (tablero de `devkit-run
+#                                             --tablero`, DEVKIT-82)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -358,6 +365,31 @@ def encabezado: .type | test("^heading_[123]$");
   end
 '
 
+# Cards activas del proyecto para el tablero de `devkit-run --tablero`
+# (DEVKIT-82): una sola consulta, sin cruces -"bloquea a" y la Épica de
+# origen ya los trae `devkit-run` por su cuenta con `bloqueos`/`epicas`,
+# cacheados y compartidos con `--estado`, así que repetirlos aquí duplicaría
+# la llamada a Notion sin necesidad.
+cmd_activas() {  # cmd_activas <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {or: [{property: "Estado", select: {equals: "Lista"}},
+                  {property: "Estado", select: {equals: "En progreso"}},
+                  {property: "Estado", select: {equals: "Revisión automática"}},
+                  {property: "Estado", select: {equals: "Lista para merge"}},
+                  {property: "Estado", select: {equals: "Bloqueada"}}]}]}')") || return
+  jq -c --arg codigo "$codigo" '
+    def clave($n): "\($codigo)-\($n)";
+    [ .[] | {clave: clave(.properties.ID.unique_id.number), numero: .properties.ID.unique_id.number,
+             estado: .properties.Estado.select.name, tipo: .properties.Tipo.select.name,
+             pr: (.properties.PR.url // "")} ]
+    | sort_by(.numero) | map(del(.numero))
+  ' <<<"$filas"
+}
+
 cmd_criterios() {  # cmd_criterios <page_id>
   local cursor="" page acc='[]'
   while :; do
@@ -562,6 +594,25 @@ $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
     '{"or":[{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Épica"}},{"property":"Estado","select":{"equals":"En progreso"}}]},{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"does_not_equal":"Hecha"}}]}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
+  # activas: tablero de `devkit-run --tablero` (DEVKIT-82). El filtro de
+  # Estado lo aplica la API real; el doble de curl no filtra por cuerpo, así
+  # que la prueba solo pone en el fixture lo que ese filtro dejaría pasar
+  # (DEVKIT-90, Hecha, quedaría fuera y por eso no entra aquí) y comprueba el
+  # filtro enviado aparte, como hace la prueba de `epicas`.
+  activa() {  # activa <id> <numero> <estado> <tipo> <pr>
+    jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" --arg t "$4" --arg pr "$5" \
+      '{id: $id, properties: {ID: {unique_id: {number: $n}}, Estado: {select: {name: $e}},
+        Tipo: {select: {name: $t}}, PR: {url: (if $pr == "" then null else $pr end)}}}'
+  }
+  resp POST__databases_dbtareas_query "{\"results\":[$(activa card-89 89 "Lista para merge" bug https://github.com/o/r/pull/9),\
+$(activa card-88 88 "En progreso" feature "")],\"has_more\":false}"
+  check "activas: ordenadas por número, con Clave/Estado/Tipo/PR" \
+    '[{"clave":"DEVKIT-88","estado":"En progreso","tipo":"feature","pr":""},{"clave":"DEVKIT-89","estado":"Lista para merge","tipo":"bug","pr":"https://github.com/o/r/pull/9"}]' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" activas DEVKIT)"
+  check "activas: el filtro cubre los cinco Estados activos" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"or":[{"property":"Estado","select":{"equals":"Lista"}},{"property":"Estado","select":{"equals":"En progreso"}},{"property":"Estado","select":{"equals":"Revisión automática"}},{"property":"Estado","select":{"equals":"Lista para merge"}},{"property":"Estado","select":{"equals":"Bloqueada"}}]}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+
   # El uso calcula su rango buscando la línea de --test en vez de un rango
   # fijo (DEVKIT-80: un rango fijo cortaba la ayuda a media frase cada vez
   # que el bloque crecía, hallazgo H1 de `pr-review` sobre el PR #57, que
@@ -583,6 +634,7 @@ case "${1:-}" in
   criterios) cmd_criterios "${2:?page_id}" ;;
   bloqueos) cmd_bloqueos "${2:?código}" ;;
   epicas) cmd_epicas "${2:?código}" ;;
+  activas) cmd_activas "${2:?código}" ;;
   --test) run_tests ;;
   *)
     fin=$(grep -n '^#   notion.sh --test' "$0" | head -1 | cut -d: -f1)

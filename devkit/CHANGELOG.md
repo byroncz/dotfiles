@@ -10,6 +10,32 @@ versión que usa un proyecto y la destino.
 
 ## Sin publicar
 
+### devkit-run --seguir lanza y queda mostrando el monitor, y --tablero muestra las cards activas del proyecto (DEVKIT-82)
+
+- `devkit-run --seguir <skill> <Clave> [texto extra...]` lanza igual que el
+  uso normal y, en vez de devolver el prompt, se queda mostrando `--estado`
+  -mismo redibujo sin parpadeo de DEVKIT-81- hasta que ESE lanzamiento
+  termine o hasta Ctrl-C. La última línea es el resumen de `watch.log` de
+  ese lanzamiento (`terminado [...]: modelo=... costo=...`).
+- Ctrl-C no mata el lanzamiento: el worker nace con `setsid`, en su propia
+  sesión de proceso, desde antes de entrar al monitor. Sin ella, un
+  `nohup ... &` sin `set -m` comparte el grupo de proceso de la terminal con
+  el script que lo lanzó -comprobado con una prueba real, `ps -o pid,pgid`
+  sobre un `nohup sleep & disown`-, y una señal real lo alcanzaría igual que
+  al monitor; `nohup` por sí solo no lo evita, porque solo ignora `SIGHUP`.
+  El cambio aplica a todo lanzamiento, no solo bajo `--seguir`.
+- `devkit-run --tablero [--seguir]`: cards activas del proyecto (`Lista`,
+  `En progreso`, `Revisión automática`, `Lista para merge`, `Bloqueada`) en
+  una tabla de consola -Clave, Estado, Tipo, PR y "bloquea a" (columna de
+  DEVKIT-63)-, agrupada por Épica de origen cuando hay más de una `En
+  progreso` (DEVKIT-80), sin lanzar ningún agente. `notion.sh activas
+  <código>` trae la lista en una sola consulta; "bloquea a" y la Épica de
+  origen reusan las mismas cachés de `--estado`. `--seguir` refresca cada
+  30 s, no 3, para no gastar el límite de peticiones de Notion.
+- Motivo: los dos pedidos del humano del 2026-09-16 que quedaron en el
+  grupo 3 de la Épica DEVKIT-59 sin card hija (`epic-plan` alcanzó a crear
+  DEVKIT-63 y no las dos ampliaciones posteriores).
+
 - `docs/ARCHITECTURE.md`: el riesgo residual de credenciales del humano en
   memoria del extension host queda también en la tabla de la sección 12, no
   solo declarado en 8.2 (DEVKIT-74).
