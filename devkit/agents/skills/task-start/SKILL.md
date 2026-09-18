@@ -25,8 +25,11 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    terminó preguntando qué hacer, y la barrera de pregunta abierta la
    bloqueó sin motivo real).
    - `Lista`: sigue al paso 2.
-   - `En progreso` con `Rama` asignada: cámbiate a esa rama y continúa, es
-     una reanudación; sigue al paso 2.
+   - `En progreso` con `Rama` asignada: es una reanudación. Sigue al paso 2
+     sin cambiar de rama todavía: el cambio de rama va después de comprobar
+     que el árbol está limpio y que ningún otro agente lo ocupa, no antes
+     (H6 de la revisión: cambiarse de rama antes de esa comprobación es
+     justo lo que rompe si hay otro agente vivo o cambios sin commit).
    - `En progreso` sin `Rama` (se bloqueó o cortó antes de crear la rama):
      trátala como `Lista`, sigue al paso 2.
    - `Backlog`: responde `<Clave> está en Backlog; el humano debe moverla a
@@ -52,6 +55,9 @@ Argumento opcional: Clave de la card. Sin argumento, elige la siguiente.
    `devkit-run.sh --worker`, su subshell, su vigilante y tu `claude -p`). Eso
    bloqueó DEVKIT-54 sin motivo, y desconfiar del resultado y correr un `ps`
    aparte cortó DEVKIT-63 sin PR y sin bloquear (DEVKIT-77).
+   Si el paso 1 marcó la card como reanudación (`En progreso` con `Rama`),
+   termina aquí: `git fetch origin && git switch <rama>` y salta directo al
+   paso 7. Los pasos 3 a 6 son solo para cards que arrancan desde `main`.
 3. Actualiza `main`: `git fetch origin && git switch main && git pull --ff-only`.
 4. Nombre de rama: prefijo por `Tipo` (`feature` → `feat/`, `bug` → `fix/`,
    `chore` → `chore/`), la Clave tal cual (en mayúsculas) y un slug corto
