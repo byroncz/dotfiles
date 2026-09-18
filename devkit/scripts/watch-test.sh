@@ -577,7 +577,7 @@ check_igual "ciclo: comentario con Documentación y marcas de modelo" "comentar 
 check_igual "ciclo: marcador devkit-closed con sha y enlace" 1 \
   "$(grep -c 'pr comment 40 --body <!-- devkit-closed sha=f1 -->' "$CICLO/gh/comentarios" 2>/dev/null)"
 check_igual "ciclo: lanza la siguiente hija libre por Orden y dependencias" "task-start DEVKIT-4" \
-  "$(cat "$N/lanzamientos" 2>/dev/null)"
+  "$(tail -1 "$N/lanzamientos" 2>/dev/null)"
 # 4. Una segunda pasada no repite el cierre: `launched` lo recuerda.
 env "${ciclo_env[@]}" bash "$WATCH" --merged-once >>"$CICLO/watch.log" 2>&1
 check_igual "ciclo: una segunda pasada no vuelve a cerrar" 1 "$(grep -c 'task-close-40 terminado' "$OUT")"
@@ -603,7 +603,7 @@ jq '.state = "MERGED" | .comments = []' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json
 rm -f "$N/doc-card-3.json"; : >"$N/llamadas"; : >"$N/lanzamientos"
 env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
 check_igual "task-close: sin Documentación lanza task-document" "task-document DEVKIT-3" \
-  "$(head -1 "$N/lanzamientos")"
+  "$(grep '^task-document' "$N/lanzamientos")"
 # Con task-document ya corriendo para la Clave (merge aprobado mientras escribe
 # la entrada): no se relanza y el comentario no dice que falta.
 cat >"$CICLO/ps-documentando" <<'FIN'

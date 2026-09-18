@@ -41,6 +41,18 @@
 #     origen cuando hay más de una Épica En progreso (DEVKIT-80). Una sola
 #     consulta a Notion por refresco (DEVKIT-82). `--seguir` la refresca
 #     cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+#   devkit-run --costos [<Clave>]
+#     Costo por card, leído de /workspace/.devkit/costos.log (DEVKIT-89), que
+#     sobrevive a `devkit recreate` a diferencia de watch.log. Con Clave: una
+#     fila por lanzamiento (skill, fecha, modelo/esfuerzo/ronda, turnos,
+#     costo, minutos) y una fila TOTAL. Sin Clave: una fila por card cerrada
+#     en los últimos 30 días, más el promedio. Solo suma lo que ya está en el
+#     log; nunca estima. "Card cerrada" se detecta solo por la línea
+#     `task-close-N terminado` que deja el bucle (`watch.sh`): un
+#     `devkit-run task-close` manual o un cierre resuelto por
+#     `project-status` no la dejan, así que esas cards no aparecen en la
+#     tabla sin Clave (H6 de pr-review en DEVKIT-89), aunque sí en
+#     `--costos <Clave>`.
 #
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
@@ -61,6 +73,10 @@
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
 #                                                    tras el último)
+#   devkit-run --costos-totales <Clave>             "turnos costo minutos revisiones" de
+#                                                    la card (DEVKIT-89); la usa
+#                                                    task-close.sh para la línea
+#                                                    "Costo: ..." del comentario de cierre
 #   devkit-run --test                               autoprueba
 #
 # `--sync` usa DEVKIT_MODELO_FORZADO en vez del modelo del rol cuando viene no
@@ -110,6 +126,12 @@ if [ -z "$ROLES_FILE" ]; then
   fi
 fi
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
+# Copia de las líneas `lanzando`/`terminado` de watch.log, fuera de tmpfs
+# (DEVKIT-89): $RUN_DIR muere en cada `devkit recreate`, y sin esta copia no
+# hay serie histórica de costo por card. $WS es un bind mount al host, así que
+# sobrevive. watch.sh no se importa de este archivo, así que repite la misma
+# variable y las mismas funciones (mismo patrón que INTERVALO_BUCLE, abajo).
+COSTOS_LOG="${DEVKIT_COSTOS_LOG:-$WS/.devkit/costos.log}"
 # Cache de disponibilidad de modelo, una vez por arranque: /run/devkit es
 # tmpfs y nace vacío en cada `devkit recreate`, igual que /run/devkit/launched
 # (DEVKIT-24), así que el resultado no sobrevive a un rebuild y se vuelve a
@@ -629,8 +651,11 @@ run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
 # línea, así que ninguno de los dos depende de lo que hay entre medio.
 resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   local logf=$1 modelo=$2 esfuerzo=$3 presupuesto=$4 ronda=${5:--} linea turnos excedido=""
+  # `duracion=` sale de `duration_ms` del propio JSON de `claude -p`, no del
+  # reloj del monitor (DEVKIT-89, criterio 3): así un lanzamiento leído mucho
+  # después de terminar (por ejemplo, al reconstruir costos.log) mide igual.
   linea=$(tail -1 "$logf" 2>/dev/null | jq -r '
-    "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
+    "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") duracion=\(if .duration_ms then ((.duration_ms / 1000 | floor) | tostring) else "?" end)s tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
   [ -n "$linea" ] || linea="$(tail -1 "$logf" 2>/dev/null | cut -c1-160)"
   turnos=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != "-" ] && [ -n "$turnos" ] \
@@ -638,6 +663,32 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
     excedido=" (excede el presupuesto de $presupuesto turnos de roles.toml)"
   fi
   printf 'modelo=%s esfuerzo=%s ronda=%s %s%s' "$modelo" "$esfuerzo" "$ronda" "$linea" "$excedido"
+}
+
+# ¿La línea de watch.log (ya con fecha) es un lanzamiento o un cierre -exitoso
+# o con error- de una de las seis skills que mide `--costos` (DEVKIT-89:
+# task-start, pr-review, task-fix, task-document, task-close, epic-plan)? Un
+# cierre con error también gastó turnos y costo, así que cuenta igual que uno
+# exitoso (H2 de pr-review en DEVKIT-89): "ALARMA: <id> terminó con error" es
+# el formato de `run_skill` en watch.sh, "falló (rc=" el de `devkit-run.sh` y
+# el de `task-close-N`/`task-next-N` en bash. Sin este filtro, costos.log
+# arrastraría también las líneas narrativas del bucle ("PR #31 ... lanzando
+# pr-review") y las de task-block/task-next, que no aportan costo/turnos y
+# solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
+costos_log_candidata() {  # costos_log_candidata <línea con fecha>
+  case "$1" in
+    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'
+}
+
+# Copia a costos.log, si corresponde (DEVKIT-89). watch.sh tiene su propia
+# copia de esta función: los dos scripts no se importan entre sí.
+costos_log() {  # costos_log <línea completa, con fecha>
+  costos_log_candidata "$1" || return 0
+  mkdir -p "$(dirname "$COSTOS_LOG")" 2>/dev/null
+  printf '%s\n' "$1" >> "$COSTOS_LOG" 2>/dev/null
 }
 
 # Cuota del plan, leída en vivo con `claude -p "/usage"` (DEVKIT-62). La
@@ -1808,6 +1859,225 @@ seguir_tablero() {
     fi
     sleep "$TABLERO_INTERVALO"
   done
+}
+
+# --- devkit-run --costos [<Clave>] (DEVKIT-89) ------------------------------
+# Mide el costo por card desde costos.log, que sobrevive a `devkit recreate`.
+# Solo suma cifras que ya están en el log (costo=, turnos=, duracion=);
+# prohibido estimar (misma regla que DEVKIT-62).
+
+# Precarga `CLAVE_DE_PR_CACHE` con una sola llamada a `gh pr list`, en vez de
+# una `gh pr view` por cada PR distinto del log (H3 de pr-review en
+# DEVKIT-89, segunda vuelta): `costos_filas` resuelve la Clave de *todas* las
+# líneas de pr-review/task-close antes de filtrar por la Clave pedida, así
+# que sin esto un solo `--costos-totales <Clave>` paga un `gh pr view` por
+# cada PR distinto que haya pasado por el proyecto. `--limit` acota el costo
+# de esta llamada; un PR más viejo que el límite no queda en la caché y cae
+# al `gh pr view` individual de `clave_de_pr`, que sigue siendo correcto,
+# solo más lento para ese caso puntual.
+poblar_cache_pr() {  # poblar_cache_pr <archivo de caché>
+  local cache=$1
+  "$GH_BIN" pr list --state all --limit 500 --json number,title 2>/dev/null \
+    | jq -r '.[] | .title as $t | (if ($t | test("^[A-Z][A-Z0-9]+-[0-9]+")) then ($t | capture("(?<c>^[A-Z][A-Z0-9]+-[0-9]+)").c) else "-" end) as $c | [(.number|tostring), $c] | @tsv' \
+    2>/dev/null >>"$cache"
+}
+
+# Clave de un PR, por su título (mismo patrón que `key_of` en watch.sh). "-"
+# si `gh` no responde o el título no trae Clave: nunca se inventa.
+# `CLAVE_DE_PR_CACHE`, si está seteada, apunta a un archivo "num<TAB>clave"
+# que evita repetir `gh pr view` por cada línea de pr-review/task-close que
+# comparte PR (H3 de pr-review en DEVKIT-89): `costos_filas` y
+# `costos_resumen_proyecto` llaman a esta función una vez por card y por
+# fila dentro de un `< <(...)`, así que un array en memoria no sobrevive
+# entre esas invocaciones; un archivo sí, sin importar el subshell. La
+# arman `mostrar_costos` y `--costos-totales`, dueños de la corrida
+# completa, con `poblar_cache_pr` antes de la primera lectura.
+clave_de_pr() {  # clave_de_pr <número de PR>
+  local num=$1 titulo clave hit
+  if [ -n "${CLAVE_DE_PR_CACHE:-}" ] && [ -f "$CLAVE_DE_PR_CACHE" ]; then
+    hit=$(grep -m1 -E "^$num	" "$CLAVE_DE_PR_CACHE" 2>/dev/null | cut -f2)
+    if [ -n "$hit" ]; then
+      [ "$hit" = - ] && return 0
+      printf '%s' "$hit"
+      return 0
+    fi
+  fi
+  titulo=$("$GH_BIN" pr view "$num" --json title --jq .title 2>/dev/null)
+  clave=$(printf '%s' "$titulo" | grep -oE '^[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  if [ -n "${CLAVE_DE_PR_CACHE:-}" ]; then
+    printf '%s\t%s\n' "$num" "${clave:--}" >> "$CLAVE_DE_PR_CACHE" 2>/dev/null
+  fi
+  printf '%s' "$clave"
+}
+
+# Clave de un lanzamiento. task-start/task-fix/task-document/epic-plan la
+# traen en el propio prompt; pr-review y el cierre de task-close solo traen
+# el número de PR (mismo caso especial que `estado_filas` con pr-review), así
+# que se resuelve con `clave_de_pr`. "-" si no hay ninguna.
+clave_de_lanzamiento() {  # clave_de_lanzamiento <prompt> <id>
+  local prompt=$1 id=$2 clave num
+  clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  if [ -z "$clave" ]; then
+    num=$(printf '%s' "$id" | grep -oE '^(pr-review|task-close)-[0-9]+' | grep -oE '[0-9]+$')
+    [ -z "$num" ] || clave=$(clave_de_pr "$num")
+  fi
+  printf '%s' "${clave:--}"
+}
+
+# Línea de cierre ("terminado"/"falló") de un <id>, la primera tras su línea
+# "lanzando" en <línea> (mismo emparejamiento que `estado_filas` en watch.sh,
+# sin las ramas de "en curso"/"no arrancó": aquí solo interesa lo que ya
+# cerró). Un cierre con error cuenta igual que uno exitoso (H2 de pr-review en
+# DEVKIT-89), así que se empareja también "$id falló (rc=" (task-close-N,
+# task-next-N) y "ALARMA: $id terminó con error" (`run_skill` en watch.sh, que
+# no deja línea "$id terminado:" cuando falla). Los IDs no son únicos para
+# siempre -se reinician en cada `devkit recreate`, igual que en watch.log-,
+# así que se empareja con el cierre más cercano, no con uno global.
+costos_cierre_de() {  # costos_cierre_de <archivo> <línea de "lanzando"> <id>
+  local file=$1 desde=$2 id=$3
+  tail -n +"$((desde + 1))" "$file" 2>/dev/null | grep -m1 -E \
+    "^[^ ]+ ($id (terminado|falló \(rc=[0-9]+\)): |ALARMA: $id terminó con error \(rc=[0-9]+\): |devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:)"
+}
+
+# Un campo "campo=N" de una línea de cierre, vacío si no está (bash no gasta
+# modelo: task-close no deja costo= ni turnos=).
+costos_campo() {  # costos_campo <línea> <campo>
+  printf '%s' "$1" | grep -oE "$2=[0-9.]+" | head -1 | cut -d= -f2
+}
+
+# Una fila TSV por lanzamiento cerrado, filtrando por Clave si se da:
+# fecha, clave, skill, id, modelo/esfuerzo/ronda, turnos, costo, duracion(s).
+# Cubre las cinco skills con línea "lanzando" (task-start, pr-review,
+# task-fix, task-document, epic-plan) más el cierre de task-close por el
+# bucle (DEVKIT-55), que no tiene "lanzando" propia: se busca aparte, por su
+# id `task-close-<num>`, sin duplicar los que ya salieron por la vía normal
+# (un `devkit-run task-close` manual no pasa por aquí: DEVKIT-55 lo resuelve
+# como `exec` directo a task-close.sh, sin línea "lanzando").
+costos_filas() {  # costos_filas <archivo> [Clave]
+  local file=$1 filtro=${2:-} ln ts id origen prompt logf modelo esfuerzo ronda
+  local -A vistos=()
+  local skill clave cierre c t d
+  while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda; do
+    [ -n "$id" ] || continue
+    vistos[$id]=1
+    clave=$(clave_de_lanzamiento "$prompt" "$id")
+    [ -z "$filtro" ] || [ "$clave" = "$filtro" ] || continue
+    skill=${prompt#/}; skill=${skill%% *}
+    cierre=$(costos_cierre_de "$file" "$ln" "$id")
+    c=$(costos_campo "${cierre:-}" costo); t=$(costos_campo "${cierre:-}" turnos); d=$(costos_campo "${cierre:-}" duracion)
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$clave" "$skill" "$id" "$modelo" "$esfuerzo" "$ronda" "${t:--}" "${c:--}" "${d:--}"
+  done < <(lanzamientos "$file")
+  while IFS=: read -r ln resto; do
+    [[ $resto =~ ^([^ ]+)\ task-close-([0-9]+)\ (terminado|falló) ]] || continue
+    id="task-close-${BASH_REMATCH[2]}"
+    [ -n "${vistos[$id]:-}" ] && continue
+    ts=${BASH_REMATCH[1]}
+    clave=$(clave_de_pr "${BASH_REMATCH[2]}")
+    [ -z "$filtro" ] || [ "$clave" = "$filtro" ] || continue
+    printf '%s\t%s\ttask-close\t%s\t-\t-\t-\t-\t-\t-\n' "$ts" "${clave:--}" "$id"
+  done < <(grep -nE ' task-close-[0-9]+ (terminado|falló)' "$file" 2>/dev/null)
+}
+
+# Turnos, costo, minutos y revisiones (lanzamientos de pr-review) de una
+# card, sumando solo lo presente en costos.log. La usan la fila TOTAL de
+# `--costos <Clave>` y task-close.sh, para la línea "Costo: ..." del
+# comentario de cierre (misma función, DEVKIT-89 criterio 4). Sin filas para
+# la Clave, no imprime nada: un "0 turnos, 0 USD" sería una medición
+# inventada, no una lectura de costos.log (H5 de pr-review en DEVKIT-89).
+costos_totales_card() {  # costos_totales_card <Clave>
+  local clave=$1 turnos_tot=0 costo_tot=0 dur_tot=0 revisiones=0 filas=0
+  local ts c_clave skill id modelo esfuerzo ronda t c d
+  while IFS=$'\t' read -r ts c_clave skill id modelo esfuerzo ronda t c d; do
+    [ -n "$skill" ] || continue
+    filas=1
+    [ "$skill" != pr-review ] || revisiones=$((revisiones + 1))
+    [ "$t" = - ] || turnos_tot=$((turnos_tot + t))
+    [ "$c" = - ] || costo_tot=$(awk -v a="$costo_tot" -v b="$c" 'BEGIN{printf "%.4f", a+b}')
+    [ "$d" = - ] || dur_tot=$((dur_tot + d))
+  done < <(costos_filas "${COSTOS_LOG:-/dev/null}" "$clave")
+  [ "$filas" = 1 ] || return 1
+  printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
+}
+
+# Tabla de una card: una fila por lanzamiento y una fila TOTAL.
+costos_tabla_card() {
+  local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0
+  # FECHA mide 27, no 21 (H7 de pr-review en DEVKIT-89): el timestamp con
+  # zona (`2026-09-18T10:05:00-05:00`) mide 25, y `rellenar` no trunca.
+  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 16)" "$(rellenar FECHA 27)" "$(rellenar MODELO/ESFUERZO/RONDA 28)" \
+    "$(rellenar TURNOS 8)" "$(rellenar COSTO 10)" MIN
+  while IFS=$'\t' read -r ts c_clave skill id modelo esfuerzo ronda t c d; do
+    [ -n "$skill" ] || continue
+    filas=1
+    if [ "$modelo" = - ] || [ -z "$modelo" ]; then modelo_col=-
+    elif [ "$ronda" = - ] || [ -z "$ronda" ]; then modelo_col="$modelo/$esfuerzo"
+    else modelo_col="$modelo/$esfuerzo r$ronda"; fi
+    min=-
+    [ "$d" = - ] || min=$((d / 60))
+    printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 16)" "$(rellenar "$ts" 27)" "$(rellenar "$modelo_col" 28)" \
+      "$(rellenar "$t" 8)" "$(rellenar "$c" 10)" "$min"
+  done < <(costos_filas "$COSTOS_LOG" "$clave")
+  if [ "$filas" = 0 ]; then
+    echo "Sin lanzamientos de $clave en $COSTOS_LOG."
+    return 0
+  fi
+  local turnos_tot costo_tot min_tot revisiones
+  IFS=$'\t' read -r turnos_tot costo_tot min_tot revisiones < <(costos_totales_card "$clave")
+  printf '%s%s%s%s%s%s\n' "$(rellenar TOTAL 16)" "$(rellenar - 27)" "$(rellenar - 28)" \
+    "$(rellenar "$turnos_tot" 8)" "$(rellenar "$costo_tot" 10)" "$min_tot ($revisiones revisiones)"
+}
+
+# Sin argumento: una fila por card con al menos un cierre exitoso de
+# task-close en los últimos 30 días, con la suma de todos sus lanzamientos,
+# más el promedio. Es la serie histórica del criterio de aceptación: mide si
+# las hijas 4 a 8 de la Épica DEVKIT-86 bajan el costo, sin estimar nada. Un
+# `task-close-N falló` no cierra la card -queda para el siguiente ciclo del
+# bucle-, así que no cuenta aquí (H2 de pr-review en DEVKIT-89); sí aparece
+# como fila en `costos_filas`/`costos_tabla_card`, porque ese lanzamiento
+# igual costó turnos.
+costos_resumen_proyecto() {
+  local corte hoy_epoch
+  hoy_epoch=$(date +%s)
+  corte=$((hoy_epoch - 30 * 86400))
+  local -a cerradas=()
+  local ts c_clave skill id resto
+  while IFS=: read -r ln resto; do
+    [[ $resto =~ ^([^ ]+)\ task-close-([0-9]+)\ terminado ]] || continue
+    ts=${BASH_REMATCH[1]}
+    [ "$(date -d "$ts" +%s 2>/dev/null || echo 0)" -ge "$corte" ] || continue
+    c_clave=$(clave_de_pr "${BASH_REMATCH[2]}")
+    [ "$c_clave" != - ] && [ -n "$c_clave" ] || continue
+    case " ${cerradas[*]:-} " in *" $c_clave "*) continue ;; esac
+    cerradas+=("$c_clave")
+  done < <(grep -nE ' task-close-[0-9]+ terminado' "$COSTOS_LOG" 2>/dev/null)
+  if [ "${#cerradas[@]}" -eq 0 ]; then
+    echo "Sin cards cerradas en los últimos 30 días en $COSTOS_LOG."
+    return 0
+  fi
+  printf '%s%s%s%s%s\n' "$(rellenar CARD 14)" "$(rellenar TURNOS 8)" "$(rellenar COSTO 10)" \
+    "$(rellenar MIN 6)" REVISIONES
+  local turnos costo min revisiones suma_turnos=0 suma_costo=0 suma_min=0 suma_rev=0 n=0
+  for c_clave in "${cerradas[@]}"; do
+    IFS=$'\t' read -r turnos costo min revisiones < <(costos_totales_card "$c_clave")
+    printf '%s%s%s%s%s\n' "$(rellenar "$c_clave" 14)" "$(rellenar "$turnos" 8)" "$(rellenar "$costo" 10)" \
+      "$(rellenar "$min" 6)" "$revisiones"
+    suma_turnos=$((suma_turnos + turnos))
+    suma_costo=$(awk -v a="$suma_costo" -v b="$costo" 'BEGIN{printf "%.4f", a+b}')
+    suma_min=$((suma_min + min))
+    suma_rev=$((suma_rev + revisiones))
+    n=$((n + 1))
+  done
+  printf '%s%s%s%s%s\n' "$(rellenar PROMEDIO 14)" "$(rellenar "$((suma_turnos / n))" 8)" \
+    "$(rellenar "$(awk -v a="$suma_costo" -v n="$n" 'BEGIN{printf "%.4f", a/n}')" 10)" \
+    "$(rellenar "$((suma_min / n))" 6)" "$(awk -v a="$suma_rev" -v n="$n" 'BEGIN{printf "%.1f", a/n}')"
+}
+
+mostrar_costos() {  # mostrar_costos [Clave]
+  if [ ! -f "$COSTOS_LOG" ]; then
+    echo "Sin costos.log todavía: ningún lanzamiento se registró desde que existe DEVKIT-89."
+    return 0
+  fi
+  if [ -n "${1:-}" ]; then costos_tabla_card "$1"; else costos_resumen_proyecto; fi
 }
 
 run_tests() {
@@ -3806,6 +4076,166 @@ FIN
   check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo (línea vieja sin modelo/esfuerzo/ronda)" 1 \
     "$(printf '%s' "$dup_out_viejo" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9002, log $tmp_viejo/run/task-start-9.log)")"
 
+  # --- DEVKIT-89: costos.log y devkit-run --costos --------------------------
+  check "resumen incluye duracion= desde duration_ms del JSON" "duracion=12s" \
+    "$(printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3,"duration_ms":12345}\n' >"$tmp/dur.log"
+       resumen "$tmp/dur.log" m e 99 | grep -oE 'duracion=[0-9]+s')"
+  check "resumen usa ? en duracion= cuando falta duration_ms, no un 0 inventado (H4)" "duracion=?s" \
+    "$(printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n' >"$tmp/sindur.log"
+       resumen "$tmp/sindur.log" m e 99 | grep -oE 'duracion=\?s')"
+
+  check "costos_log_candidata acepta un lanzamiento de las seis skills" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-start-1 lanzando (origen=humano) modelo=m esfuerzo=e ronda=1: "/task-start DEVKIT-1" log=/x.log'; echo $?)"
+  check "costos_log_candidata rechaza una línea narrativa del bucle" 1 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 PR #31 (DEVKIT-1) head abc1234 sin informe: lanzando pr-review'; echo $?)"
+  check "costos_log_candidata rechaza task-block, fuera de la tabla de --costos" 1 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-block-31 terminado: bash :: bloqueada'; echo $?)"
+  check "costos_log_candidata acepta el ALARMA de un cierre con error de run_skill" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 ALARMA: task-fix-1 terminó con error (rc=1): modelo=m esfuerzo=e ronda=1 costo=0.05 turnos=3 duracion=10s tokens: entrada=1 cache=1 salida=1 :: error; ver /x.log'; echo $?)"
+  check "costos_log_candidata acepta el falló (rc=) de devkit-run.sh --worker" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 devkit-run "/task-fix DEVKIT-1" falló (rc=1) [task-fix-1]: modelo=m esfuerzo=e ronda=1 costo=0.05 turnos=3 duracion=10s :: error'; echo $?)"
+  check "costos_log_candidata acepta el falló (rc=) de task-close-N en bash" 0 \
+    "$(costos_log_candidata '2026-09-10T10:00:00-05:00 task-close-31 falló (rc=1): bash, cerrado 15s después del merge :: error'; echo $?)"
+
+  # Una card completa: task-start, una revisión de pr-review (sin Clave en su
+  # prompt, se resuelve por el título del PR con un doble de gh), un
+  # task-fix y el cierre bash de task-close (sin línea "lanzando").
+  local costos_tmp=$tmp/costos
+  mkdir -p "$costos_tmp"
+  cat >"$costos_tmp/costos.log" <<'FIN'
+2026-09-10T10:00:00-05:00 task-start-1 lanzando (origen=humano) modelo=modelo-barato esfuerzo=low ronda=1: "/task-start DEVKIT-77" log=/run/devkit/task-start-1.log
+2026-09-10T10:00:30-05:00 task-start-1 terminado: modelo=modelo-barato esfuerzo=low ronda=1 costo=0.01 turnos=1 duracion=30s tokens: entrada=1 cache=1 salida=1 :: listo
+2026-09-10T10:05:00-05:00 pr-review-31-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 31" log=/run/devkit/pr-review-31-abc1234.log
+2026-09-10T10:06:00-05:00 pr-review-31-abc1234 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=5 duracion=60s tokens: entrada=1 cache=1 salida=1 :: revisado
+2026-09-10T10:10:00-05:00 task-fix-31-abc1234 lanzando (origen=bucle) modelo=modelo-medio esfuerzo=medium ronda=2: "/task-fix DEVKIT-77" log=/run/devkit/task-fix-31-abc1234.log
+2026-09-10T10:11:30-05:00 task-fix-31-abc1234 terminado: modelo=modelo-medio esfuerzo=medium ronda=2 costo=0.15 turnos=8 duracion=90s tokens: entrada=1 cache=1 salida=1 :: corregido
+2026-09-10T10:20:00-05:00 task-close-31 terminado: bash, cerrado 15s después del merge :: cerrada
+FIN
+  cat >"$costos_tmp/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1" = pr ] && [ "$2" = view ] && [ "$3" = 31 ]; then
+  echo "DEVKIT-77 algo de prueba"
+  exit 0
+fi
+exit 1
+FIN
+  chmod +x "$costos_tmp/gh-doble"
+  GH_BIN="$costos_tmp/gh-doble" COSTOS_LOG="$costos_tmp/costos.log"
+
+  check "clave_de_lanzamiento la toma del prompt cuando está" "DEVKIT-77" \
+    "$(clave_de_lanzamiento '/task-fix DEVKIT-77' task-fix-31-abc1234)"
+  check "clave_de_lanzamiento resuelve pr-review por el título del PR (gh)" "DEVKIT-77" \
+    "$(GH_BIN="$costos_tmp/gh-doble" clave_de_lanzamiento '/pr-review 31' pr-review-31-abc1234)"
+
+  check "costos_filas trae las cuatro filas de la card (task-close incluido)" 4 \
+    "$(costos_filas "$COSTOS_LOG" DEVKIT-77 | wc -l)"
+
+  # H3 de pr-review en DEVKIT-89: pr-review-31 y task-close-31 comparten el
+  # PR 31; con CLAVE_DE_PR_CACHE, la segunda resolución sale del archivo y no
+  # de un segundo `gh pr view`.
+  local llamadas_gh=$costos_tmp/llamadas-gh cache_pr
+  : > "$llamadas_gh"
+  cat >"$costos_tmp/gh-contador" <<FIN
+#!/usr/bin/env bash
+echo x >> "$llamadas_gh"
+if [ "\$1" = pr ] && [ "\$2" = view ] && [ "\$3" = 31 ]; then
+  echo "DEVKIT-77 algo de prueba"
+  exit 0
+fi
+exit 1
+FIN
+  chmod +x "$costos_tmp/gh-contador"
+  cache_pr=$(mktemp)
+  GH_BIN="$costos_tmp/gh-contador" CLAVE_DE_PR_CACHE="$cache_pr" costos_filas "$COSTOS_LOG" DEVKIT-77 >/dev/null
+  rm -f "$cache_pr"
+  GH_BIN="$costos_tmp/gh-doble"
+  check "clave_de_pr con caché llama a gh una sola vez pese a dos líneas del mismo PR" 1 \
+    "$(wc -l < "$llamadas_gh")"
+
+  # H3 de pr-review en DEVKIT-89, segunda vuelta: dos cards de PR distinto en
+  # el mismo log. Sin poblar_cache_pr, costos_filas resolvería la Clave de
+  # las dos (antes de filtrar) con dos `gh pr view`; con la caché poblada por
+  # una sola `gh pr list`, el total de llamadas a gh es 1, no 2.
+  local llamadas_gh2=$costos_tmp/llamadas-gh2 cache_pr2 dos_prs_log=$costos_tmp/dos-prs.log
+  : > "$llamadas_gh2"
+  cat >"$costos_tmp/gh-contador2" <<FIN
+#!/usr/bin/env bash
+echo x >> "$llamadas_gh2"
+if [ "\$1" = pr ] && [ "\$2" = list ]; then
+  echo '[{"number":101,"title":"DEVKIT-101 algo"},{"number":102,"title":"DEVKIT-102 otra cosa"}]'
+  exit 0
+fi
+exit 1
+FIN
+  chmod +x "$costos_tmp/gh-contador2"
+  cat >"$dos_prs_log" <<'FIN'
+2026-09-18T10:00:00-05:00 pr-review-101 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 101" log=/run/devkit/pr-review-101.log
+2026-09-18T10:01:00-05:00 pr-review-101 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.10 turnos=2 duracion=30s tokens: entrada=1 cache=1 salida=1 :: revisado
+2026-09-18T10:02:00-05:00 pr-review-102 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 102" log=/run/devkit/pr-review-102.log
+2026-09-18T10:03:00-05:00 pr-review-102 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=3 duracion=40s tokens: entrada=1 cache=1 salida=1 :: revisado
+FIN
+  cache_pr2=$(mktemp)
+  GH_BIN="$costos_tmp/gh-contador2" poblar_cache_pr "$cache_pr2"
+  GH_BIN="$costos_tmp/gh-contador2" CLAVE_DE_PR_CACHE="$cache_pr2" costos_filas "$dos_prs_log" DEVKIT-101 >/dev/null
+  rm -f "$cache_pr2"
+  GH_BIN="$costos_tmp/gh-doble"
+  check "poblar_cache_pr resuelve dos PR distintos con una sola llamada a gh" 1 \
+    "$(wc -l < "$llamadas_gh2")"
+
+  check "costos_totales_card suma turnos, costo y minutos; cuenta 1 revisión" \
+    "14	0.3600	3	1" \
+    "$(costos_totales_card DEVKIT-77)"
+  check "costos_totales_card sin filas no inventa un 0 turnos, 0 USD (H5)" 1 \
+    "$(costos_totales_card DEVKIT-999 >/dev/null 2>&1; echo $?)"
+
+  check "costos_tabla_card muestra la fila TOTAL con lo mismo que costos_totales_card" 1 \
+    "$(costos_tabla_card DEVKIT-77 | grep -c '^TOTAL.*14.*0.3600.*3 (1 revisiones)')"
+  check "costos_tabla_card muestra modelo/esfuerzo/ronda por fila" 1 \
+    "$(costos_tabla_card DEVKIT-77 | grep -c 'modelo-medio/medium r2')"
+  check "costos_tabla_card no pega la fecha con zona horaria a la columna siguiente (H7)" 1 \
+    "$(costos_tabla_card DEVKIT-77 | grep -c '2026-09-10T10:00:00-05:00 ')"
+
+  check "costos_tabla_card de una Clave sin lanzamientos no revienta" 1 \
+    "$(costos_tabla_card DEVKIT-999 | grep -c 'Sin lanzamientos de DEVKIT-999')"
+
+  check "mostrar_costos sin costos.log avisa en vez de fallar" 1 \
+    "$(COSTOS_LOG="$tmp/no-existe/costos.log" mostrar_costos | grep -c 'Sin costos.log todavía')"
+
+  # H2 de pr-review en DEVKIT-89: un cierre con error también gastó turnos y
+  # costo, y no debe perderse ni contarse como card cerrada.
+  local costos_error=$tmp/costos-error
+  mkdir -p "$costos_error"
+  cat >"$costos_error/costos.log" <<'FIN'
+2026-09-11T10:00:00-05:00 task-fix-40 lanzando (origen=bucle) modelo=modelo-medio esfuerzo=medium ronda=1: "/task-fix DEVKIT-80" log=/run/devkit/task-fix-40.log
+2026-09-11T10:01:00-05:00 ALARMA: task-fix-40 terminó con error (rc=1): modelo=modelo-medio esfuerzo=medium ronda=1 costo=0.07 turnos=4 duracion=20s tokens: entrada=1 cache=1 salida=1 :: error; ver /run/devkit/task-fix-40.log
+2026-09-11T10:05:00-05:00 task-close-40 falló (rc=1): bash, cerrado 5s después del merge :: error
+FIN
+  check "costos_cierre_de empareja el ALARMA de un cierre con error" 1 \
+    "$(costos_cierre_de "$costos_error/costos.log" 1 task-fix-40 | grep -c 'costo=0.07 turnos=4')"
+  check "costos_filas no pierde el costo de un lanzamiento que terminó con error" "0.07" \
+    "$(costos_filas "$costos_error/costos.log" DEVKIT-80 | cut -f9)"
+  check "costos_resumen_proyecto no cuenta un task-close-N falló como card cerrada" 1 \
+    "$(COSTOS_LOG="$costos_error/costos.log" costos_resumen_proyecto | grep -c 'Sin cards cerradas')"
+
+  check "--costos-totales de la card, por línea de comandos" "14	0.3600	3	1" \
+    "$(DEVKIT_GH_BIN="$costos_tmp/gh-doble" DEVKIT_COSTOS_LOG="$costos_tmp/costos.log" \
+       bash "$HERE/devkit-run.sh" --costos-totales DEVKIT-77)"
+
+  # DEVKIT-89 criterio 1: watch.sh y devkit-run.sh copian lanzando/terminado a
+  # costos.log de verdad, no solo en la teoría de costos_log_candidata.
+  local costos_real=$tmp/costos-real
+  mkdir -p "$costos_real/run"
+  touch "$costos_real/run/ready"  # sin esto, esperar_arranque espera 120s de verdad
+  DEVKIT_WS="$costos_real" DEVKIT_RUN_DIR="$costos_real/run" DEVKIT_CLAUDE_BIN="$doble" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$costos_real/run/frontera" \
+    DEVKIT_NOTION_CHECK=0 bash "$HERE/devkit-run.sh" task-start DEVKIT-30 >/dev/null 2>&1
+  local intentos=0
+  while ! grep -q 'terminado' "$costos_real/.devkit/costos.log" 2>/dev/null && [ "$intentos" -lt 100 ]; do
+    sleep 0.05; intentos=$((intentos + 1))
+  done
+  check "devkit-run.sh escribe lanzando y terminado en .devkit/costos.log" 2 \
+    "$(grep -cE '(task-start-1 lanzando|terminado \[task-start-1\])' "$costos_real/.devkit/costos.log" 2>/dev/null)"
+
   return $fail
 }
 
@@ -3878,8 +4308,10 @@ case "${1:-}" in
     [ -z "$manual" ] || resumen_txt="$resumen_txt (anulación manual)"
     # `[<id>]` une el resumen con su línea "lanzando" para `--estado`: dos
     # lanzamientos del mismo prompt solo se distinguen por el log.
-    printf '%s devkit-run "%s" %s [%s]: %s\n' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" "$estado" \
-      "$(basename "$logf" .log)" "$resumen_txt" >> "$WATCH_LOG"
+    linea_fin=$(printf '%s devkit-run "%s" %s [%s]: %s' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" "$estado" \
+      "$(basename "$logf" .log)" "$resumen_txt")
+    printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
+    costos_log "$linea_fin"
     if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if pregunta_abierta "$resultado"; then
@@ -3955,6 +4387,30 @@ case "${1:-}" in
     siguiente_modelo "${2:-}"
     exit $?
     ;;
+  --costos)
+    # CLAVE_DE_PR_CACHE vive solo esta corrida (H3 de pr-review en
+    # DEVKIT-89): sin ella, `clave_de_pr` llama a `gh pr view` una vez por
+    # línea de pr-review/task-close, aunque compartan PR. `poblar_cache_pr`
+    # la llena con una sola llamada a `gh pr list` antes de leer el log
+    # (segunda vuelta de H3): así ni PRs distintos vuelven a tocar la red.
+    CLAVE_DE_PR_CACHE=$(mktemp)
+    poblar_cache_pr "$CLAVE_DE_PR_CACHE"
+    mostrar_costos "${2:-}"
+    rc=$?
+    rm -f "$CLAVE_DE_PR_CACHE"
+    exit $rc
+    ;;
+  --costos-totales)
+    # Para task-close.sh (DEVKIT-89): "turnos costo minutos revisiones" de la
+    # card, sin tabla, misma función que la fila TOTAL de `--costos <Clave>`.
+    [ -n "${2:-}" ] || exit 64
+    CLAVE_DE_PR_CACHE=$(mktemp)
+    poblar_cache_pr "$CLAVE_DE_PR_CACHE"
+    costos_totales_card "$2"
+    rc=$?
+    rm -f "$CLAVE_DE_PR_CACHE"
+    exit $rc
+    ;;
   --test)
     run_tests
     exit $?
@@ -3978,7 +4434,7 @@ falta_valor() {  # falta_valor <valor>
 
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
-  echo "     devkit-run --estado [--seguir] | --tablero [--seguir] | --test" >&2
+  echo "     devkit-run --estado [--seguir] | --tablero [--seguir] | --costos [<Clave>] | --test" >&2
 }
 
 modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
@@ -4057,7 +4513,9 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 #
 # La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
 # para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
-linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" "$modelo" "$esfuerzo" "$ronda" >> "$WATCH_LOG" 2>/dev/null
+linea_inicio=$(linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" "$modelo" "$esfuerzo" "$ronda")
+printf '%s\n' "$linea_inicio" >> "$WATCH_LOG" 2>/dev/null
+costos_log "$linea_inicio"
 "$SETSID_BIN" nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
   "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
   >/dev/null 2>&1 &
