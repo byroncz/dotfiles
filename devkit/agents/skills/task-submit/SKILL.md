@@ -7,23 +7,18 @@ description: Entrega para revisión el trabajo de una card en progreso: verifica
 
 Argumento opcional: Clave. Por defecto se deduce de la rama actual.
 
+Todo lo mecánico -verificar, comitear, subir la rama, crear o actualizar el
+PR, activar auto-merge, actualizar la card, comentar y avisar al bucle- lo
+hace `devkit/scripts/task-submit.sh` (DEVKIT-91). Esta skill solo aporta lo
+que un script no puede: repasar los criterios y redactar el cuerpo del PR.
+
 ## Pasos
 
-1. Deduce la Clave de la rama (`feat/DEVKIT-3-...` → `DEVKIT-3`) y localiza
-   la card. Verifica que está `En progreso`.
-2. Verificación local, en este orden, y detente si algo falla:
-   - `ruff check .` y `ruff format --check .` si hay Python.
-   - `uv run pytest` si existe `tests/` o `pyproject.toml` con pytest.
-   - `bash -n` sobre cada script de shell tocado.
-   - Repasa los criterios de aceptación de la card uno por uno y confirma
-     cada uno con un comando o una observación concreta.
-3. Commit de lo pendiente con Conventional Commits y la Clave como ámbito.
-   `git push`.
-4. Si ya existe un PR para la rama (`gh pr view --json url`), no crees otro:
-   actualiza su descripción si cambió el alcance (conserva la línea
-   "Implementado con ..." del paso 5; si falta, agrégala) y salta al paso 6.
-5. Crea el PR con `gh pr create --base main --title "<Clave> <título de la
-   card>" --body-file -` y este cuerpo:
+1. Repasa los criterios de aceptación de la card uno por uno y confirma cada
+   uno con un comando o una observación concreta. Si alguno no se cumple,
+   complétalo antes de seguir.
+2. Escribe `.devkit/pr-body.md` con exactamente estas tres secciones, en este
+   orden:
 
    ```
    ## Qué cambia
@@ -38,38 +33,24 @@ Argumento opcional: Clave. Por defecto se deduce de la rama actual.
    Bitwarden...), o "Ninguno" si no aplica. Es la única fuente de este dato:
    de aquí lo toman la entrada de Documentación de la card y las notas de la
    próxima release.
-
-   ## Card
-   <URL de la card en Notion>
-
-   Implementado con <modelo>, esfuerzo <esfuerzo>
    ```
 
-   La última línea sale de las variables que `devkit-run` exporta al
-   `claude -p` (DEVKIT-58):
+   El script agrega la sección `## Card` (con la URL de la card y la línea
+   "Implementado con ...", DEVKIT-58) y borra el archivo al terminar; no las
+   escribas a mano.
+
+3. Ejecuta:
 
    ```sh
-   echo "Implementado con ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-submit.sh" --mensaje "<tipo>(<Clave>): <resumen>"
    ```
 
-   Cópiala tal cual, en una línea propia y sin formato. Si las variables
-   vienen vacías (sesión interactiva, sin `devkit-run`), escribe el alias del
-   modelo que te ejecuta (`fable`, `opus`, `sonnet`) y `esfuerzo sin
-   registrar`; nunca inventes un esfuerzo. `task-close.sh` lee esta línea
-   para el comentario de cierre.
-
-6. Activa el auto-merge: `gh pr merge --auto --squash`. Si GitHub lo rechaza
-   porque el repo no lo permite, comenta en la card que falta activar
-   "Allow auto-merge" y sigue.
-7. Actualiza la card: `PR` = URL del PR, `Estado` = `Revisión automática`.
-8. Comenta en la card, dos a cuatro líneas: qué se entregó y qué debe mirar
-   el revisor primero.
-9. `touch /run/devkit/poke`, como último paso. Despierta a `watch.sh`, que
-   duerme en tramos de 5 s, para que no espere el resto del intervalo antes de
-   lanzar `pr-review`. Es solo un aviso, no lanza nada ni decide nada. Escribe
-   el comando tal cual, sin redirecciones ni `|| true`: así es como lo autoriza
-   `settings.json`. Si falla, no pasa nada y no se reintenta: el bucle llega
-   igual en el siguiente intervalo.
+   El mensaje es el del commit de lo pendiente, en Conventional Commits con
+   la Clave como ámbito. El script verifica (`ruff`, `pytest`, `bash -n`
+   sobre los `.sh` tocados), comitea, sube la rama, crea o actualiza el PR,
+   activa auto-merge, deja `PR` y `Estado=Revisión automática` en la card,
+   comenta y avisa a `watch.sh`. Si algo falla, se detiene con salida 1 y el
+   error en stderr; corrígelo y vuelve a ejecutarlo.
 
 A partir de aquí el ciclo es automático: la skill `pr-review` decide si la
 card pasa a `Lista para merge` o si `task-fix` la corrige y la deja de nuevo

@@ -594,6 +594,13 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
 # para cada papel. Se leen de aquí y no de roles.toml porque solo este punto
 # sabe qué se lanzó de verdad.
 #
+# DEVKIT_SKILL es el nombre de la skill de este lanzamiento, sin la barra
+# (DEVKIT-91): `hook-stop.sh` lo lee para saber si corre dentro de un
+# task-start o un task-fix -las dos skills que dejan la card a medio
+# entregar si el agente termina de más- y quedarse fuera en cualquier otra.
+# Vale lo mismo durante toda la sesión, aunque el agente invoque `task-submit`
+# como sub-skill dentro de ella.
+#
 # Líneas "NOMBRE=valor" de ENV_HEREDABLE presentes en el entorno de quien
 # llama, para copiarlas al `claude -p` hijo con `env -i` (DEVKIT-65). Función
 # aparte para poder probarla sin lanzar nada de verdad.
@@ -615,9 +622,11 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
 }
 
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
+  local skill
+  skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
   local -a extra=(
     "DEVKIT_ORIGEN=" "DEVKIT_MODELO_FORZADO=" "DEVKIT_RONDA="
-    "DEVKIT_MODEL=$2" "DEVKIT_EFFORT=$3"
+    "DEVKIT_MODEL=$2" "DEVKIT_EFFORT=$3" "DEVKIT_SKILL=$skill"
     "DEVKIT_SCRIPTS_DIR=$HERE" "DEVKIT_RUN_DIR=$RUN_DIR"
   )
   [ -z "${DEVKIT_LOCK_HELD:-}" ] || extra+=("DEVKIT_LOCK_HELD=$DEVKIT_LOCK_HELD")
@@ -3186,6 +3195,21 @@ FIN
        DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera-modelo" \
        bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' 2>/dev/null | tail -1)"
 
+  # DEVKIT_SKILL llega al `claude -p` con el nombre de la skill lanzada
+  # (DEVKIT-91): lo necesita `hook-stop.sh` para saber si corre dentro de un
+  # task-start o un task-fix.
+  local espejo_skill
+  espejo_skill="$tmp/claude-espejo-skill"
+  cat >"$espejo_skill" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"%s","total_cost_usd":0,"num_turns":1}\n' "${DEVKIT_SKILL:-vacío}"
+FIN
+  chmod +x "$espejo_skill"
+  DEVKIT_CLAUDE_BIN="$espejo_skill" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-3' "$tmp/run/espejo-skill.log" modelo-x high 40 >/dev/null 2>&1
+  check "worker exporta DEVKIT_SKILL con el nombre de la skill lanzada" "task-fix" \
+    "$(jq -r .result "$tmp/run/espejo-skill.log" 2>/dev/null)"
+
   # H1 de pr-review (DEVKIT-65): DEVKIT_LANZADOR=watch, que watch.sh fija al
   # llamar a --sync para que task-fix sepa que lo lanzó el bucle y no firme
   # manual=1, debe llegar al `claude -p` hijo pese a ENV_LIMPIO=1 y su lista
@@ -4470,6 +4494,206 @@ FIN
   done
   check "devkit-run.sh escribe lanzando y terminado en .devkit/costos.log" 2 \
     "$(grep -cE '(task-start-1 lanzando|terminado \[task-start-1\])' "$costos_real/.devkit/costos.log" 2>/dev/null)"
+
+  # --- task-submit.sh (DEVKIT-91), con gh y notion.sh simulados -------------
+  # Workspace propio con un origin local de verdad, mismo patrón que la
+  # batería de task-begin.sh de más arriba: `git push` necesita un remoto al
+  # que empujar.
+  local ts_dir
+  ts_dir=$(mktemp -d)
+  git init -q --bare "$ts_dir/origin.git"
+  git init -q "$ts_dir/ws"
+  git -C "$ts_dir/ws" config user.email test@example.com
+  git -C "$ts_dir/ws" config user.name test
+  git -C "$ts_dir/ws" remote add origin "$ts_dir/origin.git"
+  git -C "$ts_dir/ws" commit -q --allow-empty -m init --no-gpg-sign
+  git -C "$ts_dir/ws" branch -q -m main
+  git -C "$ts_dir/ws" push -q -u origin main
+  git -C "$ts_dir/ws" switch -q -c feat/DEVKIT-9301-probar-task-submit
+  git -C "$ts_dir/ws" push -q -u origin feat/DEVKIT-9301-probar-task-submit
+  mkdir -p "$ts_dir/run" "$ts_dir/ws/.devkit"
+  cat >"$ts_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-1","url":"https://notion.so/card1","estado":"En progreso","titulo":"Probar task-submit"}' ;;
+  set) shift; printf '%s\n' "$*" >>"$FAKE_DIR/set-llamadas" ;;
+  comentar) shift; printf '%s\n' "$*" >>"$FAKE_DIR/comentar-llamadas" ;;
+esac
+FIN
+  chmod +x "$ts_dir/notion-doble"
+  cat >"$ts_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE_DIR/llamadas-gh"
+case "$1 $2" in
+  "pr view")
+    if [ -s "$FAKE_DIR/pr-existe" ]; then cat "$FAKE_DIR/pr-existe"; exit 0; else exit 1; fi ;;
+  "pr create")
+    cat >"$FAKE_DIR/cuerpo-create"
+    echo "https://github.com/o/r/pull/42"
+    printf '{"url":"https://github.com/o/r/pull/42","number":42}' >"$FAKE_DIR/pr-existe"
+    exit 0 ;;
+  "pr edit")
+    cat >"$FAKE_DIR/cuerpo-edit"
+    exit 0 ;;
+  "pr merge")
+    exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$ts_dir/gh-doble"
+  local ts_env=(FAKE_DIR="$ts_dir" DEVKIT_WS="$ts_dir/ws" DEVKIT_RUN_DIR="$ts_dir/run" \
+    DEVKIT_NOTION_BIN="$ts_dir/notion-doble" DEVKIT_GH_BIN="$ts_dir/gh-doble")
+
+  cat >"$ts_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+Primera línea del cambio.
+Segunda línea del cambio.
+
+## Cómo probarlo
+bash -n devkit/scripts/task-submit.sh
+
+## Cambios requeridos
+Ninguno.
+FIN
+  echo "algo nuevo" >"$ts_dir/ws/archivo.txt"
+  env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): probar task-submit" >/dev/null 2>&1
+  check "task-submit (PR nuevo): sale con 0" 0 "$?"
+  check "task-submit (PR nuevo): comitea con el mensaje recibido" "feat(DEVKIT-9301): probar task-submit" \
+    "$(git -C "$ts_dir/ws" log -1 --format=%s)"
+  check "task-submit (PR nuevo): sube el commit a origin" 1 \
+    "$(git -C "$ts_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9301')"
+  check "task-submit (PR nuevo): crea el PR (no lo edita)" 1 \
+    "$([ -e "$ts_dir/cuerpo-create" ] && echo 1 || echo 0)"
+  check "task-submit (PR nuevo): el cuerpo trae la sección Card y la marca de modelo" 1 \
+    "$(grep -cE '^Implementado con .+, esfuerzo .+' "$ts_dir/cuerpo-create")"
+  check "task-submit (PR nuevo): activa auto-merge" 1 \
+    "$(grep -c '^pr merge --auto --squash' "$ts_dir/llamadas-gh")"
+  check "task-submit (PR nuevo): deja PR y Estado=Revisión automática en la card" \
+    'card-1 PR=https://github.com/o/r/pull/42 Estado=Revisión automática' \
+    "$(cat "$ts_dir/set-llamadas")"
+  check "task-submit (PR nuevo): comenta las dos primeras líneas de Qué cambia" \
+    'card-1 Primera línea del cambio.
+Segunda línea del cambio.' "$(cat "$ts_dir/comentar-llamadas")"
+  check "task-submit (PR nuevo): toca /run/devkit/poke" 1 "$([ -e "$ts_dir/run/poke" ] && echo 1 || echo 0)"
+  check "task-submit (PR nuevo): borra .devkit/pr-body.md" 1 \
+    "$([ -e "$ts_dir/ws/.devkit/pr-body.md" ] && echo 0 || echo 1)"
+
+  # PR existente: no vuelve a crear, edita el mismo número.
+  rm -f "$ts_dir/set-llamadas" "$ts_dir/comentar-llamadas"
+  cat >"$ts_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+Cambio nuevo sobre el PR existente.
+
+## Cómo probarlo
+Nada nuevo.
+
+## Cambios requeridos
+Ninguno.
+FIN
+  echo "otro cambio" >>"$ts_dir/ws/archivo.txt"
+  env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): segundo cambio" >/dev/null 2>&1
+  check "task-submit (PR existente): sale con 0" 0 "$?"
+  check "task-submit (PR existente): edita el PR en vez de crear otro" 1 \
+    "$(grep -c '^pr create' "$ts_dir/llamadas-gh")"
+  check "task-submit (PR existente): el cuerpo editado trae el cambio nuevo" 1 \
+    "$(grep -c 'Cambio nuevo sobre el PR existente' "$ts_dir/cuerpo-edit")"
+
+  # Verificación que falla (bash -n sobre un .sh tocado): no comitea, no
+  # sube, no toca el PR ni la card, y deja el error en stderr.
+  rm -f "$ts_dir/set-llamadas" "$ts_dir/comentar-llamadas"
+  printf 'if [ true ]; then echo hi\n' >"$ts_dir/ws/roto.sh"
+  cat >"$ts_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+No debería llegar a entregarse.
+
+## Cómo probarlo
+N/A
+
+## Cambios requeridos
+Ninguno.
+FIN
+  ts_err=$(env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): no debería pasar" 2>&1 >/dev/null)
+  ts_rc=$?
+  check "task-submit (verificación falla): sale con 1" 1 "$ts_rc"
+  check "task-submit (verificación falla): el error nombra el script roto" 2 \
+    "$(printf '%s' "$ts_err" | grep -c 'roto.sh')"
+  check "task-submit (verificación falla): no comitea lo pendiente" 1 \
+    "$(git -C "$ts_dir/ws" status --porcelain | grep -c roto.sh)"
+  check "task-submit (verificación falla): no toca la card" 1 \
+    "$([ -e "$ts_dir/set-llamadas" ] && echo 0 || echo 1)"
+  check "task-submit (verificación falla): conserva .devkit/pr-body.md" 1 \
+    "$([ -e "$ts_dir/ws/.devkit/pr-body.md" ] && echo 1 || echo 0)"
+  rm -rf "$ts_dir"
+
+  # --- hook-post-edit.sh (DEVKIT-91) -----------------------------------------
+  local hpe_dir
+  hpe_dir=$(mktemp -d)
+  printf 'def f():\n    return undefined_name\n' >"$hpe_dir/malo.py"
+  check "hook-post-edit: .py con aviso que ruff no puede arreglar solo" 1 \
+    "$(jq -nc --arg f "$hpe_dir/malo.py" '{tool_input:{file_path:$f}}' \
+       | bash "$HERE/hook-post-edit.sh" | grep -c 'F821')"
+  printf '#!/usr/bin/env bash\necho hola\n' >"$hpe_dir/bueno.sh"
+  check "hook-post-edit: .sh válido no dice nada" "" \
+    "$(jq -nc --arg f "$hpe_dir/bueno.sh" '{tool_input:{file_path:$f}}' | bash "$HERE/hook-post-edit.sh")"
+  printf 'if [ true ]; then echo hola\n' >"$hpe_dir/malo.sh"
+  check "hook-post-edit: .sh con error de sintaxis lo devuelve" 1 \
+    "$(jq -nc --arg f "$hpe_dir/malo.sh" '{tool_input:{file_path:$f}}' \
+       | bash "$HERE/hook-post-edit.sh" | grep -c 'syntax error')"
+  printf 'hola\n' >"$hpe_dir/nota.md"
+  check "hook-post-edit: cualquier otra extensión, nada" "" \
+    "$(jq -nc --arg f "$hpe_dir/nota.md" '{tool_input:{file_path:$f}}' | bash "$HERE/hook-post-edit.sh")"
+  check "hook-post-edit: nunca sale distinto de 0 (informa, no bloquea)" 0 \
+    "$(jq -nc --arg f "$hpe_dir/malo.sh" '{tool_input:{file_path:$f}}' | bash "$HERE/hook-post-edit.sh" >/dev/null; echo $?)"
+  rm -rf "$hpe_dir"
+
+  # --- hook-stop.sh (DEVKIT-91) -----------------------------------------------
+  local hs_dir
+  hs_dir=$(mktemp -d)
+  git init -q --bare "$hs_dir/origin.git"
+  git init -q "$hs_dir/ws"
+  git -C "$hs_dir/ws" config user.email test@example.com
+  git -C "$hs_dir/ws" config user.name test
+  git -C "$hs_dir/ws" remote add origin "$hs_dir/origin.git"
+  git -C "$hs_dir/ws" commit -q --allow-empty -m init --no-gpg-sign
+  git -C "$hs_dir/ws" branch -q -m main
+  git -C "$hs_dir/ws" push -q -u origin main
+  git -C "$hs_dir/ws" switch -q -c feat/DEVKIT-9302-probar-hook-stop
+  mkdir -p "$hs_dir/run"
+
+  check "hook-stop: fuera de task-start/task-fix, no hace nada" "" \
+    "$(echo '{}' | DEVKIT_SKILL=pr-review DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run" bash "$HERE/hook-stop.sh")"
+  # DEVKIT_STOP_ID fija el mismo id de contador en las tres llamadas: cada una
+  # corre en su propio subshell de pipeline (un $PPID distinto), y el conteo
+  # de "misma sesión" que se prueba aquí depende de compartirlo.
+  check "hook-stop: rama sin push, bloquea con la instrucción concreta" true \
+    "$(echo '{}' | DEVKIT_SKILL=task-start DEVKIT_STOP_ID=9302 DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run" bash "$HERE/hook-stop.sh" \
+       | jq -r '.decision == "block" and (.reason | contains("task-submit.sh"))')"
+  check "hook-stop: segundo bloqueo seguido, todavía bloquea" 'block' \
+    "$(echo '{}' | DEVKIT_SKILL=task-start DEVKIT_STOP_ID=9302 DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run" bash "$HERE/hook-stop.sh" | jq -r .decision)"
+  check "hook-stop: tercer intento, ya no bloquea (tope de dos por sesión)" "" \
+    "$(echo '{}' | DEVKIT_SKILL=task-start DEVKIT_STOP_ID=9302 DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run" bash "$HERE/hook-stop.sh")"
+
+  git -C "$hs_dir/ws" push -q -u origin feat/DEVKIT-9302-probar-hook-stop
+  cat >"$hs_dir/notion-en-progreso" <<'FIN'
+#!/usr/bin/env bash
+[ "$1" = card ] && printf '{"id":"card-1","estado":"En progreso","pr":""}'
+FIN
+  chmod +x "$hs_dir/notion-en-progreso"
+  mkdir -p "$hs_dir/run2"
+  check "hook-stop: rama subida pero card En progreso sin PR, bloquea" 'block' \
+    "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run2" \
+       DEVKIT_NOTION_BIN="$hs_dir/notion-en-progreso" bash "$HERE/hook-stop.sh" | jq -r .decision)"
+
+  cat >"$hs_dir/notion-con-pr" <<'FIN'
+#!/usr/bin/env bash
+[ "$1" = card ] && printf '{"id":"card-1","estado":"En progreso","pr":"https://github.com/o/r/pull/1"}'
+FIN
+  chmod +x "$hs_dir/notion-con-pr"
+  mkdir -p "$hs_dir/run3"
+  check "hook-stop: rama subida y card con PR, no bloquea" "" \
+    "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run3" \
+       DEVKIT_NOTION_BIN="$hs_dir/notion-con-pr" bash "$HERE/hook-stop.sh")"
+  rm -rf "$hs_dir"
 
   return $fail
 }
