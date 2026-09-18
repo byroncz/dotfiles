@@ -12,11 +12,11 @@
 # task-document, epic-plan) no dejan una card a medio entregar de la misma
 # forma y siguen solo bajo la red de `devkit-run`.
 #
-# Máximo dos bloqueos por sesión, contados en /run/devkit/stop-<pid del
-# proceso `claude` que corre esta sesión>: sin este tope, una sesión que no
-# logra resolver el motivo (por ejemplo, sin acceso a git o a Notion) se
-# quedaría reintentando para siempre. Al tercer intento deja salir, para que
-# la barrera de `devkit-run` (o el humano) se haga cargo.
+# Máximo dos bloqueos por sesión, contados en /run/devkit/stop-<session_id
+# del JSON del hook>: sin este tope, una sesión que no logra resolver el
+# motivo (por ejemplo, sin acceso a git o a Notion) se quedaría reintentando
+# para siempre. Al tercer intento deja salir, para que la barrera de
+# `devkit-run` (o el humano) se haga cargo.
 #
 # Uso normal: recibe por stdin el JSON del hook Stop. Si bloquea, imprime
 # {"decision":"block","reason":"..."} y sale 0.
@@ -27,19 +27,29 @@ RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 SCRIPTS_DIR="${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"
 
-cat >/dev/null  # consume el JSON del hook; ningún campo de entrada hace falta
+entrada=$(cat)  # JSON del hook Stop
 
 case "${DEVKIT_SKILL:-}" in
   task-start|task-fix) ;;
   *) exit 0 ;;
 esac
 
-# DEVKIT_STOP_ID, si viene, pisa el pid real: cada llamada de la autoprueba
-# corre en su propio subshell de pipeline, con un $PPID distinto, así que sin
-# esta puerta no hay forma de probar el conteo entre llamadas sucesivas.
-contador="$RUN_DIR/stop-${DEVKIT_STOP_ID:-$PPID}"
+# $PPID solo sirve de respaldo si el JSON no trae session_id: cambia en cada
+# llamada cuando el hook corre vía `sh -c` sin `exec`, y con eso el tope de
+# dos por sesión nunca se alcanza (H8). DEVKIT_STOP_ID, si viene, pisa a
+# ambos: cada llamada de la autoprueba corre en su propio subshell de
+# pipeline, con un $PPID (y potencialmente un session_id) distinto, así que
+# sin esta puerta no hay forma de probar el conteo entre llamadas sucesivas.
+session_id=$(jq -r '.session_id // empty' <<<"$entrada" 2>/dev/null)
+contador="$RUN_DIR/stop-${DEVKIT_STOP_ID:-${session_id:-$PPID}}"
 bloqueos=$(cat "$contador" 2>/dev/null || echo 0)
 case "$bloqueos" in ''|*[!0-9]*) bloqueos=0 ;; esac
+# `stop_hook_active` en true significa que este hook ya bloqueó antes en esta
+# misma cadena de Stop; si el contador no lo refleja (contador nuevo o
+# perdido), no reinicies la cuenta desde cero.
+if [ "$bloqueos" -eq 0 ] && [ "$(jq -r '.stop_hook_active // false' <<<"$entrada" 2>/dev/null)" = true ]; then
+  bloqueos=1
+fi
 if [ "$bloqueos" -ge 2 ]; then
   exit 0
 fi

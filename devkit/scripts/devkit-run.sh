@@ -4743,6 +4743,30 @@ FIN
   check "hook-stop: commit local sin subir a origin, bloquea nombrando el motivo" true \
     "$(echo '{}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run5" bash "$HERE/hook-stop.sh" \
        | jq -r '.decision == "block" and (.reason | contains("commits sin subir"))')"
+
+  # H8: session_id del JSON arma la clave del contador en vez de $PPID, que
+  # cambia en cada llamada porque cada una corre en su propio subshell de
+  # pipeline (mismo problema que si el hook corriera vía `sh -c` sin `exec`).
+  # Sin DEVKIT_STOP_ID de por medio, solo compartir "sess-abc" debe bastar
+  # para que el tope de dos por sesión se cumpla.
+  mkdir -p "$hs_dir/run6"
+  check "hook-stop: session_id arma el contador (primera llamada, \$PPID distinto)" 1 \
+    "$(echo '{"session_id":"sess-abc"}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run6" bash "$HERE/hook-stop.sh" >/dev/null
+       cat "$hs_dir/run6/stop-sess-abc" 2>/dev/null)"
+  check "hook-stop: segunda llamada en otro \$PPID, mismo session_id, sigue el contador" 2 \
+    "$(echo '{"session_id":"sess-abc"}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run6" bash "$HERE/hook-stop.sh" >/dev/null
+       cat "$hs_dir/run6/stop-sess-abc" 2>/dev/null)"
+  check "hook-stop: tercera llamada con el mismo session_id, tope alcanzado, ya no bloquea" "" \
+    "$(echo '{"session_id":"sess-abc"}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run6" bash "$HERE/hook-stop.sh")"
+
+  # H8: `stop_hook_active` en true evita reiniciar la cuenta desde cero
+  # cuando el contador de esta clave todavía no existe.
+  mkdir -p "$hs_dir/run7"
+  check "hook-stop: stop_hook_active=true sin contador previo, cuenta como segundo bloqueo" 2 \
+    "$(echo '{"session_id":"sess-def","stop_hook_active":true}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run7" bash "$HERE/hook-stop.sh" >/dev/null
+       cat "$hs_dir/run7/stop-sess-def" 2>/dev/null)"
+  check "hook-stop: con stop_hook_active=true, la siguiente llamada ya no bloquea (tope de dos)" "" \
+    "$(echo '{"session_id":"sess-def"}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run7" bash "$HERE/hook-stop.sh")"
   rm -rf "$hs_dir"
 
   return $fail
