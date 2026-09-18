@@ -1482,8 +1482,16 @@ senal_bucle() {  # senal_bucle <watch.log> <ahora epoch>
 # recién entonces lo imprime, con el cursor de vuelta al origen (`\033[H`) y
 # `\033[J` (borra desde el cursor hasta el final) solo al terminar, para
 # limpiar el resto de un cuadro anterior más largo sin borrar y volver a
-# dibujar todo -que es lo que parpadea. El cursor se oculta con `tput civis`
-# mientras refresca y se restaura con `tput cnorm` al salir, Ctrl-C incluido.
+# dibujar todo -que es lo que parpadea. Cada renglón lleva `\033[K` al final
+# (DEVKIT-81 H3): sin eso, si ese mismo renglón viene más corto que en el
+# cuadro anterior, queda el resto del texto viejo pegado a la derecha; `\033[J`
+# solo limpia lo que queda debajo del último renglón, no a la derecha de uno
+# más corto. El cursor se oculta con `tput civis` mientras refresca y se
+# restaura con `tput cnorm` al salir, Ctrl-C incluido.
+cuadro_sin_parpadeo() {  # cuadro_sin_parpadeo <cuadro>
+  printf '\033[H%s\033[K\n\033[J' "${1//$'\n'/$'\033[K\n'}"
+}
+
 seguir_estado() {
   local giros='|/-\' i=0 c frame ahora
   if [ -t 1 ]; then
@@ -1499,7 +1507,7 @@ seguir_estado() {
       "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora")")
     frame+=$(mostrar_estado)
     if [ -t 1 ]; then
-      printf '\033[H%s\n\033[J' "$frame"
+      cuadro_sin_parpadeo "$frame"
     else
       printf '%s\n' "$frame"
     fi
@@ -2763,6 +2771,15 @@ FIN
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" | grep -c 'SIN SEÑAL hace')"
   check "senal_bucle: SIN SEÑAL si watch.sh no está en ps" 1 \
     "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" | grep -c 'no encuentro watch.sh en ps')"
+
+  # DEVKIT-81 H3: cada renglón del cuadro lleva `\033[K` al final -incluido el
+  # último, antes del salto de línea que agrega `printf`-, para que un
+  # renglón más corto que en el cuadro anterior no deje texto viejo pegado a
+  # la derecha; `\033[J` solo limpia debajo del último renglón, no a la
+  # derecha de uno más corto.
+  check "cuadro_sin_parpadeo: \\033[H al inicio, \\033[K por renglón (incluido el último) y \\033[J al final" \
+    $'\033[Hlinea uno\033[K\nlinea dos\033[K\n\033[J' \
+    "$(cuadro_sin_parpadeo $'linea uno\nlinea dos')"
 
   # DEVKIT-79: con COLUMNS en el entorno (una terminal integrada, como la del
   # editor, lo exporta) `ps` sin `-ww` recorta la línea y estado_filas deja
