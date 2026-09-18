@@ -27,11 +27,11 @@ README="${DEVKIT_GEN_README_README:-$(pwd)/README.md}"
 SKILLS_ORDEN="project-init epic-plan task-create task-start task-submit pr-review task-fix task-document project-status template-update template-propagate"
 
 stack() {
-  sh "$GEN_STACK" --tabla
+  sh "$GEN_STACK" --tabla || exit 2
   echo
   echo "Generada por \`gen-readme.sh\` (verificado con \`--check\`), no a mano:"
   echo
-  sh "$GEN_STACK"
+  sh "$GEN_STACK" || exit 2
 }
 
 # Agrupa devkit/scripts/comandos.txt (línea `## título` abre grupo, línea
@@ -62,8 +62,20 @@ comandos() {  # comandos <comandos.txt>
 }
 
 # Una fila por skill, en SKILLS_ORDEN, con la línea `description` de su
-# SKILL.md tal cual (ya trae qué hace, cuándo usarla y sus argumentos).
+# SKILL.md tal cual (ya trae qué hace, cuándo usarla y sus argumentos). Antes
+# de listar, exige que las carpetas de skills_dir sean exactamente
+# SKILLS_ORDEN: una skill nueva sin sumar a la constante quedaba omitida sin
+# aviso (H2c, DEVKIT-88).
 skills() {  # skills <skills_dir>
+  encontradas="$(find "$1" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort | tr '\n' ' ')"
+  esperadas="$(printf '%s\n' $SKILLS_ORDEN | sort | tr '\n' ' ')"
+  if [ "$encontradas" != "$esperadas" ]; then
+    echo "gen-readme.sh: $1 no coincide con SKILLS_ORDEN" >&2
+    echo "  carpetas:     $encontradas" >&2
+    echo "  SKILLS_ORDEN: $esperadas" >&2
+    exit 2
+  fi
+
   echo "| Skill | Qué hace |"
   echo "|---|---|"
   for nombre in $SKILLS_ORDEN; do
@@ -157,8 +169,44 @@ if [ "${1:-}" = "--test" ]; then
     sh "$HERE/scripts/gen-readme.sh" --check >/dev/null 2>&1
   check "--check con el README viejo sale 1" 1 "$?"
 
+  printf '# t\n{{STACK}}\n' > "$tmp/tmpl-rota.md"
+  printf 'README viejo\n' > "$tmp/README-rota.md"
+  DEVKIT_GEN_README_TMPL="$tmp/tmpl-rota.md" DEVKIT_GEN_README_README="$tmp/README-rota.md" \
+    DEVKIT_GEN_README_GEN_STACK="$tmp/no-existe.sh" sh "$HERE/scripts/gen-readme.sh" >/dev/null 2>&1
+  check "si gen-stack.sh falla, gen-readme.sh sale con error (H2a)" 2 "$?"
+  check "si gen-stack.sh falla, el README no se toca (H2a)" \
+    'README viejo' "$(cat "$tmp/README-rota.md")"
+
+  mkdir -p "$tmp/skills-intrusa/una-skill" "$tmp/skills-intrusa/otra-skill" "$tmp/skills-intrusa/intrusa"
+  printf -- '---\nname: una-skill\ndescription: Hace una cosa.\n---\n' > "$tmp/skills-intrusa/una-skill/SKILL.md"
+  printf -- '---\nname: otra-skill\ndescription: Hace otra cosa.\n---\n' > "$tmp/skills-intrusa/otra-skill/SKILL.md"
+  printf -- '---\nname: intrusa\ndescription: No está en SKILLS_ORDEN.\n---\n' > "$tmp/skills-intrusa/intrusa/SKILL.md"
+  DEVKIT_GEN_README_TMPL="$tmp/tmpl-skills.md" DEVKIT_GEN_README_SKILLS_DIR="$tmp/skills-intrusa" \
+    DEVKIT_GEN_README_SKILLS_ORDEN="una-skill otra-skill" sh "$HERE/scripts/gen-readme.sh" --imprimir >/dev/null 2>&1
+  check "skill fuera de SKILLS_ORDEN falla en vez de omitirse (H2c)" 2 "$?"
+
+  printf '# t\n{{SKILLS}}\n' > "$tmp/tmpl-skills-falta.md"
+  printf 'README viejo con skills\n' > "$tmp/README-skills.md"
+  DEVKIT_GEN_README_TMPL="$tmp/tmpl-skills-falta.md" DEVKIT_GEN_README_README="$tmp/README-skills.md" \
+    DEVKIT_GEN_README_SKILLS_DIR="$tmp/skills" \
+    DEVKIT_GEN_README_SKILLS_ORDEN="una-skill otra-skill falta-skill" \
+    sh "$HERE/scripts/gen-readme.sh" >/dev/null 2>&1
+  check "si falta una skill de SKILLS_ORDEN, sale con error (H2d)" 2 "$?"
+  check "si falta una skill de SKILLS_ORDEN, el README no queda truncado (H2d)" \
+    'README viejo con skills' "$(cat "$tmp/README-skills.md")"
+
+  sh "$HERE/scripts/gen-readme.sh" --chek >/dev/null 2>&1
+  check "argumento desconocido se rechaza (H2e)" 2 "$?"
+
   exit $fail
 fi
+
+# Un argumento que no sea uno de los tres de abajo caía al modo escritura y
+# salía 0 sin avisar del typo (H2e, DEVKIT-88).
+case "${1:-}" in
+  '' | --check | --imprimir) ;;
+  *) echo "uso: gen-readme.sh [--check | --imprimir]" >&2; exit 2 ;;
+esac
 
 # SKILLS_ORDEN se puede anular por variable de entorno, solo para la
 # autoprueba de arriba: fuera de --test nunca se define, así que se usa la
@@ -185,4 +233,9 @@ if [ "${1:-}" = "--check" ]; then
   exit 1
 fi
 
-armar > "$README"
+# Arma en un archivo temporal y solo pisa $README si todo salió bien: un
+# fallo a mitad de armar (una skill sin sumar a SKILLS_ORDEN, un ARG
+# renombrado) no debe dejar el README truncado (H2d, DEVKIT-88).
+nuevo="$(mktemp)"; trap 'rm -f "$nuevo"' EXIT
+armar > "$nuevo"
+mv "$nuevo" "$README"

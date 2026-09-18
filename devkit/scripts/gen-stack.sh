@@ -38,21 +38,9 @@ linea() {  # linea <extensions.toml>
   printf 'Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: %s.\n' "$ids"
 }
 
-# Las herramientas listadas son las que trae la imagen con una versión fija en
-# el Dockerfile (ARG ..._VERSION); no incluye Debian ni Python, sin versión
-# propia fijada ahí.
-versiones() {  # versiones <Dockerfile>
-  uv="$(sed -n 's/^ARG UV_VERSION=\(.*\)/\1/p' "$1")"
-  gh="$(sed -n 's/^ARG GH_VERSION=\(.*\)/\1/p' "$1")"
-  rclone="$(sed -n 's/^ARG RCLONE_VERSION=\(.*\)/\1/p' "$1")"
-  bws="$(sed -n 's/^ARG BWS_VERSION=\(.*\)/\1/p' "$1")"
-  starship="$(sed -n 's/^ARG STARSHIP_VERSION=\(.*\)/\1/p' "$1")"
-  openvscode="$(sed -n 's/^ARG OPENVSCODE_VERSION=\(.*\)/\1/p' "$1")"
-  printf 'Versiones fijadas en `devkit/Dockerfile`: uv %s, gh %s, rclone %s, bws %s, starship %s, openvscode-server %s.\n' \
-    "$uv" "$gh" "$rclone" "$bws" "$starship" "$openvscode"
-}
-
-# Lee el valor de un ARG del Dockerfile; falla si no existe o quedó vacío.
+# Lee el valor de un ARG del Dockerfile; falla si no existe o quedó vacío
+# (un ARG renombrado no debe pasar desapercibido como versión en blanco,
+# H2 DEVKIT-88).
 arg_valor() {  # arg_valor <Dockerfile> <ARG>
   valor="$(sed -n "s/^ARG $2=\\(.*\\)/\\1/p" "$1" | head -1)"
   if [ -z "$valor" ]; then
@@ -60,6 +48,20 @@ arg_valor() {  # arg_valor <Dockerfile> <ARG>
     return 1
   fi
   printf '%s' "$valor"
+}
+
+# Las herramientas listadas son las que trae la imagen con una versión fija en
+# el Dockerfile (ARG ..._VERSION); no incluye Debian ni Python, sin versión
+# propia fijada ahí.
+versiones() {  # versiones <Dockerfile>
+  uv="$(arg_valor "$1" UV_VERSION)" || return 1
+  gh="$(arg_valor "$1" GH_VERSION)" || return 1
+  rclone="$(arg_valor "$1" RCLONE_VERSION)" || return 1
+  bws="$(arg_valor "$1" BWS_VERSION)" || return 1
+  starship="$(arg_valor "$1" STARSHIP_VERSION)" || return 1
+  openvscode="$(arg_valor "$1" OPENVSCODE_VERSION)" || return 1
+  printf 'Versiones fijadas en `devkit/Dockerfile`: uv %s, gh %s, rclone %s, bws %s, starship %s, openvscode-server %s.\n' \
+    "$uv" "$gh" "$rclone" "$bws" "$starship" "$openvscode"
 }
 
 # Versión de cada fila de stack.tsv, por id. Los ids sin versión propia
@@ -162,6 +164,10 @@ if [ "${1:-}" = "--test" ]; then
     'Versiones fijadas en `devkit/Dockerfile`: uv 1.2.3, gh 4.5.6, rclone 7.8.9, bws 1.0.0, starship 2.0.0, openvscode-server 3.0.0.' \
     "$(versiones "$tmp/Dockerfile")"
 
+  printf 'ARG UV_RENOMBRADO=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-sin-uv"
+  versiones "$tmp/Dockerfile-sin-uv" >/dev/null 2>&1
+  check "versiones falla si un ARG se renombró (H2b)" 1 "$?"
+
   printf 'ARG BASE_IMAGE=debian:trixie-slim\nARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-tabla"
   printf 'FROM alpine:3.22\n' > "$tmp/proxy-Dockerfile"
   printf 'docker | Docker | Sin versión propia.\ndebian | Debian | Base sin lenguaje.\ntinyproxy | tinyproxy | Proxy de salida.\nuv | uv | Gestiona Python.\n' > "$tmp/stack.tsv"
@@ -190,7 +196,7 @@ PROXY_DOCKERFILE="${DEVKIT_GEN_STACK_PROXY_DOCKERFILE:-$HERE/proxy/Dockerfile}"
 
 if [ "${1:-}" = "--versiones" ]; then
   [ -f "$DOCKERFILE" ] || { echo "gen-stack.sh: no existe $DOCKERFILE" >&2; exit 2; }
-  versiones "$DOCKERFILE"
+  versiones "$DOCKERFILE" || exit 2
   exit 0
 fi
 
