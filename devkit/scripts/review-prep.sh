@@ -172,9 +172,17 @@ if [ "$clasificacion" = codigo ]; then
     if [ "$resultado" = Verificado ]; then check_ok=$((check_ok + 1)); else check_fail=$((check_fail + 1)); fi
     filas="$filas
 - **$nombre**: $resultado${salida:+
-  \`\`\`
-  $salida
-  \`\`\`}"
+\`\`\`
+$salida
+\`\`\`}"
+  }
+
+  # Para una autoprueba (devkit-run.sh --test, watch-test.sh) la salida
+  # completa en `Falla` puede ser cientos de líneas (H6 de la revisión del PR
+  # 67): se recorta a las líneas `FAIL` y las últimas diez, que es lo que
+  # hace falta para juzgar el hallazgo.
+  resumen_autoprueba() {
+    { grep -E '^FAIL ' <<<"$1"; tail -n10 <<<"$1"; } | awk '!v[$0]++'
   }
 
   # bash -n de cada .sh tocado.
@@ -217,14 +225,14 @@ if [ "$clasificacion" = codigo ]; then
     if salida=$(bash "$worktree/devkit/scripts/devkit-run.sh" --test 2>&1); then
       agregar_fila "devkit-run.sh --test" Verificado
     else
-      agregar_fila "devkit-run.sh --test" Falla "$salida"
+      agregar_fila "devkit-run.sh --test" Falla "$(resumen_autoprueba "$salida")"
     fi
   fi
   if grep -qE '^devkit/scripts/watch(-test)?\.sh$' <<<"$archivos"; then
     if salida=$(bash "$worktree/devkit/scripts/watch-test.sh" 2>&1); then
       agregar_fila "watch-test.sh" Verificado
     else
-      agregar_fila "watch-test.sh" Falla "$salida"
+      agregar_fila "watch-test.sh" Falla "$(resumen_autoprueba "$salida")"
     fi
   fi
 
