@@ -94,6 +94,12 @@ if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
   err "el workspace tiene cambios sin commit; no puedo iniciar $clave sin mezclar trabajo de otra card."
   exit 1
 fi
+# Esta comprobación ya corrió antes de que el agente arrancara: si necesita
+# repetirla más adelante en la sesión, su propio `claude -p` puede aparecer
+# en el resultado de `--otros-agentes` como `propio: <pid> ...` (DEVKIT-54,
+# DEVKIT-63, DEVKIT-77). El agente nunca debe correr su propio `ps`/`pgrep`
+# para desconfiar de este resultado, ni interpretar ese `propio:` como un
+# agente ajeno.
 if ! otros=$("$DEVKIT_RUN" --otros-agentes 2>&1); then
   err "otro agente ocupa el workspace: $(printf '%s' "$otros" | tr '\n' ' ')"
   exit 1
