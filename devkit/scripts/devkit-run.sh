@@ -1148,17 +1148,22 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
 # se recorre el archivo a mano con `BASH_REMATCH`, sin ese límite. El grupo
 # modelo/esfuerzo/ronda es opcional: una línea vieja (DEVKIT-81) cae en las
 # ramas `${BASH_REMATCH[n]:--}`.
+# DEVKIT-81 H6: `grep -nF` filtra primero -recorre el archivo entero una sola
+# vez, en C- y deja para el `while`/`BASH_REMATCH` (bash puro, mucho más
+# lento por línea) solo las líneas "lanzando", casi siempre una fracción
+# chica del log. Sin este filtro, `agentes_en_curso_rapido` -que llama a
+# `lanzamientos` en cada prompt del shell, con el presupuesto de 50 ms de
+# `prompt-status.sh`- tardaba cerca de 1 s con un watch.log de 20 000 líneas.
 lanzamientos() {  # lanzamientos <watch.log>
   [ -f "$1" ] || return 0
-  local ln=0 linea
+  local ln resto
   local re='^([^ ]+) ([^ ]+) lanzando \(origen=([^)]*)\)( modelo=([^ ]+) esfuerzo=([^ ]+) ronda=([^:]+))?: "(.*)" log=([^ ]+)$'
-  while IFS= read -r linea; do
-    ln=$((ln + 1))
-    [[ $linea =~ $re ]] || continue
+  while IFS=: read -r ln resto; do
+    [[ $resto =~ $re ]] || continue
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ln" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" \
       "${BASH_REMATCH[3]}" "${BASH_REMATCH[8]}" "${BASH_REMATCH[9]}" \
       "${BASH_REMATCH[5]:--}" "${BASH_REMATCH[6]:--}" "${BASH_REMATCH[7]:--}"
-  done < "$1"
+  done < <(grep -nF ' lanzando (origen=' "$1")
 }
 
 hace() {  # hace <segundos>
@@ -2745,6 +2750,23 @@ FIN
   check "sin registro: un lanzamiento fuera de la cola visible sigue contando como activo" 0 \
     "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
+  # DEVKIT-81 H6: `lanzamientos()` filtra primero con `grep -nF` antes del
+  # `while`/`BASH_REMATCH` en bash puro. Con 20 000 líneas, la versión sin
+  # filtrar tardaba cerca de 1 s; `agentes_en_curso_rapido` la llama en cada
+  # prompt del shell, con un presupuesto de 50 ms (`prompt-status.sh`).
+  local log_grande t0_grande t1_grande ms_grande
+  log_grande="$tmp/grande-watch.log"
+  : >"$log_grande"
+  for i in $(seq 1 19980); do printf '2026-09-16T11:00:00Z ruido de relleno %s\n' "$i"; done >>"$log_grande"
+  printf '2026-09-16T11:59:58Z task-fix-grande lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-88" log=%s/task-fix-grande.log\n' \
+    "$est" >>"$log_grande"
+  t0_grande=$(date +%s%N)
+  lanzamientos "$log_grande" >/dev/null
+  t1_grande=$(date +%s%N)
+  ms_grande=$(( (t1_grande - t0_grande) / 1000000 ))
+  check "lanzamientos con 20 000 líneas corre bajo 300ms" si \
+    "$([ "$ms_grande" -lt 300 ] && echo si || echo "no (${ms_grande}ms)")"
 
   # DEVKIT-81: una fila `en curso` que pasa SKILL_TIMEOUT se marca `lento`,
   # igual que la alarma de watch_long_running en watch.sh.
