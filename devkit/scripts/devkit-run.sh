@@ -2589,12 +2589,19 @@ FIN
   git -C "$rp_dir/ws" push -q -u origin main
   git -C "$rp_dir/ws" switch -q -c feat/DEVKIT-9302-probar-review-prep
   # Un devkit-run.sh de mentira: falla si `DEVKIT_RONDA` sigue exportada
-  # cuando la comprobación mecánica "devkit-run.sh --test" lo corre, para que
-  # H2 delate si review-prep.sh no anuló el entorno heredado.
+  # cuando la comprobación mecánica "devkit-run.sh --test" lo corre (para que
+  # H2 delate si review-prep.sh no anuló el entorno heredado), o si SIGINT le
+  # llega ignorado (para que H8 delate si review-prep.sh no lo restauró antes
+  # de encadenar la autoprueba).
   cat >"$rp_dir/ws/devkit/scripts/devkit-run.sh" <<'FIN'
 #!/usr/bin/env bash
 if [ "${DEVKIT_RONDA:-}" = "-" ]; then
   echo "DEVKIT_RONDA se filtró a la comprobación mecánica" >&2
+  exit 1
+fi
+sigign=$(awk '/^SigIgn:/ {print $2}' /proc/self/status 2>/dev/null)
+if [ -n "$sigign" ] && [ $(( 0x$sigign & 2 )) -ne 0 ]; then
+  echo "SIGINT llegó ignorado a la comprobación mecánica" >&2
   exit 1
 fi
 exit 0
@@ -2638,6 +2645,15 @@ FIN
     bash "$HERE/review-prep.sh" 9302 >"$rp_dir/salida-3.out" 2>"$rp_dir/salida-3.err"
   check "review-prep.sh de verdad: DEVKIT_RONDA=- no se filtra a devkit-run.sh --test (H2)" 1 \
     "$(grep -c '\*\*devkit-run.sh --test\*\*: Verificado' "$rp_dir/salida-3.out")"
+
+  # `watch.sh:496` lanza su `--sync` con `&` desde un shell no interactivo:
+  # SIGINT le llega ignorado a ese job y a todo lo que corre debajo. `trap ''
+  # INT` reproduce esa herencia para esta corrida.
+  ( trap '' INT
+    env "${rp_env[@]}" bash "$HERE/review-prep.sh" 9302 >"$rp_dir/salida-4.out" 2>"$rp_dir/salida-4.err"
+  )
+  check "review-prep.sh de verdad: SIGINT heredado ignorado no filtra Falla falsos (H8)" 1 \
+    "$(grep -c '\*\*devkit-run.sh --test\*\*: Verificado' "$rp_dir/salida-4.out")"
 
   # --- review-publish.sh de verdad: no confunde un informe distinto con un
   # reintento del mismo (H7 de la revisión del PR 67) -------------------------

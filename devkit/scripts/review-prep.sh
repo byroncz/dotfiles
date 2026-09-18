@@ -221,15 +221,23 @@ $salida
   fi
 
   # devkit-run.sh --test y watch-test.sh, solo si el diff los toca.
+  # `watch.sh` lanza su propio `--sync` en segundo plano (`&`) desde un shell
+  # no interactivo: bash ignora SIGINT para ese job y ninguna de las
+  # autopruebas que corren debajo puede reactivarlo con `trap` (H8 de la
+  # revisión del PR 67). Las pruebas "Ctrl-C en --seguir" de devkit-run.sh
+  # reportan entonces un `Falla` que no existe. `perl` sí puede restaurar la
+  # disposición por defecto antes de encadenar el `exec`, así que la bash que
+  # arranca el `--test` ya no hereda SIGINT ignorado.
+  sigint_default=(perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV')
   if grep -qxF "devkit/scripts/devkit-run.sh" <<<"$archivos"; then
-    if salida=$(bash "$worktree/devkit/scripts/devkit-run.sh" --test 2>&1); then
+    if salida=$("${sigint_default[@]}" bash "$worktree/devkit/scripts/devkit-run.sh" --test 2>&1); then
       agregar_fila "devkit-run.sh --test" Verificado
     else
       agregar_fila "devkit-run.sh --test" Falla "$(resumen_autoprueba "$salida")"
     fi
   fi
   if grep -qE '^devkit/scripts/watch(-test)?\.sh$' <<<"$archivos"; then
-    if salida=$(bash "$worktree/devkit/scripts/watch-test.sh" 2>&1); then
+    if salida=$("${sigint_default[@]}" bash "$worktree/devkit/scripts/watch-test.sh" 2>&1); then
       agregar_fila "watch-test.sh" Verificado
     else
       agregar_fila "watch-test.sh" Falla "$(resumen_autoprueba "$salida")"
