@@ -1960,17 +1960,21 @@ costos_filas() {  # costos_filas <archivo> [Clave]
 # Turnos, costo, minutos y revisiones (lanzamientos de pr-review) de una
 # card, sumando solo lo presente en costos.log. La usan la fila TOTAL de
 # `--costos <Clave>` y task-close.sh, para la línea "Costo: ..." del
-# comentario de cierre (misma función, DEVKIT-89 criterio 4).
+# comentario de cierre (misma función, DEVKIT-89 criterio 4). Sin filas para
+# la Clave, no imprime nada: un "0 turnos, 0 USD" sería una medición
+# inventada, no una lectura de costos.log (H5 de pr-review en DEVKIT-89).
 costos_totales_card() {  # costos_totales_card <Clave>
-  local clave=$1 turnos_tot=0 costo_tot=0 dur_tot=0 revisiones=0
+  local clave=$1 turnos_tot=0 costo_tot=0 dur_tot=0 revisiones=0 filas=0
   local ts c_clave skill id modelo esfuerzo ronda t c d
   while IFS=$'\t' read -r ts c_clave skill id modelo esfuerzo ronda t c d; do
     [ -n "$skill" ] || continue
+    filas=1
     [ "$skill" != pr-review ] || revisiones=$((revisiones + 1))
     [ "$t" = - ] || turnos_tot=$((turnos_tot + t))
     [ "$c" = - ] || costo_tot=$(awk -v a="$costo_tot" -v b="$c" 'BEGIN{printf "%.4f", a+b}')
     [ "$d" = - ] || dur_tot=$((dur_tot + d))
   done < <(costos_filas "${COSTOS_LOG:-/dev/null}" "$clave")
+  [ "$filas" = 1 ] || return 1
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
 }
 
@@ -4128,6 +4132,8 @@ FIN
   check "costos_totales_card suma turnos, costo y minutos; cuenta 1 revisión" \
     "14	0.3600	3	1" \
     "$(costos_totales_card DEVKIT-77)"
+  check "costos_totales_card sin filas no inventa un 0 turnos, 0 USD (H5)" 1 \
+    "$(costos_totales_card DEVKIT-999 >/dev/null 2>&1; echo $?)"
 
   check "costos_tabla_card muestra la fila TOTAL con lo mismo que costos_totales_card" 1 \
     "$(costos_tabla_card DEVKIT-77 | grep -c '^TOTAL.*14.*0.3600.*3 (1 revisiones)')"
