@@ -41,10 +41,13 @@ verdict=$(printf '%s' "$marcador" | sed -nE 's/.*verdict=([A-Z]+).*/\1/p')
 # Idempotente: si un paso de más abajo (gh pr view, Notion) falla y la skill
 # manda repetir este script (paso 4 de `pr-review`), no publica el mismo
 # informe dos veces sobre el mismo head (H4 de la revisión del PR 67).
-ultimo_marcador=$("$GH" pr view "$numero" --json reviews \
-  --jq '[.reviews[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body' 2>/dev/null \
-  | grep -m1 -oE '<!-- devkit-review sha=[0-9a-f]+ verdict=(OK|CAMBIOS) -->')
-if [ "$ultimo_marcador" = "$marcador" ]; then
+# Compara el cuerpo completo, no solo el marcador: dos informes sobre el
+# mismo head y el mismo veredicto pueden tener marcadores idénticos y no ser
+# el mismo informe -por ejemplo, uno posterior a una respuesta de task-fix
+# sin push (H7 de la revisión del PR 67)-, y ese sí hay que publicarlo.
+ultimo_cuerpo=$("$GH" pr view "$numero" --json reviews \
+  --jq '[.reviews[] | select(.body | test("<!-- devkit-review "))] | sort_by(.submittedAt) | last | .body' 2>/dev/null)
+if [ -n "$ultimo_cuerpo" ] && [ "$ultimo_cuerpo" = "$(cat "$archivo")" ]; then
   echo "review-publish: PR $numero, informe ya publicado para ese head, no lo repito"
 elif ! "$GH" pr review --comment --body-file "$archivo" "$numero" >/dev/null; then
   err "gh pr review --comment falló sobre el PR $numero"

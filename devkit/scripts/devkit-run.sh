@@ -2639,6 +2639,34 @@ FIN
   check "review-prep.sh de verdad: DEVKIT_RONDA=- no se filtra a devkit-run.sh --test (H2)" 1 \
     "$(grep -c '\*\*devkit-run.sh --test\*\*: Verificado' "$rp_dir/salida-3.out")"
 
+  # --- review-publish.sh de verdad: no confunde un informe distinto con un
+  # reintento del mismo (H7 de la revisión del PR 67) -------------------------
+  # Caso de DEVKIT-22: el head no cambió y el veredicto se repite (CAMBIOS),
+  # pero un informe nuevo trae hallazgos distintos al último publicado -por
+  # ejemplo, porque task-fix respondió después de ese informe-. El marcador
+  # (sha+verdict) es idéntico al de arriba; solo el cuerpo cambia.
+  local rpub_dir
+  rpub_dir=$(mktemp -d "$tmp/rpub.XXXXXX")
+  cat >"$rpub_dir/informe-nuevo.md" <<'FIN'
+<!-- devkit-review sha=abc123 verdict=CAMBIOS -->
+Informe nuevo, con hallazgos distintos al anterior.
+FIN
+  cat >"$rpub_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$1 $2" >>"$(dirname "$0")/llamadas"
+case "$1 $2" in
+  "pr view")
+    printf '<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\nInforme anterior, con otros hallazgos.'
+    ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub_dir/gh-doble"
+  DEVKIT_WS="$rpub_dir" DEVKIT_GH_BIN="$rpub_dir/gh-doble" \
+    bash "$HERE/review-publish.sh" 9303 "$rpub_dir/informe-nuevo.md" >"$rpub_dir/salida.out" 2>"$rpub_dir/salida.err"
+  check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
+    "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
+
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
   # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.
