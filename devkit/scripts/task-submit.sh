@@ -171,18 +171,20 @@ rm -f "$push_err"
 diff_lineas=$(git -C "$WS" diff --numstat origin/main...HEAD 2>/dev/null \
   | awk '{a=$1; d=$2; if (a !~ /^[0-9]+$/) a=0; if (d !~ /^[0-9]+$/) d=0; suma+=a+d} END{print suma+0}')
 
-cuerpo="$(cat "$PR_BODY_FILE")"
-if [ "$diff_lineas" -gt 300 ] 2>/dev/null; then
-  cuerpo="$cuerpo
-
-Diff grande: $diff_lineas líneas"
-fi
-cuerpo="$cuerpo
+cuerpo="$(cat "$PR_BODY_FILE")
 
 ## Card
 $card_url
 
 Implementado con ${DEVKIT_MODEL:-sin registrar}, esfuerzo ${DEVKIT_EFFORT:-sin registrar}"
+if [ "$diff_lineas" -gt 300 ] 2>/dev/null; then
+  # Después de "## Card", nunca antes: `task-document.sh` (`seccion`) corta
+  # cada sección del cuerpo hasta el siguiente "## ", y este aviso no es
+  # parte de "Cambios requeridos" (H2 del informe sobre el PR #68).
+  cuerpo="$cuerpo
+
+Diff grande: $diff_lineas líneas"
+fi
 
 pr_existente=$(cd "$WS" && "$GH" pr view "$rama" --json url,number 2>/dev/null)
 if [ -n "$pr_existente" ]; then

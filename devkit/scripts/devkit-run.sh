@@ -4728,6 +4728,31 @@ FIN
   check "task-submit (PR existente): el cuerpo editado trae el cambio nuevo" 1 \
     "$(grep -c 'Cambio nuevo sobre el PR existente' "$ts_dir/cuerpo-edit")"
 
+  # Diff grande (DEVKIT-94, H2 del informe sobre el PR #68): el aviso va
+  # después de "## Card", nunca dentro de "## Cambios requeridos" -esa
+  # sección la copia tal cual `task-document.sh` (`seccion`) a la entrada de
+  # Documentación y, de ahí, a la card de release.
+  rm -f "$ts_dir/set-llamadas" "$ts_dir/comentar-llamadas" "$ts_dir/cuerpo-edit"
+  seq 1 400 >"$ts_dir/ws/archivo-grande.txt"
+  cat >"$ts_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+Un archivo grande.
+
+## Cómo probarlo
+N/A
+
+## Cambios requeridos
+Ninguno.
+FIN
+  env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): diff grande" >/dev/null 2>&1
+  check "task-submit (diff grande): avisa en el cuerpo" 1 \
+    "$(grep -cE '^Diff grande: [0-9]+ líneas$' "$ts_dir/cuerpo-edit")"
+  check "task-submit (diff grande): el aviso queda después de \"## Card\", no antes" 1 \
+    "$([ "$(grep -n '^Diff grande:' "$ts_dir/cuerpo-edit" | head -1 | cut -d: -f1)" -gt \
+        "$(grep -n '^## Card' "$ts_dir/cuerpo-edit" | head -1 | cut -d: -f1)" ] 2>/dev/null && echo 1 || echo 0)"
+  check "task-submit (diff grande): \"Cambios requeridos\" no lo incluye" "Ninguno." \
+    "$(awk '/^## Cambios requeridos/{c=1;next} /^## /{c=0} c && NF' "$ts_dir/cuerpo-edit")"
+
   # Verificación que falla (bash -n sobre un .sh tocado): no comitea, no
   # sube, no toca el PR ni la card, y deja el error en stderr.
   rm -f "$ts_dir/set-llamadas" "$ts_dir/comentar-llamadas"
