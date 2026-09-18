@@ -516,12 +516,17 @@ run_skill() {
     if "$DEVKIT_RUN" --pregunta-abierta "$resultado"; then
       log "ALARMA: $name terminó con una pregunta abierta en vez de un estado observable"
     fi
+  elif [ $rc -eq 3 ]; then
+    # DEVKIT-93: review-prep.sh (dentro de `run_claude`) decidió que no había
+    # nada que revisar antes de gastar un turno de Opus; no es un error, así
+    # que no hay ALARMA. El motivo va en texto plano en $logf, no JSON.
+    log "$name no lanzó: nada que revisar ($(tr '\n' ' ' < "$logf" 2>/dev/null | sed -E 's/[[:space:]]+$//'))"
   else
     # Alarma 3 de 4: cualquier skill que termina con error.
     log "ALARMA: $name terminó con error (rc=$rc): $summary; ver $logf"
   fi
   work_state
-  if [ $rc -ne 0 ] && quota_hit "$logf"; then
+  if [ $rc -ne 0 ] && [ $rc -ne 3 ] && quota_hit "$logf"; then
     quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado"
   fi
   return $rc
