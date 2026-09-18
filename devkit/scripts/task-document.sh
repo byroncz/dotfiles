@@ -96,7 +96,7 @@ HALLAZGOS='
     )
 | . as $final
 | [ $final.estado | to_entries[] | select(.value == "Corregido") | {id: .key, texto: ($final.defs[.key] // "")} ]
-| sort_by(.id)
+| sort_by(.id | ltrimstr("H") | tonumber)
 '
 
 # --- Punto de entrada real (no --test) --------------------------------------
