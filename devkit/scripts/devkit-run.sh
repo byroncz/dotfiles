@@ -1209,8 +1209,16 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   local full_lanz
   full_lanz=$(lanzamientos "$wlog")
   local -a prompts_vistos=()
-  while IFS=$'\t' read -r _ _ _ _ p _ _ _ _; do
-    [ -n "$p" ] && prompts_vistos+=("$p")
+  # Solo los lanzamientos sin resumen final (DEVKIT-81 H11): uno que ya
+  # terminó, falló o no arrancó no puede explicar un `claude -p` vivo, así
+  # que compararlo daba un falso "registrado" cuando el prompt se repite en
+  # un lanzamiento posterior (por ejemplo, el mismo PR revisado dos veces).
+  while IFS=$'\t' read -r ln _ id _ p _ _ _ _; do
+    [ -n "$p" ] || continue
+    if ! tail -n +"$((ln + 1))" "$wlog" | grep -q -E \
+        "^[^ ]+ ($id terminado: |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]\$)"; then
+      prompts_vistos+=("$p")
+    fi
   done <<<"$full_lanz"
   while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda <&3; do
     skill=${prompt%% *}
@@ -2782,6 +2790,28 @@ FIN
   chmod +x "$pslist_cola"
   check "sin registro: un lanzamiento fuera de la cola visible sigue contando como activo" 0 \
     "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
+  # DEVKIT-81 H11: un lanzamiento que ya terminó no debe seguir "cubriendo"
+  # a un `claude -p` vivo que repite su mismo prompt -por ejemplo, la misma
+  # revisión relanzada a mano después de que la primera terminó.
+  local log_repetido pslist_repetido
+  log_repetido="$tmp/repetido-watch.log"
+  : >"$est/pr-review-58.log"
+  printf '%s pr-review-58 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/pr-review 58" log=%s/pr-review-58.log\n' \
+    "$(date -u -d "@$((ahora - 60))" +%FT%TZ)" "$est" >"$log_repetido"
+  printf '%s devkit-run "/pr-review 58" terminado [pr-review-58]: modelo=opus esfuerzo=high ronda=1 :: ok\n' \
+    "$(date -u -d "@$((ahora - 30))" +%FT%TZ)" >>"$log_repetido"
+  pslist_repetido="$tmp/ps-repetido"
+  cat >"$pslist_repetido" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+901 claude -p /pr-review 58 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_repetido"
+  check "sin registro: un lanzamiento ya terminado no cubre un claude -p vivo que repite su prompt" 1 \
+    "$(PS_BIN="$pslist_repetido" LOCK="$est/skill.lock" estado_filas "$log_repetido" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H6: `lanzamientos()` filtra primero con `grep -nF` antes del
