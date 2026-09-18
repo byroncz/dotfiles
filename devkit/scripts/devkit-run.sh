@@ -2796,6 +2796,37 @@ FIN
   check "senal_bucle: vivo no se pinta aunque se pida color" "bucle: vivo, último tick hace 1m" \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_log" "$ahora" 1)"
 
+  # DEVKIT-81 H5, regla sin excepción: un `claude -p` vivo de cada origen real
+  # -humano (terminal), bucle (run_skill lanza pr-review/task-fix/
+  # task-document, y watch.sh también lanza task-next.sh con este origen tras
+  # el OK), task-close (task-close.sh lo declara, y encadena task-next.sh con
+  # el mismo origen tras el merge) y epic-plan (detectado por ancestro)-
+  # aparece `en curso` con su origen, nunca `sin registro`. `ps` trae las dos
+  # entradas de un lanzamiento real: el `bash devkit-run.sh --worker` con el
+  # log (lo que ve la fila principal) y el `claude -p` hijo (lo que ve
+  # `filas_sin_registro`).
+  local origen_prueba
+  for origen_prueba in humano bucle task-close epic-plan; do
+    local log_origen pslist_origen logf_origen
+    logf_origen="$est/task-fix-origen-$origen_prueba.log"
+    : >"$logf_origen"
+    log_origen="$tmp/origen-$origen_prueba-watch.log"
+    printf '%s task-fix-origen-%s lanzando (origen=%s) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-155" log=%s\n' \
+      "$(date -u -d "@$((ahora - ESTADO_GRACIA - 10))" +%FT%TZ)" "$origen_prueba" "$origen_prueba" "$logf_origen" >"$log_origen"
+    pslist_origen="$tmp/ps-origen-$origen_prueba"
+    cat >"$pslist_origen" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+701 bash devkit-run.sh --worker /task-fix DEVKIT-155 $logf_origen opus high 40
+702 claude -p /task-fix DEVKIT-155 --model opus --effort high --output-format json
+TABLA
+FIN
+    chmod +x "$pslist_origen"
+    check "origen $origen_prueba: en curso con su origen, sin sin registro" "en curso|$origen_prueba|0" \
+      "$(PS_BIN="$pslist_origen" LOCK="$est/skill.lock" estado_filas "$log_origen" "$ahora" \
+          | awk -F'\t' -v c=DEVKIT-155 'BEGIN{estado="";origen="";sr=0} $2==c{estado=$5;origen=$3} $5=="sin registro"{sr++} END{print estado"|"origen"|"sr}')"
+  done
+
   # DEVKIT-81 H3: cada renglón del cuadro lleva `\033[K` al final -incluido el
   # último, antes del salto de línea que agrega `printf`-, para que un
   # renglón más corto que en el cuadro anterior no deje texto viejo pegado a
