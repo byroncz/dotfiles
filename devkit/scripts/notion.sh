@@ -102,7 +102,7 @@ err() { printf 'notion.sh: %s\n' "$*" >&2; }
 api() {
   local method=$1 path=$2 body=${3:-} token out code intento=1
   if [ ! -s "$TOKEN_FILE" ]; then
-    err "falta el secreto notion_token ($TOKEN_FILE); ver README, sección Notion por token"
+    err "falta el secreto notion_token ($TOKEN_FILE); ver README, sección Integraciones"
     return 3
   fi
   token=$(tr -d '[:space:]' <"$TOKEN_FILE")
