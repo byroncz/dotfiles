@@ -69,6 +69,12 @@
 #                                                    si está libre, 1 si no
 #   devkit-run --pregunta-abierta "<resultado>"     sale 0 si el resultado es una
 #                                                    pregunta abierta, 1 si no
+#   devkit-run --presupuesto-corte <prompt> <log>
+#     <presupuesto> <turnos> [clave]                si <turnos> excede <presupuesto>,
+#                                                    bloquea la card con task-block.sh
+#                                                    (DEVKIT-94); <clave> es obligatoria
+#                                                    para pr-review, que no la trae en
+#                                                    el prompt
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
@@ -986,10 +992,13 @@ task_begin_fallo() {  # task_begin_fallo <prompt> <clave> <motivo>
   esac
 }
 
-forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma>
-  local prompt=$1 logf=$2 motivo=$3 alarma=$4 skill clave estado
+forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma> [clave]
+  local prompt=$1 logf=$2 motivo=$3 alarma=$4 clave=${5:-} skill estado
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
-  clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  # `/pr-review <N>` no trae Clave en el prompt: quien la conoce (watch.sh,
+  # por el título del PR) la pasa explícita en vez de que se pierda en el
+  # regex de abajo (DEVKIT-94, H1 del informe sobre el PR #68).
+  [ -n "$clave" ] || clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   if [ -z "$clave" ]; then
     printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
     return 0
@@ -5061,6 +5070,23 @@ $card_md"
     # llamadas usen la misma regla.
     pregunta_abierta "${2:-}"
     exit $?
+    ;;
+  --presupuesto-corte)
+    # --presupuesto-corte <prompt> <logf> <presupuesto> <turnos> [clave]:
+    # DEVKIT-94, H1 del informe sobre el PR #68. El corte por presupuesto
+    # (línea ~5010 de `--worker`, más abajo) solo corría ahí; `watch.sh`
+    # lanza pr-review, task-fix y task-document con `--sync`, un camino que
+    # se quedaba solo con el aviso de `resumen` sin bloquear nunca la card.
+    # Mismo `forzar_task_block` que usa `--worker`, para no duplicar la
+    # regla; `clave` viaja aparte porque `/pr-review <N>` no la trae en el
+    # prompt.
+    if [ -n "${4:-}" ] && [ "${4:-}" != - ] && [ -n "${5:-}" ] \
+       && [ "${5:-}" -gt "${4:-}" ] 2>/dev/null; then
+      forzar_task_block "${2:-}" "${3:-}" \
+        "cortó por exceder el presupuesto de ${4:-} turnos de roles.toml (${5:-} usados)" \
+        "ALARMA: corte: presupuesto (${5:-} turnos, presupuesto ${4:-})" "${6:-}"
+    fi
+    exit 0
     ;;
   --estado)
     if [ "${2:-}" = --seguir ]; then seguir_estado; fi

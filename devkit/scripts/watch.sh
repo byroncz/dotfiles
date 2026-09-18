@@ -406,8 +406,8 @@ quota_reset_epoch() {
 # Pausa por cuota agotada: anota hasta cuándo y relanza al reanudarse. La
 # espera corre en segundo plano para que el bucle siga atendiendo otros PRs; el
 # candado de run_skill impide que el relanzamiento coincida con otra skill.
-quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intento> <log> [modelo forzado]
-  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 forzado=${6:-} epoch now wait until
+quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intento> <log> [modelo forzado] [Clave de Notion]
+  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 forzado=${6:-} clave=${7:-} epoch now wait until
   if [ "$key" != "-" ] && paused "$key"; then
     log "cuota agotada: $name ya tiene un relanzamiento programado; no se duplica"
     return
@@ -433,7 +433,7 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
     sleep "$wait"
     if [ "$key" != "-" ]; then unmark "cuota:$key"; mark "$key"; fi
     log "cuota reanudada: relanzando $name"
-    run_skill "$name" "$prompt" "$key" "$((attempt + 1))" "$forzado"
+    run_skill "$name" "$prompt" "$key" "$((attempt + 1))" "$forzado" "$clave"
   ) &
 }
 
@@ -463,8 +463,13 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 # <modelo forzado> (quinto argumento, opcional) reemplaza al modelo del rol:
 # lo usa el relanzamiento de un task-fix vacío (DEVKIT-57). El modelo con el
 # que corrió queda en ULTIMO_MODELO para quien llama.
+#
+# <clave> (sexto argumento, opcional): la Clave de Notion, para el corte por
+# presupuesto (DEVKIT-94). task-fix y task-document ya la traen en `prompt`
+# ("/task-fix DEVKIT-94 ..."); pr-review no ("/pr-review 68"), así que quien
+# la conoce por el título del PR la pasa aparte.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales
   logf="$RUN_DIR/$name.log"
   # `--rol` antes de la línea "lanzando" (DEVKIT-81): la fila de --estado
   # muestra modelo y esfuerzo desde que aparece, no solo al terminar. Costo:
@@ -520,9 +525,19 @@ run_skill() {
     # Alarma 3 de 4: cualquier skill que termina con error.
     log "ALARMA: $name terminó con error (rc=$rc): $summary; ver $logf"
   fi
+  # DEVKIT-94, H1 del informe sobre el PR #68: antes esto solo quedaba como
+  # aviso dentro de `summary` ("excede el presupuesto..."); pr-review,
+  # task-fix y task-document del ciclo automático corren por acá (`--sync`),
+  # así que el presupuesto de `presupuesto.<skill>` nunca bloqueaba nada aquí,
+  # solo en `--worker` (task-start manual, task-close, epic-plan).
+  turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
+  if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
+     && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
+    "$DEVKIT_RUN" --presupuesto-corte "$prompt" "$logf" "$presupuesto" "$turnos_reales" "$clave"
+  fi
   work_state
   if [ $rc -ne 0 ] && quota_hit "$logf"; then
-    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado"
+    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
   fi
   return $rc
 }
@@ -829,7 +844,10 @@ check_merged_prs() {
 # Hooks de prueba, sin GitHub y sin gastar cuota:
 #   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
 #   --quota-reset           imprime el epoch de reinicio que lee de ese texto
-#   --run-skill <n> <p>     una ejecución de run_skill, esperando su relanzamiento
+#   --run-skill <n> <p> [clave de launched] [Clave]
+#                           una ejecución de run_skill, esperando su
+#                           relanzamiento; <Clave> es la de Notion, para el
+#                           corte por presupuesto (DEVKIT-94)
 #   --cycle-cost <n> <log>  el costo total del ciclo de un PR, desde un log dado
 #   --merged-once           una pasada del bucle de PRs mergeados
 #   --block-pr <num> <Clave> <url> <head> <ciclos>
@@ -858,7 +876,7 @@ case "${1:-}" in
     exit 0
     ;;
   --run-skill)
-    run_skill "${2:-prueba}" "${3:-/noop}" "${4:--}"
+    run_skill "${2:-prueba}" "${3:-/noop}" "${4:--}" 1 "" "${5:-}"
     wait
     exit 0
     ;;
@@ -945,7 +963,10 @@ while true; do
             else
               log "PR #$num ($key) head $short sin informe: lanzando pr-review"
             fi
-            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head:$ref"
+            # `$key` (sexto argumento): `/pr-review <N>` no trae la Clave en
+            # el prompt, así que el corte por presupuesto (DEVKIT-94) la
+            # necesita aparte.
+            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head:$ref" 1 "" "$key"
             ;;
           fix)
             launched "fix:$num:$ref" && continue
