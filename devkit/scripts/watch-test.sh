@@ -716,6 +716,16 @@ check_igual "task-block: motivo en watch.log" \
   "task-block.sh DEVKIT-3 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/41; el bucle no lo toca hasta que decidas." \
   "$(grep -oE 'task-block.sh DEVKIT-3 Bloqueada desde .*' "$CICLO/run/watch.log" | head -1)"
 
+# DEVKIT-76: una card ya Hecha (cerrada, mergeada y documentada) no se mueve
+# a Bloqueada por un `task-block.sh` invocado a mano; un bloqueo ahí no lo
+# lee nadie.
+tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"
+salida=$(env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez 2>&1); rc=$?
+check_igual "task-block: card Hecha no se toca" 0 "$(grep -cE '^(set|comentar)' "$N/llamadas")"
+check_igual "task-block: card Hecha se niega con error" "1 task-block: DEVKIT-3 ya está Hecha; no se bloquea" \
+  "$rc $salida"
+
 # --- task-fix vacío con CAMBIOS vigente (DEVKIT-57) --------------------------
 # El caso `fix` completo por el hook --fix: devkit-run.sh real, un doble de
 # `claude` que anota el modelo con que lo llaman y responde lo que diga cada
