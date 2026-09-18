@@ -1197,9 +1197,17 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     exec 7<&-
   fi
   local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col
+  # Todos los prompts lanzados alguna vez, no solo los ESTADO_FILAS visibles
+  # en la tabla: un `claude -p` lanzado antes de esa cola, y todavía vivo, no
+  # debe salir como `sin registro` (DEVKIT-81 H2). Una sola lectura de
+  # `lanzamientos` para no duplicar el costo del recorrido de watch.log.
+  local full_lanz
+  full_lanz=$(lanzamientos "$wlog")
   local -a prompts_vistos=()
+  while IFS=$'\t' read -r _ _ _ _ p _ _ _ _; do
+    [ -n "$p" ] && prompts_vistos+=("$p")
+  done <<<"$full_lanz"
   while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda <&3; do
-    prompts_vistos+=("$prompt")
     skill=${prompt%% *}
     skill=${skill#/}
     arg=$(printf '%s' "$prompt" | awk '{print $2}')
@@ -1274,7 +1282,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       modelo_col="$modelo/$esfuerzo r$ronda"
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col"
-  done 3< <(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
+  done 3< <(if [ -n "$full_lanz" ]; then printf '%s\n' "$full_lanz"; fi | tail -n "$ESTADO_FILAS")
   filas_sin_registro "$procesos" "${prompts_vistos[@]}"
 }
 
@@ -1290,16 +1298,22 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
   local procesos=$1
   shift
   local -a activos=("$@")
-  local pid resto prompt encontrado a
+  local pid resto prompt prompt_norm encontrado a
   while read -r pid resto; do
     [ -n "$pid" ] || continue
     case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
     prompt=${resto#*" -p "}
     prompt=${prompt%% --*}
     case "$prompt" in ok|/usage) continue ;; esac
+    # Comparar contra la misma forma que quedó en la línea "lanzando"
+    # (DEVKIT-81 H2): sin comillas ni saltos de línea y cortada a 120
+    # caracteres. Comparar el `ps` crudo contra esa forma normalizada da
+    # falsos "sin registro" con un prompt largo o con saltos de línea, el
+    # caso de un `task-fix` con un comentario humano.
+    prompt_norm=$(prompt_en_linea "$prompt")
     encontrado=0
     for a in "${activos[@]}"; do
-      case "$resto" in *claude*"-p $a "*) encontrado=1; break ;; esac
+      [ "$prompt_norm" = "$a" ] && { encontrado=1; break; }
     done
     [ "$encontrado" = 1 ] && continue
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $prompt" -
@@ -2645,6 +2659,77 @@ FIN
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 501')"
   check "sin registro: la lectura de cuota (-p /usage) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 502')"
+
+  # DEVKIT-81 H2: un prompt de más de 120 caracteres queda cortado en la
+  # línea "lanzando" (`prompt_en_linea`); comparar el `ps` crudo, sin cortar,
+  # contra esa forma daba un falso "sin registro".
+  local comentario_largo prompt_largo log_largo pslist_largo
+  comentario_largo="comentario humano bastante extenso que agrega contexto de sobra para superar el corte de ciento veinte caracteres que aplica prompt_en_linea sobre la línea lanzando"
+  prompt_largo="/task-fix DEVKIT-99 $comentario_largo"
+  log_largo="$tmp/largo-watch.log"
+  : >"$est/task-fix-99.log"
+  printf '%s task-fix-99 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "%s" log=%s/task-fix-99.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$(prompt_en_linea "$prompt_largo")" "$est" >"$log_largo"
+  pslist_largo="$tmp/ps-largo"
+  cat >"$pslist_largo" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+701 claude -p $prompt_largo --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_largo"
+  check "sin registro: un prompt de más de 120 caracteres no cae en sin registro" 0 \
+    "$(PS_BIN="$pslist_largo" LOCK="$est/skill.lock" estado_filas "$log_largo" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
+  # DEVKIT-81 H2: comillas en el prompt (un comentario humano puede traerlas)
+  # se convierten en espacios al escribir la línea "lanzando"
+  # (`prompt_en_linea`); el `ps` crudo las conserva. Sin normalizar el lado
+  # de `ps` antes de comparar, esto también daba un falso "sin registro".
+  local comentario_comillas prompt_comillas log_comillas pslist_comillas
+  comentario_comillas='dice "cuidado con esto" en el comentario'
+  prompt_comillas="/task-fix DEVKIT-88 $comentario_comillas"
+  log_comillas="$tmp/comillas-watch.log"
+  : >"$est/task-fix-88.log"
+  printf '%s task-fix-88 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "%s" log=%s/task-fix-88.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$(prompt_en_linea "$prompt_comillas")" "$est" >"$log_comillas"
+  pslist_comillas="$tmp/ps-comillas"
+  cat >"$pslist_comillas" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+702 claude -p $prompt_comillas --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_comillas"
+  check "sin registro: un prompt con comillas normaliza igual que la línea lanzando" 0 \
+    "$(PS_BIN="$pslist_comillas" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
+  # DEVKIT-81 H2: un lanzamiento fuera de la cola visible (ESTADO_FILAS, 20
+  # por defecto) sigue vivo y no debe salir como "sin registro"; antes,
+  # `prompts_vistos` solo se llenaba con la cola recortada.
+  local log_cola pslist_cola i
+  log_cola="$tmp/cola-watch.log"
+  : >"$est/task-vieja.log"
+  printf '%s task-vieja lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-77" log=%s/task-vieja.log\n' \
+    "$(date -u -d "@$((ahora - 3600))" +%FT%TZ)" "$est" >"$log_cola"
+  for i in $(seq 1 25); do
+    printf '%s relleno-%d lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-%d" log=%s/relleno-%d.log\n' \
+      "$(date -u -d "@$((ahora - 3600 + i))" +%FT%TZ)" "$i" "$((900 + i))" "$est" "$i" >>"$log_cola"
+    printf '%s devkit-run "/task-fix DEVKIT-%d" terminado [relleno-%d]: modelo=opus esfuerzo=high ronda=1 :: ok\n' \
+      "$(date -u -d "@$((ahora - 3600 + i + 1))" +%FT%TZ)" "$((900 + i))" "$i" >>"$log_cola"
+  done
+  pslist_cola="$tmp/ps-cola"
+  cat >"$pslist_cola" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+801 claude -p /task-fix DEVKIT-77 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_cola"
+  check "sin registro: un lanzamiento fuera de la cola visible sigue contando como activo" 0 \
+    "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81: una fila `en curso` que pasa SKILL_TIMEOUT se marca `lento`,
   # igual que la alarma de watch_long_running en watch.sh.
