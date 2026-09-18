@@ -424,13 +424,21 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 run_skill() {
   local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea
   logf="$RUN_DIR/$name.log"
-  # Antes del candado: `devkit-run --estado` cuenta el lanzamiento desde aquí,
-  # aunque espere a otra skill o a la sonda de modelos (DEVKIT-57). Se corta
-  # por caracteres, como `prompt_en_linea` de devkit-run.sh: `cut -c` corta
-  # por bytes y partiría un acento, y --estado ya no reconocería la línea.
+  # `--rol` antes de la línea "lanzando" (DEVKIT-81): la fila de --estado
+  # muestra modelo y esfuerzo desde que aparece, no solo al terminar. La sonda
+  # de modelo que corre adentro deja su propia línea en watch.log mientras
+  # tanto, así que el lanzamiento no queda invisible durante la espera (la
+  # ampliación de DEVKIT-57, "aunque espere ... a la sonda de modelos", pasa
+  # a cubrirla esa línea de la sonda en vez de esta).
+  read -r modelo esfuerzo presupuesto ronda < <("$DEVKIT_RUN" --rol "$prompt")
+  [ -z "$forzado" ] || modelo=$forzado
+  ULTIMO_MODELO=$modelo
+  # Se corta por caracteres, como `prompt_en_linea` de devkit-run.sh: `cut -c`
+  # corta por bytes y partiría un acento, y --estado ya no reconocería la
+  # línea.
   en_linea=$(printf '%s' "$prompt" | tr '\n"' '  ')
-  printf '%s %s lanzando (origen=bucle): "%s" log=%s\n' "$(date +%FT%T%:z)" "$name" \
-    "${en_linea:0:120}" "$logf"
+  printf '%s %s lanzando (origen=bucle) modelo=%s esfuerzo=%s ronda=%s: "%s" log=%s\n' \
+    "$(date +%FT%T%:z)" "$name" "${modelo:--}" "${esfuerzo:--}" "${ronda:--}" "${en_linea:0:120}" "$logf"
   # Un solo `claude -p` a la vez: desde DEVKIT-27 un relanzamiento por cuota
   # puede despertar mientras el bucle atiende otro PR, y dos agentes sobre el
   # mismo workspace se pisarían la rama.
@@ -439,9 +447,6 @@ run_skill() {
     log "$name espera: otra skill ocupa el workspace"
     flock 9
   fi
-  read -r modelo esfuerzo presupuesto ronda < <("$DEVKIT_RUN" --rol "$prompt")
-  [ -z "$forzado" ] || modelo=$forzado
-  ULTIMO_MODELO=$modelo
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
   # DEVKIT_LANZADOR=watch le dice a task-fix que lo lanzó el bucle: sin ella,

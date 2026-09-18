@@ -330,8 +330,8 @@ check_log "la línea de resumen trae el modelo del rol de revisión" \
   'modelo=opus esfuerzo=high'
 # DEVKIT-57: la línea "lanzando" con origen, prompt y log, que lee
 # `devkit-run --estado`.
-check_log "run_skill deja la línea lanzando con origen bucle" \
-  'pr-review-9-abc1234 lanzando \(origen=bucle\): "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
+check_log "run_skill deja la línea lanzando con origen, modelo y esfuerzo" \
+  'pr-review-9-abc1234 lanzando \(origen=bucle\) modelo=opus esfuerzo=high ronda=-: "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
 # Un comentario humano con acentos de más de 120 bytes: el corte es por
 # caracteres, así que la línea sigue siendo UTF-8 válido y --estado la muestra.
 NOMBRE=fix-humano-9 PROMPT="/task-fix DEVKIT-9 $(printf 'á%.0s' $(seq 1 80))" corre_doble 0

@@ -782,6 +782,33 @@ refresco corre con su entrada y salida cerradas (`</dev/null >/dev/null
 `$(...)` quedaba atado igual al refresco, el mismo problema que el TTL
 resolvía para la línea de comandos (H3 de pr-review en DEVKIT-62).
 
+La línea `lanzando` de `watch.log` lleva también `modelo=<alias>
+esfuerzo=<x> ronda=<n>` (DEVKIT-81): `devkit-run` los resuelve antes de
+escribirla, y `run_skill` en `watch.sh` mueve su `--rol` al mismo lugar, antes
+de tomar el candado, para que la columna `MODELO` de `--estado` los muestre
+desde que la fila aparece, no recién en el resumen final. Una línea vieja, sin
+esos tres campos -un `watch.sh` en memoria, sin `recreate` todavía-, sigue
+leyéndose: `lanzamientos()` los trata como opcionales y la columna cae en
+`-`. `--estado` también aplica, sin excepción, la regla de que ningún
+`claude -p` del contenedor quede invisible: uno vivo en `ps` sin ninguna línea
+`lanzando` que lo explique aparece como fila `sin registro`, salvo los dos
+`claude -p` que no son skills -la sonda de modelo (`-p "ok"`, 5.3) y la
+lectura de cuota (`-p "/usage"`, arriba)-, que se descartan por su prompt
+exacto. Una fila `en curso` que pasa `SKILL_TIMEOUT` se marca `lento`, la
+misma alarma que `watch_long_running` deja en `watch.log` pero visible sin
+salir de la tabla.
+
+`--estado --seguir` distingue una pantalla quieta (nada que lanzar en este
+ciclo) de una muerta (el bucle se cayó): la cabecera suma un girador de un
+carácter que avanza en cada refresco y una línea `bucle: vivo, último tick
+hace <N>` o, pasado el doble del intervalo de `watch.sh` sin su tick
+`consultando GitHub`, o si `watch.sh` no aparece en `ps`, `bucle: SIN SEÑAL`.
+El redibujo no parpadea: arma el cuadro completo en memoria y recién entonces
+lo imprime, con el cursor de vuelta al origen (`\033[H`) y `\033[J` (borra
+hasta el final de la pantalla) solo al terminar -nunca un `clear` completo
+seguido de un redibujo-, y lo oculta con `tput civis` mientras refresca,
+restaurado con `tput cnorm` al salir, Ctrl-C incluido.
+
 ## 7. Modelo de datos en Notion
 
 Tres bases de datos bajo un árbol "Ingeniería".

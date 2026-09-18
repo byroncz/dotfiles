@@ -138,6 +138,11 @@ ARRANQUE_ESPERA="${DEVKIT_ARRANQUE_ESPERA:-5}"
 ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
+# Intervalo del bucle de watch.sh, para juzgar si su último tick "consultando
+# GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
+# valor por defecto y misma variable que INTERVAL en watch.sh: los dos
+# scripts no se importan entre sí, así que el valor se repite a propósito.
+INTERVALO_BUCLE="${DEVKIT_WATCH_INTERVAL:-300}"
 # `-ww` en todo `ps` que lee argumentos (`args=`), acá y en watch.sh: sin
 # ella, `ps` corta cada línea al ancho de COLUMNS/LINES del entorno aunque la
 # salida vaya a una tubería, y una terminal integrada (la del editor) los
@@ -929,12 +934,15 @@ otros_agentes() {
 # --- Quién lanzó, arranque y estado de los lanzamientos (DEVKIT-57) ---------
 #
 # Cada lanzamiento deja en watch.log una línea con forma fija:
-#   <fecha> <id> lanzando (origen=<origen>): "<prompt>" log=<log>
+#   <fecha> <id> lanzando (origen=<origen>) modelo=<alias> esfuerzo=<x> ronda=<n>: "<prompt>" log=<log>
 # donde <id> es el nombre del log sin `.log` (`task-start-3`,
 # `pr-review-41-4391e46`). La escriben este script, antes del `nohup`, y
-# `run_skill` en watch.sh, antes de tomar el candado. `--estado` parte de esas
+# `run_skill` en watch.sh, antes de tomar el candado (ambos resuelven modelo y
+# ronda antes de escribir la línea, DEVKIT-81). `--estado` parte de esas
 # líneas y no de los procesos: un lanzamiento existe desde que se pidió, no
-# desde que su `claude -p` aparece en `ps`.
+# desde que su `claude -p` aparece en `ps`. `lanzamientos()` también acepta el
+# formato viejo sin esos tres campos (un `watch.sh` en memoria, sin
+# `recreate`, todavía puede escribirlo).
 
 # Origen de un lanzamiento: `humano`, `bucle`, `task-close` o la skill que lo
 # pidió (`epic-plan`). Quien llama puede declararlo con DEVKIT_ORIGEN:
@@ -998,9 +1006,9 @@ prompt_en_linea() {  # prompt_en_linea <prompt>
   printf '%s' "${p:0:120}"
 }
 
-linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log>
-  printf '%s %s lanzando (origen=%s): "%s" log=%s\n' \
-    "$(date +%FT%T%:z)" "$1" "$2" "$(prompt_en_linea "$3")" "$4"
+linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log> <modelo> <esfuerzo> <ronda>
+  printf '%s %s lanzando (origen=%s) modelo=%s esfuerzo=%s ronda=%s: "%s" log=%s\n' \
+    "$(date +%FT%T%:z)" "$1" "$2" "${5:--}" "${6:--}" "${7:--}" "$(prompt_en_linea "$3")" "$4"
 }
 
 # Espera el marcador de fin de arranque. Sin él, el contenedor todavía está
@@ -1134,10 +1142,23 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
 }
 
 # Lanzamientos registrados en watch.log, uno por línea "lanzando", en TSV:
-# <n.º de línea> <fecha> <id> <origen> <prompt> <log>.
+# <n.º de línea> <fecha> <id> <origen> <prompt> <log> <modelo> <esfuerzo> <ronda>.
+# `[[ =~ ]]` en vez de `sed -E` con grupos de captura: la línea nueva tiene
+# más de 9 grupos y `sed` no los referencia todos (\1-\9 nada más), así que
+# se recorre el archivo a mano con `BASH_REMATCH`, sin ese límite. El grupo
+# modelo/esfuerzo/ronda es opcional: una línea vieja (DEVKIT-81) cae en las
+# ramas `${BASH_REMATCH[n]:--}`.
 lanzamientos() {  # lanzamientos <watch.log>
-  grep -nE '^[^ ]+ [^ ]+ lanzando \(origen=[^)]*\): ".*" log=[^ ]+$' "$1" 2>/dev/null \
-    | sed -E 's/^([0-9]+):([^ ]+) ([^ ]+) lanzando \(origen=([^)]*)\): "(.*)" log=([^ ]+)$/\1\t\2\t\3\t\4\t\5\t\6/'
+  [ -f "$1" ] || return 0
+  local ln=0 linea
+  local re='^([^ ]+) ([^ ]+) lanzando \(origen=([^)]*)\)( modelo=([^ ]+) esfuerzo=([^ ]+) ronda=([^:]+))?: "(.*)" log=([^ ]+)$'
+  while IFS= read -r linea; do
+    ln=$((ln + 1))
+    [[ $linea =~ $re ]] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ln" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" \
+      "${BASH_REMATCH[3]}" "${BASH_REMATCH[8]}" "${BASH_REMATCH[9]}" \
+      "${BASH_REMATCH[5]:--}" "${BASH_REMATCH[6]:--}" "${BASH_REMATCH[7]:--}"
+  done < "$1"
 }
 
 hace() {  # hace <segundos>
@@ -1150,10 +1171,11 @@ hace() {  # hace <segundos>
   fi
 }
 
-# Una fila TSV por lanzamiento: skill, card, origen, hace cuánto, estado y
-# detalle. Estados:
+# Una fila TSV por lanzamiento: skill, card, origen, hace cuánto, estado,
+# detalle y modelo (DEVKIT-81, columna `modelo/esfuerzo rN`). Estados:
 #   en curso    sin resumen, y su proceso vive, o se lanzó hace menos de
-#               ESTADO_GRACIA segundos, o espera el candado
+#               ESTADO_GRACIA segundos, o espera el candado; si ya pasó
+#               SKILL_TIMEOUT sin resumen, el detalle suma "lento"
 #   terminó     resumen "terminado"
 #   error       resumen con rc distinto de cero, o log escrito sin resumen
 #               y sin proceso (murió a medias)
@@ -1161,6 +1183,9 @@ hace() {  # hace <segundos>
 #               lanzarlo; el detalle es el motivo
 #   no arrancó  sin resumen, sin proceso y sin log pasado el margen, o
 #               marcado así por confirmar_arranque
+#   sin registro  un `claude -p` vivo en `ps` sin ninguna línea "lanzando" que
+#               lo explique (regla sin excepción de DEVKIT-81); ver
+#               `filas_sin_registro`
 # Lee `ps` de PS_BIN y la hora de <ahora>, para probarlo con datos fijos.
 estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   local wlog=$1 ahora=$2 procesos candado=libre
@@ -1171,8 +1196,10 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     flock -n 7 || candado=ocupado
     exec 7<&-
   fi
-  local ln ts id origen prompt logf skill arg clave t0 edad resto fin estado detalle bloqueo
-  while IFS=$'\t' read -r ln ts id origen prompt logf <&3; do
+  local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col
+  local -a prompts_vistos=()
+  while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda <&3; do
+    prompts_vistos+=("$prompt")
     skill=${prompt%% *}
     skill=${skill#/}
     arg=$(printf '%s' "$prompt" | awk '{print $2}')
@@ -1200,6 +1227,9 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     elif grep -qF -- "$logf" <<<"$procesos" \
          || { [ "$origen" = bucle ] && grep -qF -- "--sync /$skill $arg" <<<"$procesos"; }; then
       estado="en curso"
+      # Misma alarma que watch_long_running en watch.sh (SKILL_TIMEOUT):
+      # visible en la tabla, no solo en watch.log.
+      [ "$edad" -lt "$SKILL_TIMEOUT" ] || detalle="lento"
     elif [ "$edad" -lt "$ESTADO_GRACIA" ]; then
       estado="en curso"; detalle="arrancando"
     elif [ "$candado" = ocupado ] && printf '%s\n' "$resto" | grep -qE "^[^ ]+ $id espera: "; then
@@ -1236,8 +1266,44 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       estado=error
       detalle="terminó sin entregar ni bloquear; card $clave sigue En progreso"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}"
+    if [ "$modelo" = - ] || [ -z "$modelo" ]; then
+      modelo_col=-
+    elif [ "$ronda" = - ] || [ -z "$ronda" ]; then
+      modelo_col="$modelo/$esfuerzo"
+    else
+      modelo_col="$modelo/$esfuerzo r$ronda"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col"
   done 3< <(lanzamientos "$wlog" | tail -n "$ESTADO_FILAS")
+  filas_sin_registro "$procesos" "${prompts_vistos[@]}"
+}
+
+# Filas `sin registro` (DEVKIT-81, regla sin excepción): un `claude -p` vivo
+# en `ps` cuyo prompt no aparece en ninguna línea "lanzando" reciente. Cubre
+# un lanzamiento que devkit-run no vio -un bug, algo lanzado a mano por fuera
+# de devkit-run/watch.sh-, para que ningún `claude -p` del contenedor quede
+# invisible en `--estado`. La sonda de modelo (`claude -p "ok"`, en
+# `modelo_disponible`) y la lectura de cuota (`claude -p "/usage"`, en
+# `leer_cuota`) no son skills: se excluyen por su prompt exacto, no porque
+# tengan línea "lanzando" -no la tienen, y nunca la tendrán.
+filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [prompt activo]...
+  local procesos=$1
+  shift
+  local -a activos=("$@")
+  local pid resto prompt encontrado a
+  while read -r pid resto; do
+    [ -n "$pid" ] || continue
+    case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
+    prompt=${resto#*" -p "}
+    prompt=${prompt%% --*}
+    case "$prompt" in ok|/usage) continue ;; esac
+    encontrado=0
+    for a in "${activos[@]}"; do
+      case "$resto" in *claude*"-p $a "*) encontrado=1; break ;; esac
+    done
+    [ "$encontrado" = 1 ] && continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $prompt" -
+  done <<<"$procesos"
 }
 
 # Conteo rápido de "en curso" para el segmento `agentes:<a>` del prompt
@@ -1266,8 +1332,8 @@ agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
     flock -n 7 || candado=ocupado
     exec 7<&-
   fi
-  local ln ts id origen prompt logf t0 edad
-  while IFS=$'\t' read -r ln ts id origen prompt logf; do
+  local ln ts id origen prompt logf modelo esfuerzo ronda t0 edad
+  while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda; do
     [ -n "${done_ids[$id]:-}" ] && continue
     if [[ $procesos == *"$logf"* ]]; then
       en_curso=$((en_curso + 1)); continue
@@ -1292,25 +1358,25 @@ rellenar() {  # rellenar <texto> <ancho>
 }
 
 encabezado_tabla() {
-  printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" DETALLE
+  printf '%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
+    "$(rellenar HACE 8)" "$(rellenar ESTADO 12)" "$(rellenar MODELO 16)" DETALLE
 }
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
 # si corresponde. Aparte de `mostrar_estado` para que agrupar por Épica
 # (DEVKIT-80) no duplique el formato de columnas.
-formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle>
-  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 frena=""
+formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo>
+  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 frena=""
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
   fi
-  printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$detalle"
+  printf '%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
+    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 12)" "$(rellenar "$modelo" 16)" "$detalle"
 }
 
 mostrar_estado() {
-  local filas skill clave origen edad estado detalle
+  local filas skill clave origen edad estado detalle modelo
   filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
@@ -1322,7 +1388,7 @@ mostrar_estado() {
     local -A epica_de_clave
     local -a orden_epicas=()
     local clave_vista=""
-    while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+    while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
       [ "$clave" = - ] && continue
       case " $clave_vista " in *" $clave "*) continue ;; esac
       clave_vista="$clave_vista $clave"
@@ -1341,14 +1407,14 @@ mostrar_estado() {
         primero=0
         printf '%s\n' "$e"
         encabezado_tabla
-        while IFS=$'\t' read -r skill clave origen edad estado detalle; do
-          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+        while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
+          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
         done <<<"$filas"
       done
       # Filas sin Épica activa (sin Padre En progreso, o sin Clave): quedan
       # en un bloque aparte al final, no se pierden.
       local hay_sin=0
-      while IFS=$'\t' read -r skill clave origen edad estado detalle; do
+      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
         [ "$clave" != - ] && [ -n "${epica_de_clave[$clave]:-}" ] && continue
         if [ "$hay_sin" = 0 ]; then
           echo
@@ -1356,12 +1422,12 @@ mostrar_estado() {
           encabezado_tabla
           hay_sin=1
         fi
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
       done <<<"$filas"
     else
       encabezado_tabla
-      while IFS=$'\t' read -r skill clave origen edad estado detalle; do
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle"
+      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
       done <<<"$filas"
     fi
   fi
@@ -1371,12 +1437,58 @@ mostrar_estado() {
     || echo 0 >"$ALARMAS_VISTAS"
 }
 
+# Señal de vida del bucle para la cabecera de `--estado --seguir` (DEVKIT-81):
+# una pantalla quieta (nada que lanzar en este ciclo) no debe verse igual que
+# una pantalla muerta (watch.sh se cayó). "vivo" exige las dos cosas: que
+# `watch.sh` siga en `ps` y que su último tick "consultando GitHub" en
+# watch.log no pase del doble de INTERVALO_BUCLE. Por `ps` de PS_BIN, como el
+# resto de este archivo, para poder fijarlo en la autoprueba.
+senal_bucle() {  # senal_bucle <watch.log> <ahora epoch>
+  local wlog=$1 ahora=$2 procesos tick t0 edad
+  procesos=$("$PS_BIN" -eo args= -ww 2>/dev/null)
+  if ! grep -qF 'watch.sh' <<<"$procesos"; then
+    printf 'bucle: SIN SEÑAL, no encuentro watch.sh en ps\n'
+    return 0
+  fi
+  tick=$(grep -E '^[^ ]+ consultando GitHub$' "$wlog" 2>/dev/null | tail -1 | awk '{print $1}')
+  if [ -z "$tick" ]; then
+    printf 'bucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía\n'
+    return 0
+  fi
+  t0=$(date -d "$tick" +%s 2>/dev/null || echo "$ahora")
+  edad=$((ahora - t0))
+  if [ "$edad" -gt "$((2 * INTERVALO_BUCLE))" ]; then
+    printf 'bucle: SIN SEÑAL hace %s\n' "$(hace "$edad")"
+  else
+    printf 'bucle: vivo, último tick hace %s\n' "$(hace "$edad")"
+  fi
+}
+
+# `--seguir` sin parpadeo (DEVKIT-81): arma el cuadro completo en memoria y
+# recién entonces lo imprime, con el cursor de vuelta al origen (`\033[H`) y
+# `\033[J` (borra desde el cursor hasta el final) solo al terminar, para
+# limpiar el resto de un cuadro anterior más largo sin borrar y volver a
+# dibujar todo -que es lo que parpadea. El cursor se oculta con `tput civis`
+# mientras refresca y se restaura con `tput cnorm` al salir, Ctrl-C incluido.
 seguir_estado() {
+  local giros='|/-\' i=0 c frame ahora
+  if [ -t 1 ]; then
+    tput civis 2>/dev/null
+    trap 'tput cnorm 2>/dev/null' EXIT
+    trap 'tput cnorm 2>/dev/null; exit 130' INT TERM
+  fi
   while true; do
-    [ -t 1 ] && printf '\033[H\033[2J'
-    printf 'devkit-run --estado  %s  (cada %ss; Ctrl-C para salir)\n\n' "$(date +%T)" "$ESTADO_INTERVALO"
-    mostrar_estado
-    [ -t 1 ] || echo
+    c=${giros:$((i % ${#giros})):1}
+    i=$((i + 1))
+    ahora=${DEVKIT_AHORA:-$(date +%s)}
+    frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s\n\n' \
+      "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora")")
+    frame+=$(mostrar_estado)
+    if [ -t 1 ]; then
+      printf '\033[H%s\n\033[J' "$frame"
+    else
+      printf '%s\n' "$frame"
+    fi
     sleep "$ESTADO_INTERVALO"
   done
 }
@@ -2491,6 +2603,82 @@ FIN
   check "agentes_en_curso_rapido coincide con las filas en curso de estado_filas" 2 \
     "$(PS_BIN="$pslist" LOCK="$est/skill.lock" agentes_en_curso_rapido "$est/watch.log" "$ahora")"
 
+  # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
+  # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
+  local modelo_log
+  modelo_log="$tmp/modelo-watch.log"
+  : >"$est/task-document-1.log"
+  : >"$est/task-fix-3.log"
+  cat >"$modelo_log" <<FIN
+2026-09-16T11:55:00Z task-document-1 lanzando (origen=task-close) modelo=sonnet esfuerzo=high ronda=1: "/task-document DEVKIT-70" log=$est/task-document-1.log
+2026-09-16T11:56:00Z task-fix-3 lanzando (origen=humano): "/task-fix DEVKIT-71" log=$est/task-fix-3.log
+FIN
+  local filas_modelo
+  filas_modelo=$(PS_BIN="$pslist" LOCK="$est/skill.lock" estado_filas "$modelo_log" "$ahora")
+  check "columna modelo: línea lanzando nueva, con ronda" "sonnet/high r1" \
+    "$(printf '%s\n' "$filas_modelo" | awk -F'\t' '$2 == "DEVKIT-70" {print $7}')"
+  check "columna modelo: línea lanzando vieja, sin modelo=, es -" "-" \
+    "$(printf '%s\n' "$filas_modelo" | awk -F'\t' '$2 == "DEVKIT-71" {print $7}')"
+
+  # DEVKIT-81, regla sin excepción: un `claude -p` vivo sin línea "lanzando"
+  # aparece como fila `sin registro`. La sonda de modelo (`-p ok`) y la
+  # lectura de cuota (`-p /usage`) no cuentan, aunque estén vivas.
+  local pslist_reg
+  pslist_reg="$tmp/ps-sinregistro"
+  cat >"$pslist_reg" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+501 claude -p ok --model modelo-x --output-format json
+502 claude -p /usage --output-format json
+503 claude -p /pr-review 99 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_reg"
+  local filas_reg
+  filas_reg=$(PS_BIN="$pslist_reg" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
+  check "sin registro: un claude -p sin línea lanzando aparece, uno solo" 1 \
+    "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+  check "sin registro: el detalle trae el pid y el prompt" \
+    "claude -p vivo (pid 503) sin línea lanzando: /pr-review 99" \
+    "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro" {print $6}')"
+  check "sin registro: la sonda de modelo (-p ok) no cuenta" 0 \
+    "$(printf '%s\n' "$filas_reg" | grep -c 'pid 501')"
+  check "sin registro: la lectura de cuota (-p /usage) no cuenta" 0 \
+    "$(printf '%s\n' "$filas_reg" | grep -c 'pid 502')"
+
+  # DEVKIT-81: una fila `en curso` que pasa SKILL_TIMEOUT se marca `lento`,
+  # igual que la alarma de watch_long_running en watch.sh.
+  local lento_log lento_ts pslist_lento
+  lento_log="$tmp/lento-watch.log"
+  lento_ts=$(date -u -d "@$((ahora - SKILL_TIMEOUT - 100))" +%FT%TZ)
+  printf '%s task-fix-9 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-90" log=%s/task-fix-9.log\n' \
+    "$lento_ts" "$est" >"$lento_log"
+  pslist_lento="$tmp/ps-lento"
+  printf '#!/usr/bin/env bash\necho "601 bash devkit-run.sh --worker /task-fix DEVKIT-90 %s/task-fix-9.log opus high 40"\n' "$est" >"$pslist_lento"
+  chmod +x "$pslist_lento"
+  check "lento: una fila en curso que pasa SKILL_TIMEOUT se marca" "en curso|lento" \
+    "$(PS_BIN="$pslist_lento" LOCK="$est/skill.lock" estado_filas "$lento_log" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-90" {print $5"|"$6}')"
+
+  # DEVKIT-81: señal de vida del bucle en la cabecera de `--estado --seguir`.
+  local pslist_bucle_vivo pslist_sin_bucle tick_log tick_viejo_log
+  pslist_bucle_vivo="$tmp/ps-bucle-vivo"
+  printf '#!/usr/bin/env bash\necho "1 bash /workspace/devkit/scripts/watch.sh"\n' >"$pslist_bucle_vivo"
+  chmod +x "$pslist_bucle_vivo"
+  pslist_sin_bucle="$tmp/ps-sin-bucle"
+  printf '#!/usr/bin/env bash\necho "1 bash algo-que-no-es-el-bucle"\n' >"$pslist_sin_bucle"
+  chmod +x "$pslist_sin_bucle"
+  tick_log="$tmp/tick-watch.log"
+  printf '%s consultando GitHub\n' "$(date -u -d "@$((ahora - 60))" +%FT%TZ)" >"$tick_log"
+  check "senal_bucle: vivo con un tick reciente" "bucle: vivo, último tick hace 1m" \
+    "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_log" "$ahora")"
+  tick_viejo_log="$tmp/tick-viejo-watch.log"
+  printf '%s consultando GitHub\n' "$(date -u -d "@$((ahora - 2 * INTERVALO_BUCLE - 60))" +%FT%TZ)" >"$tick_viejo_log"
+  check "senal_bucle: SIN SEÑAL con un tick viejo (más del doble del intervalo)" 1 \
+    "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" | grep -c 'SIN SEÑAL hace')"
+  check "senal_bucle: SIN SEÑAL si watch.sh no está en ps" 1 \
+    "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" | grep -c 'no encuentro watch.sh en ps')"
+
   # DEVKIT-79: con COLUMNS en el entorno (una terminal integrada, como la del
   # editor, lo exporta) `ps` sin `-ww` recorta la línea y estado_filas deja
   # de ver el proceso. Este caso usa el `ps` real del sistema (PS_BIN por
@@ -2551,8 +2739,14 @@ FIN
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
   # todavía no hay lectura en caché. `head -1` porque, desde DEVKIT-62,
   # mostrar_estado siempre agrega ese bloque al final, con o sin lanzamientos.
+  # PS_BIN de mentira, vacío: sin él, `filas_sin_registro` (DEVKIT-81) vería
+  # los `claude -p` reales de esta misma sesión con el `ps` de verdad.
+  local pslist_vacio
+  pslist_vacio="$tmp/ps-vacio"
+  printf '#!/usr/bin/env bash\n' >"$pslist_vacio"
+  chmod +x "$pslist_vacio"
   check "--estado sin lanzamientos lo dice" "sin lanzamientos registrados en $est/vacio.log" \
-    "$(CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio/cuota.lock" \
+    "$(PS_BIN="$pslist_vacio" CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-vacio/cuota.cache" CUOTA_LOCK="$tmp/cuota-vacio/cuota.lock" \
         WATCH_LOG="$est/vacio.log" mostrar_estado | head -1)"
 
   # Columna "bloquea a" (ampliación de la card): caché ya tibia, sin llamar a
@@ -2766,7 +2960,8 @@ FIN
     bash "$HERE/devkit-run.sh" task-submit DEVKIT-7 >/dev/null 2>&1
   check "lanzamiento real: línea lanzando con el origen de sus ancestros" \
     "lanzando (origen=${origen_esperado:-?}): \"/task-submit DEVKIT-7\"" \
-    "$(grep -oE 'lanzando \(origen=[^)]*\): "/task-submit DEVKIT-7"' "$tmp/run/watch.log" | head -1)"
+    "$(grep -oE 'lanzando \(origen=[^)]*\)( modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^:]+)?: "/task-submit DEVKIT-7"' "$tmp/run/watch.log" \
+        | sed -E 's/\) modelo=[^:]+:/):/' | head -1)"
   check "lanzamiento real: --estado lo muestra terminado" "terminó" \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
@@ -3049,7 +3244,7 @@ modelo_valido "${modelo:-}" "$prompt" || exit 65
 #
 # La línea "lanzando" va antes del `nohup`: desde ella el lanzamiento cuenta
 # para `--estado`, aunque su `claude -p` todavía no exista (DEVKIT-57).
-linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" >> "$WATCH_LOG" 2>/dev/null
+linea_lanzando "$(basename "$logf" .log)" "$(origen_lanzamiento)" "$prompt" "$logf" "$modelo" "$esfuerzo" "$ronda" >> "$WATCH_LOG" 2>/dev/null
 nohup env -u DEVKIT_LANZADOR -u DEVKIT_ORIGEN -u DEVKIT_MODELO_FORZADO -u DEVKIT_RONDA \
   "$HERE/devkit-run.sh" --worker "$prompt" "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$manual" "$ronda" \
   >/dev/null 2>&1 &
