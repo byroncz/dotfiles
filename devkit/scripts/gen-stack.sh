@@ -1,11 +1,13 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
-#  devkit: líneas de versiones de la sección Stack del README, generadas
-#  desde devkit/vscode/extensions.toml y devkit/Dockerfile. Las usa
+#  devkit: tabla y líneas de versiones de la sección Stack del README,
+#  generadas desde devkit/scripts/stack.tsv, devkit/Dockerfile,
+#  devkit/proxy/Dockerfile y devkit/vscode/extensions.toml. Las usa
 #  gen-readme.sh al armar el README completo.
 #
 #    gen-stack.sh              imprime la línea de extensiones
 #    gen-stack.sh --versiones  imprime la línea de versiones del Dockerfile
+#    gen-stack.sh --tabla      imprime la tabla Herramienta/Descripción/Versión
 #    gen-stack.sh --check      sale con 1 si el README quedó viejo
 #    gen-stack.sh --test       autoprueba, sin tocar el README
 #
@@ -48,6 +50,60 @@ versiones() {  # versiones <Dockerfile>
   openvscode="$(sed -n 's/^ARG OPENVSCODE_VERSION=\(.*\)/\1/p' "$1")"
   printf 'Versiones fijadas en `devkit/Dockerfile`: uv %s, gh %s, rclone %s, bws %s, starship %s, openvscode-server %s.\n' \
     "$uv" "$gh" "$rclone" "$bws" "$starship" "$openvscode"
+}
+
+# Lee el valor de un ARG del Dockerfile; falla si no existe o quedó vacío.
+arg_valor() {  # arg_valor <Dockerfile> <ARG>
+  valor="$(sed -n "s/^ARG $2=\\(.*\\)/\\1/p" "$1" | head -1)"
+  if [ -z "$valor" ]; then
+    echo "gen-stack.sh: $1 no define ARG $2" >&2
+    return 1
+  fi
+  printf '%s' "$valor"
+}
+
+# Versión de cada fila de stack.tsv, por id. Los ids sin versión propia
+# fijada en este repo muestran `—`; sumar una fila con un id nuevo exige
+# sumarlo aquí, o falla en vez de quedar en blanco.
+version_de() {  # version_de <id> <Dockerfile> <proxy_dockerfile>
+  case "$1" in
+    debian)
+      valor="$(arg_valor "$2" BASE_IMAGE)" || return 1
+      printf '%s' "${valor#*:}" ;;
+    tinyproxy)
+      valor="$(sed -n 's/^FROM alpine:\(.*\)/\1/p' "$3" | head -1)"
+      if [ -z "$valor" ]; then
+        echo "gen-stack.sh: $3 no tiene un FROM alpine:<versión>" >&2
+        return 1
+      fi
+      printf '%s' "$valor" ;;
+    uv) arg_valor "$2" UV_VERSION ;;
+    openvscode) arg_valor "$2" OPENVSCODE_VERSION ;;
+    zsh) arg_valor "$2" STARSHIP_VERSION ;;
+    github) arg_valor "$2" GH_VERSION ;;
+    bws) arg_valor "$2" BWS_VERSION ;;
+    rclone) arg_valor "$2" RCLONE_VERSION ;;
+    docker | python | claude | codex | git | notion | terminal)
+      printf -- '—' ;;
+    *)
+      echo "gen-stack.sh: id de stack.tsv sin mapeo de versión en version_de: $1" >&2
+      return 1 ;;
+  esac
+}
+
+# Arma la tabla Herramienta/Descripción/Versión desde stack.tsv. Falla si
+# alguna fila no puede resolver su versión (no imprime una tabla a medias sin
+# avisar).
+tabla() {  # tabla <stack.tsv> <Dockerfile> <proxy_dockerfile>
+  echo "| Herramienta | Para qué se usa aquí | Versión |"
+  echo "|---|---|---|"
+  filas="$(mktemp)"
+  awk -F ' \\| ' '/^[[:space:]]*#/ { next } /^[[:space:]]*$/ { next } { print $1 "\t" $2 "\t" $3 }' "$1" > "$filas"
+  while IFS="$(printf '\t')" read -r id herramienta descripcion; do
+    v="$(version_de "$id" "$2" "$3")" || { rm -f "$filas"; return 1; }
+    printf '| %s | %s | %s |\n' "$herramienta" "$descripcion" "$v"
+  done < "$filas"
+  rm -f "$filas"
 }
 
 # --- Autoprueba --------------------------------------------------------------
@@ -106,6 +162,22 @@ if [ "${1:-}" = "--test" ]; then
     'Versiones fijadas en `devkit/Dockerfile`: uv 1.2.3, gh 4.5.6, rclone 7.8.9, bws 1.0.0, starship 2.0.0, openvscode-server 3.0.0.' \
     "$(versiones "$tmp/Dockerfile")"
 
+  printf 'ARG BASE_IMAGE=debian:trixie-slim\nARG UV_VERSION=1.2.3\nARG GH_VERSION=4.5.6\nARG RCLONE_VERSION=7.8.9\nARG BWS_VERSION=1.0.0\nARG STARSHIP_VERSION=2.0.0\nARG OPENVSCODE_VERSION=3.0.0\n' > "$tmp/Dockerfile-tabla"
+  printf 'FROM alpine:3.22\n' > "$tmp/proxy-Dockerfile"
+  printf 'docker | Docker | Sin versión propia.\ndebian | Debian | Base sin lenguaje.\ntinyproxy | tinyproxy | Proxy de salida.\nuv | uv | Gestiona Python.\n' > "$tmp/stack.tsv"
+  esperado='| Herramienta | Para qué se usa aquí | Versión |
+|---|---|---|
+| Docker | Sin versión propia. | — |
+| Debian | Base sin lenguaje. | trixie-slim |
+| tinyproxy | Proxy de salida. | 3.22 |
+| uv | Gestiona Python. | 1.2.3 |'
+  check "tabla con versiones por id (H1)" "$esperado" \
+    "$(tabla "$tmp/stack.tsv" "$tmp/Dockerfile-tabla" "$tmp/proxy-Dockerfile")"
+
+  printf 'algo-sin-mapeo | Algo | Descripción.\n' > "$tmp/stack-malo.tsv"
+  tabla "$tmp/stack-malo.tsv" "$tmp/Dockerfile-tabla" "$tmp/proxy-Dockerfile" >/dev/null 2>&1
+  check "tabla falla si un id no tiene mapeo de versión" 1 "$?"
+
   exit $fail
 fi
 
@@ -113,10 +185,20 @@ fi
 TOML="${DEVKIT_GEN_STACK_TOML:-$HERE/vscode/extensions.toml}"
 README="${DEVKIT_GEN_STACK_README:-$(pwd)/README.md}"
 DOCKERFILE="${DEVKIT_GEN_STACK_DOCKERFILE:-$HERE/Dockerfile}"
+STACK_TSV="${DEVKIT_GEN_STACK_TSV:-$HERE/scripts/stack.tsv}"
+PROXY_DOCKERFILE="${DEVKIT_GEN_STACK_PROXY_DOCKERFILE:-$HERE/proxy/Dockerfile}"
 
 if [ "${1:-}" = "--versiones" ]; then
   [ -f "$DOCKERFILE" ] || { echo "gen-stack.sh: no existe $DOCKERFILE" >&2; exit 2; }
   versiones "$DOCKERFILE"
+  exit 0
+fi
+
+if [ "${1:-}" = "--tabla" ]; then
+  [ -f "$STACK_TSV" ] || { echo "gen-stack.sh: no existe $STACK_TSV" >&2; exit 2; }
+  [ -f "$DOCKERFILE" ] || { echo "gen-stack.sh: no existe $DOCKERFILE" >&2; exit 2; }
+  [ -f "$PROXY_DOCKERFILE" ] || { echo "gen-stack.sh: no existe $PROXY_DOCKERFILE" >&2; exit 2; }
+  tabla "$STACK_TSV" "$DOCKERFILE" "$PROXY_DOCKERFILE" || exit 2
   exit 0
 fi
 

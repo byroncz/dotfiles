@@ -8,8 +8,9 @@
 #    gen-readme.sh --check  sale con 1 si el README commiteado quedó viejo
 #    gen-readme.sh --test   autoprueba, con fixtures propios
 #
-#  Stack: tabla fija de herramientas (abajo en este script) más las líneas de
-#  versiones y extensiones que reusa de gen-stack.sh. Comandos: agrupado
+#  Stack: tabla de herramientas con versión, generada por
+#  `gen-stack.sh --tabla` desde devkit/scripts/stack.tsv y los Dockerfile,
+#  más la línea de extensiones que reusa de gen-stack.sh. Comandos: agrupado
 #  desde devkit/scripts/comandos.txt. Skills: la línea `description` del
 #  SKILL.md de cada skill, en el orden del flujo.
 # ---------------------------------------------------------------------------
@@ -26,29 +27,10 @@ README="${DEVKIT_GEN_README_README:-$(pwd)/README.md}"
 SKILLS_ORDEN="project-init epic-plan task-create task-start task-submit pr-review task-fix task-document project-status template-update template-propagate"
 
 stack() {
-  cat <<'EOF'
-| Herramienta | Para qué se usa aquí |
-|---|---|
-| Docker + Compose | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa) y `proxy` (única salida, con lista blanca). |
-| Debian trixie-slim | Imagen base sin lenguaje. Usuario `dev` sin `sudo`. |
-| tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). |
-| uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. |
-| Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. |
-| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. |
-| zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. |
-| Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. |
-| Codex | Segundo agente, preparado pero no instalado: mismo `AGENTS.md` y skills. |
-| GitHub + gh | Código, PRs y la compuerta humana: `main` exige PR con una aprobación; auto-merge activado. |
-| Git | Una rama por card, Conventional Commits con la Clave como ámbito. |
-| Notion | Centro de tareas: bases Proyectos, Tareas y Documentación. |
-| Bitwarden Secrets Manager | Único lugar de los secretos del proyecto. |
-| rclone + Dropbox | Respaldo continuo de `sandbox.local/`, cada minuto. |
-| Terminal.app | Terminal de macOS; ahí corre el comando `devkit`. |
-EOF
+  sh "$GEN_STACK" --tabla
   echo
-  echo "Generadas por \`gen-readme.sh\` (verificado con \`--check\`), no a mano:"
+  echo "Generada por \`gen-readme.sh\` (verificado con \`--check\`), no a mano:"
   echo
-  sh "$GEN_STACK" --versiones
   sh "$GEN_STACK"
 }
 
@@ -152,13 +134,16 @@ if [ "${1:-}" = "--test" ]; then
   check "skills desde SKILL.md" "$esperado" "$obtenido"
 
   printf '"Anthropic.claude-code" = "latest"\n' > "$tmp/extensions.toml"
-  printf 'ARG UV_VERSION=1.0.0\nARG GH_VERSION=2.0.0\nARG RCLONE_VERSION=3.0.0\nARG BWS_VERSION=4.0.0\nARG STARSHIP_VERSION=5.0.0\nARG OPENVSCODE_VERSION=6.0.0\n' > "$tmp/Dockerfile"
+  printf 'ARG BASE_IMAGE=debian:trixie-slim\nARG UV_VERSION=1.0.0\nARG GH_VERSION=2.0.0\nARG RCLONE_VERSION=3.0.0\nARG BWS_VERSION=4.0.0\nARG STARSHIP_VERSION=5.0.0\nARG OPENVSCODE_VERSION=6.0.0\n' > "$tmp/Dockerfile"
+  printf 'FROM alpine:9.9\n' > "$tmp/proxy-Dockerfile"
+  printf 'uv | uv | Gestiona Python.\n' > "$tmp/stack.tsv"
   printf '# t\n{{STACK}}\n' > "$tmp/tmpl-stack.md"
   obtenido="$(DEVKIT_GEN_README_TMPL="$tmp/tmpl-stack.md" DEVKIT_GEN_STACK_TOML="$tmp/extensions.toml" \
-    DEVKIT_GEN_STACK_DOCKERFILE="$tmp/Dockerfile" sh "$HERE/scripts/gen-readme.sh" --imprimir)"
+    DEVKIT_GEN_STACK_DOCKERFILE="$tmp/Dockerfile" DEVKIT_GEN_STACK_TSV="$tmp/stack.tsv" \
+    DEVKIT_GEN_STACK_PROXY_DOCKERFILE="$tmp/proxy-Dockerfile" sh "$HERE/scripts/gen-readme.sh" --imprimir)"
   case "$obtenido" in
-    *"uv 1.0.0"*"Anthropic.claude-code latest"*) check "stack trae versiones y extensiones" si si ;;
-    *) check "stack trae versiones y extensiones" si no ;;
+    *"| uv | Gestiona Python. | 1.0.0 |"*"Anthropic.claude-code latest"*) check "stack trae tabla con versión y extensiones" si si ;;
+    *) check "stack trae tabla con versión y extensiones" si no ;;
   esac
 
   printf '# t\nsin placeholders\n' > "$tmp/tmpl-llano.md"
