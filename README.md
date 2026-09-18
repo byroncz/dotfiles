@@ -908,9 +908,11 @@ reinstala el comando local con `new-project.sh <proyecto> --version <X.Y.Z>`
 para que lea la nueva ruta. Sin esto, `devkit update` falla cuando el comando
 viejo intenta abrir el archivo en la ubicación antigua.
 
-## Mantener este documento
+## Este documento
 
 Este README y la entrada "Stack y comandos del devkit" en Documentación
-(Notion) son la referencia de comandos del devkit. Todo comando, alias, script
-o skill nuevo o cambiado se documenta en ambos, en el mismo PR. La regla está
-en [`AGENTS.md`](AGENTS.md).
+(Notion) describen el estado actual del devkit: qué trae hoy, no su
+historial de cambios. Se regeneran solo en la card de release de cada
+versión; ninguna card ordinaria los edita. Un cambio que afecte a los
+proyectos instanciados se declara en la sección "Cambios requeridos" del
+cuerpo del PR. La regla está en [`AGENTS.md`](AGENTS.md).
