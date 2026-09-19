@@ -1554,6 +1554,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       # bien, por ejemplo), no de esta fila -aunque nada más vuelva a
       # mencionar la Clave entre medio para activar el corte de más abajo.
       resto_bloqueo=$resto
+      fin_ln=""
       if [ -n "$fin" ]; then
         fin_ln=$(printf '%s\n' "$resto" | grep -nF -m1 -- "$fin" | cut -d: -f1)
         [ -n "$fin_ln" ] && resto_bloqueo=$(printf '%s\n' "$resto" | head -n "$((fin_ln - 1))")
@@ -1561,6 +1562,21 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       bloqueo=$(printf '%s\n' "$resto_bloqueo" | awk -v c="$clave" '
         / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
         index($0, " task-block.sh " c " Bloqueada") { print; exit }')
+      # DEVKIT-97 H3: block_pr en watch.sh (tres ciclos sin OK, task-fix vacío
+      # dos veces) siempre bloquea DESPUÉS del `terminado` del lanzamiento que
+      # cortó -el corte de arriba, pensado para un task-block.sh corrido a
+      # mano mucho más tarde sobre la misma card, también se comía este caso
+      # legítimo. Se distingue por su propia línea "PR #N (Clave) ...:
+      # bloqueando con task-block.sh", que precede a la de "Bloqueada" sin
+      # nada más entre medio (un `gh pr comment` no escribe en watch.log): si
+      # aparece después de $fin y antes de cualquier lanzamiento nuevo de esta
+      # Clave, el bloqueo es de esta fila.
+      if [ -z "$bloqueo" ] && [ -n "${fin_ln:-}" ]; then
+        bloqueo=$(printf '%s\n' "$resto" | tail -n "+$((fin_ln + 1))" | awk -v c="$clave" '
+          / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { marcado=0; next }
+          /: bloqueando con task-block\.sh$/ && index($0, "(" c ")") { marcado=1; next }
+          marcado && index($0, " task-block.sh " c " Bloqueada") { print; exit }')
+      fi
       if [ -n "$bloqueo" ]; then
         estado=bloqueada
         detalle=$(printf '%s' "$bloqueo" | sed -E 's/^.* task-block\.sh [^ ]+ Bloqueada desde [^:]*: //')
@@ -4123,6 +4139,32 @@ FIN
   check "ESTADO no hereda un bloqueo posterior a su propio cierre" "terminó" \
     "$(PS_BIN="$pslist_bloqueo_tardio" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_tardio" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-94" {print $5}')"
+
+  # DEVKIT-97 H3: block_pr en watch.sh (tres ciclos sin OK, task-fix vacío dos
+  # veces) siempre bloquea DESPUÉS del "terminado" del lanzamiento que cortó,
+  # a diferencia de un task-block.sh corrido a mano (el caso de arriba): su
+  # propia línea "PR #N (Clave) ...: bloqueando con task-block.sh" precede a
+  # la de "Bloqueada" sin ningún lanzamiento nuevo entre medio, y sí debe
+  # atribuirse a esta fila.
+  local log_bloqueo_pr pslist_bloqueo_pr
+  log_bloqueo_pr="$tmp/bloqueo-pr-watch.log"
+  cat >"$log_bloqueo_pr" <<FIN
+2026-09-16T11:20:00Z task-fix-61-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-95" log=$est/task-fix-61-abc.log
+2026-09-16T11:25:00Z task-fix-61-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:25:05Z PR #61 (DEVKIT-95) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:25:10Z task-block.sh DEVKIT-95 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61
+2026-09-16T11:25:11Z task-block-61 terminado: bash :: task-block: DEVKIT-95 Bloqueada desde Revisión automática
+FIN
+  pslist_bloqueo_pr="$tmp/ps-bloqueo-pr"
+  printf '#!/usr/bin/env bash\n' >"$pslist_bloqueo_pr"
+  chmod +x "$pslist_bloqueo_pr"
+  check "block_pr: el bloqueo tras el cierre de la fila que cortó sí se le atribuye" "bloqueada" \
+    "$(PS_BIN="$pslist_bloqueo_pr" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95" {print $5}')"
+  check "block_pr: el detalle trae el motivo de Bloqueada, no el de la línea bloqueando" \
+    "Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61" \
+    "$(PS_BIN="$pslist_bloqueo_pr" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95" {print $6}')"
 
   # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
   # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
