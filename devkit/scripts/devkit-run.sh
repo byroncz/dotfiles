@@ -1900,9 +1900,10 @@ recortar() {  # recortar <texto> <ancho>
 # texto. Sin UTF-8 declarada en LANG/LC_ALL caen a un respaldo ASCII de un
 # carácter -bash cuenta bytes, no caracteres, fuera de una locale UTF-8, y un
 # icono multibyte desalinearía `rellenar` igual que "terminó" antes de
-# DEVKIT-81 H7-.
+# DEVKIT-81 H7-. Misma precedencia que la libc para decidir cómo bash cuenta
+# caracteres (DEVKIT-106 H8): LC_ALL, luego LC_CTYPE, luego LANG.
 utf8_disponible() {
-  case "${LC_ALL:-${LANG:-}}" in
+  case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
     *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;;
     *) return 1 ;;
   esac
@@ -4959,6 +4960,10 @@ FIN
     "$(LC_ALL= LANG=C.UTF-8 utf8_disponible && echo si || echo no)"
   check "utf8_disponible: LANG=C no cuenta como UTF-8" no \
     "$(LC_ALL= LANG=C utf8_disponible && echo si || echo no)"
+  # DEVKIT-106 H8: LC_CTYPE manda sobre LANG, igual que en la libc -es lo que
+  # decide cómo bash cuenta caracteres, aunque LANG declare UTF-8.
+  check "utf8_disponible: LC_CTYPE=C gana a LANG=C.UTF-8" no \
+    "$(LC_ALL= LANG=C.UTF-8 LC_CTYPE=C utf8_disponible && echo si || echo no)"
   check "icono ASCII: en curso" '*' "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 0 1 0)"
   check "icono ASCII: terminó" 'ok' "$(glifo_estado_fila "$(estado_de DEVKIT-56)" 0 1 0)"
   check "icono ASCII: error" 'x' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 0)"
