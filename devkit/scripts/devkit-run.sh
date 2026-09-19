@@ -29,7 +29,12 @@
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
 #   devkit-run --estado [--seguir] [--todo]
 #     Tabla de los últimos lanzamientos: skill, card, quién lanzó, hace
-#     cuánto y estado (en curso, terminó, error, bloqueada, no arrancó).
+#     cuánto, cuánto duró (DURÓ: `duracion=` de la línea terminado, o el
+#     tiempo desde "lanzando" mientras sigue en curso, DEVKIT-107), estado (en
+#     curso, terminó, error, bloqueada, no arrancó, no lanzó -un rc=3 de
+#     review-prep.sh o task-begin.sh, "nada que revisar" no es un error-),
+#     modelo/esfuerzo y turnos usados contra el presupuesto vigente de
+#     roles.toml (TURNOS, con "!" si lo excede, misma cuenta que `--costos`).
 #     DETALLE se recorta al ancho de la terminal, y la tabla a su alto -las
 #     filas más recientes, con un resumen de cuántas quedaron afuera-; `--todo`
 #     desactiva ese recorte de alto (DEVKIT-97). Debajo, un bloque `Consumo`
@@ -1608,7 +1613,9 @@ hace() {  # hace <segundos>
 }
 
 # Una fila TSV por lanzamiento: skill, card, origen, hace cuánto, estado,
-# detalle y modelo (DEVKIT-81, columna `modelo/esfuerzo rN`). Estados:
+# detalle, modelo (DEVKIT-81, columna `modelo/esfuerzo rN`), duración y turnos
+# (DEVKIT-107, al final para no correr la posición de los campos de arriba,
+# que ya leen otras funciones por índice). Estados:
 #   en curso    sin resumen, y su proceso vive, o se lanzó hace menos de
 #               ESTADO_GRACIA segundos, o espera el candado; si ya pasó
 #               SKILL_TIMEOUT sin resumen, el detalle suma "lento"
@@ -1619,6 +1626,10 @@ hace() {  # hace <segundos>
 #               lanzarlo; el detalle es el motivo
 #   no arrancó  sin resumen, sin proceso y sin log pasado el margen, o
 #               marcado así por confirmar_arranque
+#   no lanzó    review-prep.sh (pr-review) o task-begin.sh (task-start) cortó
+#               con rc=3 antes de cualquier `claude -p` real -"nada que
+#               revisar" no es un error-; el detalle es el motivo, la única
+#               línea de su log (DEVKIT-107)
 #   sin registro  un `claude -p` vivo en `ps` sin ninguna línea "lanzando" que
 #               lo explique (regla sin excepción de DEVKIT-81); ver
 #               `filas_sin_registro`
@@ -1633,6 +1644,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     exec 7<&-
   fi
   local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col resto_bloqueo fin_ln
+  local duracion_col dur_seg turnos_usados turnos_col presupuesto
   # Todos los prompts lanzados alguna vez, no solo los ESTADO_FILAS visibles
   # en la tabla: un `claude -p` lanzado antes de esa cola, y todavía vivo, no
   # debe salir como `sin registro` (DEVKIT-81 H2). Una sola lectura de
@@ -1647,7 +1659,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   while IFS=$'\t' read -r ln _ id _ p _ _ _ _; do
     [ -n "$p" ] || continue
     if ! tail -n +"$((ln + 1))" "$wlog" | grep -q -E \
-        "^[^ ]+ ($id terminado: |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]\$)"; then
+        "^[^ ]+ ($id (terminado|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]\$)"; then
       prompts_vistos+=("$p")
     fi
   done <<<"$full_lanz"
@@ -1666,11 +1678,20 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     edad=$((ahora - t0))
     resto=$(tail -n +"$((ln + 1))" "$wlog")
     fin=$(printf '%s\n' "$resto" | grep -m1 -E \
-      "^[^ ]+ ($id terminado: |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]$)")
+      "^[^ ]+ ($id (terminado|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]$)")
     estado="" detalle=""
     if [ -n "$fin" ]; then
       case "$fin" in
         *"ALARMA: no arrancó"*) estado="no arrancó"; detalle="el worker murió al arrancar; ver $logf" ;;
+        # DEVKIT-107: review-prep.sh (rc=3, "nada que revisar") corta antes de
+        # cualquier `claude -p` real, en el bucle (`run_skill` en watch.sh,
+        # "$id no lanzó: ...") y en `--worker` (task-begin.sh, "... terminado
+        # [$id]: no lanzó: ..."). Ninguno de los dos casos es un error: el
+        # motivo, la única línea de $logf, va tal cual al detalle.
+        *" no lanzó: "*)
+          estado="no lanzó"
+          detalle=${fin#*no lanzó: }
+          ;;
         *"terminó con error"*|*"falló (rc="*)
           estado=error
           detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1); ver $logf" ;;
@@ -1753,7 +1774,31 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     else
       modelo_col="$modelo/$esfuerzo r$ronda"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col"
+    # DEVKIT-107: DURÓ y TURNOS, tomados de la misma línea de cierre ($fin) que
+    # ya resolvió ESTADO/DETALLE arriba. "en curso" no tiene línea de cierre
+    # todavía: su duración es el tiempo transcurrido desde "lanzando" (el mismo
+    # $edad de HACE, creciendo en cada refresco) y sus turnos, desconocidos,
+    # quedan en "-" contra el presupuesto. `presupuesto_de_skill` es la misma
+    # función que usa `--costos` para marcar un exceso con "!".
+    presupuesto=$(presupuesto_de_skill "$skill")
+    if [ "$estado" = "en curso" ]; then
+      duracion_col=$(hace "$edad")
+      turnos_col="-/${presupuesto:--}"
+    else
+      dur_seg=$(printf '%s' "$fin" | grep -oE 'duracion=[0-9]+' | head -1 | cut -d= -f2)
+      if [ -n "$dur_seg" ]; then duracion_col=$(hace "$dur_seg"); else duracion_col=-; fi
+      turnos_usados=$(printf '%s' "$fin" | grep -oE 'turnos=[0-9]+' | head -1 | cut -d= -f2)
+      if [ -n "$turnos_usados" ]; then
+        if [ -n "$presupuesto" ] && [ "$turnos_usados" -gt "$presupuesto" ] 2>/dev/null; then
+          turnos_col="${turnos_usados}/${presupuesto}!"
+        else
+          turnos_col="${turnos_usados}/${presupuesto:--}"
+        fi
+      else
+        turnos_col="-/${presupuesto:--}"
+      fi
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col" "$duracion_col" "$turnos_col"
   done 3< <(if [ -n "$full_lanz" ]; then printf '%s\n' "$full_lanz"; fi | tail -n "$ESTADO_FILAS")
   filas_sin_registro "$procesos" "${prompts_vistos[@]}"
 }
@@ -1801,7 +1846,7 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
       [ "$prompt_id" = "$a" ] && { encontrado=1; break; }
     done
     [ "$encontrado" = 1 ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $(prompt_en_linea "$prompt")" -
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $(prompt_en_linea "$prompt")" - - -
   done <<<"$procesos"
 }
 
@@ -1824,7 +1869,7 @@ agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
   ids=$(printf '%s\n' "$lanz" | cut -f3 | paste -sd'|' -)
   if [ -n "$ids" ]; then
     while IFS= read -r d; do [ -n "$d" ] && done_ids[$d]=1; done < <(
-      grep -oE "($ids) terminado: |ALARMA: ($ids) terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[($ids)\]:|devkit-run \".*\" ALARMA: no arrancó.*\[($ids)\]\$" \
+      grep -oE "($ids) (terminado|no lanzó): |ALARMA: ($ids) terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[($ids)\]:|devkit-run \".*\" ALARMA: no arrancó.*\[($ids)\]\$" \
         "$wlog" 2>/dev/null | grep -oE -- "$ids")
   fi
   if [ -e "$LOCK" ] && exec 7<"$LOCK"; then
@@ -1881,10 +1926,11 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+16+16, DEVKIT-97,
-# ESTADO ensanchada a 16 en DEVKIT-106 H2): lo que sobra del ancho de la
-# terminal es lo único que le toca a DETALLE.
-ANCHO_COLUMNAS_FIJAS=79
+# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+8+16+16+10,
+# DEVKIT-97, ESTADO ensanchada a 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en
+# DEVKIT-107): lo que sobra del ancho de la terminal es lo único que le toca a
+# DETALLE.
+ANCHO_COLUMNAS_FIJAS=97
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
 # menor a 1 corta a 1 -nunca a 0 ni negativo, `${s:0:n}` con `n` negativo
@@ -2033,9 +2079,11 @@ punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> 
 encabezado_tabla() {
   # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
   # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
-  # pegado a la columna MODELO.
-  printf '%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar ESTADO 16)" "$(rellenar MODELO 16)" DETALLE
+  # pegado a la columna MODELO. DURÓ (junto a HACE) y TURNOS (antes de
+  # DETALLE) son de DEVKIT-107.
+  printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
+    "$(rellenar HACE 8)" "$(rellenar DURÓ 8)" "$(rellenar ESTADO 16)" "$(rellenar MODELO 16)" \
+    "$(rellenar TURNOS 10)" DETALLE
 }
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
@@ -2049,10 +2097,12 @@ encabezado_tabla() {
 # el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
 # directas de la autoprueba (sin esos tres argumentos) no cambian. ESTADO
 # ensanchada a 16 (DEVKIT-106 H2): "⚠ sin registro" con icono y espacio mide
-# 14, y sin margen quedaba pegado a MODELO.
-formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo> [idx=0] [fijo=1] [color=]
-  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 \
-        idx=${8:-0} fijo=${9:-1} color_habilitado=${10:-} frena="" utf glifo color estado_col icono_len glifo_lento glifo_lento_len
+# 14, y sin margen quedaba pegado a MODELO. <duracion> y <turnos> (DEVKIT-107)
+# ya llegan formateados desde `estado_filas` (o de la autoprueba, directo):
+# esta función solo alinea y colorea, no vuelve a calcularlos.
+formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=]
+  local skill=$1 clave=$2 origen=$3 edad=$4 duracion=$5 estado=$6 modelo=$7 turnos=$8 detalle=$9 \
+        idx=${10:-0} fijo=${11:-1} color_habilitado=${12:-} frena="" utf glifo color estado_col icono_len glifo_lento glifo_lento_len turnos_col
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
@@ -2085,8 +2135,15 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <d
     icono_len=${#glifo}
     estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
   fi
-  printf '%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-    "$(rellenar "$edad" 8)" "$estado_col" "$(rellenar "$modelo" 16)" "$detalle"
+  # TURNOS excedido ("67/60!", DEVKIT-107): se rellena primero y recién
+  # después se pinta -mismo orden que ESTADO arriba- para que las secuencias
+  # ANSI no cuenten como ancho visible.
+  turnos_col=$(rellenar "$turnos" 10)
+  case "$turnos" in
+    *'!') [ "$color_habilitado" = 1 ] && turnos_col=$(colorear rojo "$turnos_col" 1) ;;
+  esac
+  printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
+    "$(rellenar "$edad" 8)" "$(rellenar "$duracion" 8)" "$estado_col" "$(rellenar "$modelo" 16)" "$turnos_col" "$detalle"
 }
 
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
@@ -2115,7 +2172,7 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
 
 mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=]
   local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
-  local filas skill clave origen edad estado detalle modelo
+  local filas skill clave origen edad estado detalle modelo duracion turnos
   # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
   # -para el punto de la cabecera, en `seguir_estado`/`seguir_lanzamiento`/
   # `--estado` sin `--seguir`- se las pasa acá para no leer watch.log/ps dos
@@ -2137,7 +2194,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
     local -A epica_de_clave
     local -a orden_epicas=()
     local clave_vista=""
-    while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
+    while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
       [ "$clave" = - ] && continue
       case " $clave_vista " in *" $clave "*) continue ;; esac
       clave_vista="$clave_vista $clave"
@@ -2165,14 +2222,14 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
         primero=0
         printf '%s\n' "$e"
         encabezado_tabla
-        while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
-          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado"
+        while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
+          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado"
         done <<<"$filas"
       done
       # Filas sin Épica activa (sin Padre En progreso, o sin Clave): quedan
       # en un bloque aparte al final, no se pierden.
       local hay_sin=0
-      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
+      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
         [ "$clave" != - ] && [ -n "${epica_de_clave[$clave]:-}" ] && continue
         if [ "$hay_sin" = 0 ]; then
           echo
@@ -2180,13 +2237,13 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
           encabezado_tabla
           hay_sin=1
         fi
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado"
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado"
       done <<<"$filas"
     else
       encabezado_tabla
       local -a filas_fmt=()
-      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
-        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado")")
+      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
+        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado")")
       done <<<"$filas"
       imprimir_tabla "${filas_fmt[@]}"
     fi
@@ -4922,6 +4979,58 @@ FIN
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
 
+  # DEVKIT-107: columnas DURÓ y TURNOS, más "no lanzó" cuando review-prep.sh
+  # corta un pr-review con salida 3 (en vez de "error: murió sin resumen").
+  # Watch.log aparte del de arriba: agregar filas ahí arriesgaba romper los
+  # conteos de Épica/"bloquea a" que ya lo reutilizan más abajo.
+  local turnos_est turnos_ahora filas_turnos
+  turnos_est="$tmp/turnos"
+  mkdir -p "$turnos_est"
+  turnos_ahora=$(date -d '2026-09-19T12:00:10Z' +%s)
+  : >"$turnos_est/pr-review-72-abc1234.log"
+  printf 'nada que revisar (ya revisado en def5678)\n' >"$turnos_est/pr-review-73-def5678.log"
+  cat >"$turnos_est/watch.log" <<FIN
+2026-09-19T11:00:00Z task-fix-1 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-70" log=$turnos_est/task-fix-1.log
+2026-09-19T11:10:12Z devkit-run "/task-fix DEVKIT-70" terminado [task-fix-1]: modelo=opus esfuerzo=high ronda=1 costo=0.50 turnos=45 duracion=612s :: OK
+2026-09-19T11:20:00Z task-fix-2 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-71" log=$turnos_est/task-fix-2.log
+2026-09-19T11:35:00Z devkit-run "/task-fix DEVKIT-71" terminado [task-fix-2]: modelo=opus esfuerzo=high ronda=1 costo=0.90 turnos=67 :: OK
+2026-09-19T11:59:00Z PR #72 (DEVKIT-72) head abc1234 sin informe: lanzando pr-review
+2026-09-19T11:59:00Z pr-review-72-abc1234 lanzando (origen=bucle) modelo=fable esfuerzo=high ronda=-: "/pr-review 72" log=$turnos_est/pr-review-72-abc1234.log
+2026-09-19T12:00:00Z PR #73 (DEVKIT-73) head def5678 sin informe: lanzando pr-review
+2026-09-19T12:00:00Z pr-review-73-def5678 lanzando (origen=bucle) modelo=fable esfuerzo=high ronda=-: "/pr-review 73" log=$turnos_est/pr-review-73-def5678.log
+2026-09-19T12:00:05Z pr-review-73-def5678 no lanzó: nada que revisar (ya revisado en def5678)
+FIN
+  filas_turnos=$(estado_filas "$turnos_est/watch.log" "$turnos_ahora")
+  campo() { printf '%s\n' "$filas_turnos" | awk -F'\t' -v c="$1" -v n="$2" '$2 == c {print $n; exit}'; }
+  # presupuesto.task-fix = 60 en roles.toml.
+  check "TURNOS dentro de la meta: usados/presupuesto, sin marca" "45/60" "$(campo DEVKIT-70 9)"
+  check "TURNOS que supera la meta: usados/presupuesto con !" "67/60!" "$(campo DEVKIT-71 9)"
+  check "TURNOS excedido lleva color rojo" si \
+    "$(formatear_fila task-fix DEVKIT-71 humano 15m 11m terminó opus/high '67/60!' - 0 1 1 \
+        | grep -qF $'\033[31m' && echo si || echo no)"
+  check "TURNOS dentro de la meta no lleva color" no \
+    "$(formatear_fila task-fix DEVKIT-70 humano 15m 10m terminó opus/high '45/60' - 0 1 1 \
+        | grep -qF $'\033[31m' && echo si || echo no)"
+  # presupuesto.pr-review = 40; "en curso" no tiene turnos todavía.
+  check "TURNOS en curso: -/presupuesto" "-/40" "$(campo DEVKIT-72 9)"
+  check "DURÓ con duracion=: mismo formato que HACE (612s -> 10m)" "10m" "$(campo DEVKIT-70 8)"
+  check "DURÓ sin duracion= en la línea terminado: un guion" "-" "$(campo DEVKIT-71 8)"
+  check "DURÓ en curso: crece con HACE (misma línea lanzando)" si \
+    "$([ "$(campo DEVKIT-72 4)" = "$(campo DEVKIT-72 8)" ] && echo si || echo no)"
+  # review-prep.sh (rc=3, "nada que revisar") no es un error: la fila queda en
+  # estado normal "no lanzó", con el motivo -la única línea del log- en
+  # DETALLE, no "murió sin resumen".
+  check "review-prep corta con rc=3: ESTADO es 'no lanzó', no 'error'" "no lanzó" "$(campo DEVKIT-73 5)"
+  check "review-prep corta con rc=3: DETALLE trae el motivo, no 'murió sin resumen'" \
+    "nada que revisar (ya revisado en def5678)" "$(campo DEVKIT-73 6)"
+  check "review-prep corta con rc=3: sin turnos, contra el presupuesto de pr-review" "-/40" "$(campo DEVKIT-73 9)"
+  check "review-prep corta con rc=3: sin duracion=, DURÓ es un guion" "-" "$(campo DEVKIT-73 8)"
+  check "icono: \"no lanzó\" también gris (mismo caso que \"no arrancó\")" gris \
+    "$(color_de_estado_fila "no lanzó")"
+  check "encabezado_tabla: orden nuevo, DURÓ junto a HACE y TURNOS antes de DETALLE" \
+    "SKILL CARD LANZÓ HACE DURÓ ESTADO MODELO TURNOS DETALLE" \
+    "$(encabezado_tabla | tr -s ' ')"
+
   # DEVKIT-106: un icono por estado, sobre las mismas filas de arriba. `fijo=1`
   # (una sola foto) deja "en curso" quieto en ⠿; con `fijo=0` (--seguir) gira
   # una posición por <idx>.
@@ -4950,15 +5059,15 @@ FIN
   check "icono: no arrancó, color gris" gris "$(color_de_estado_fila "$(estado_de DEVKIT-60)")"
   check "icono: \"no lanzó\" es el mismo caso que \"no arrancó\", mismo icono" '○' \
     "$(glifo_estado_fila "no lanzó" 0 1 1)"
-  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 79 \
-    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 bucle 1m terminó - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 97 \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
   # El estado más largo con icono es "⚠ sin registro" (14, DEVKIT-106 H2), no
   # "no arrancó" (10): antes este caso no probaba el borde real de la
   # columna y dejaba pasar la regresión de H2.
-  check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" 79 \
-    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "sin registro" - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+  check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" 97 \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
   check "columna ESTADO deja al menos un espacio antes de MODELO (sin registro)" si \
-    "$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "sin registro" - sonnet/high 0 1 0 \
+    "$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0 \
         | grep -qF ' sonnet/high' && echo si || echo no)"
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
@@ -5331,18 +5440,18 @@ FIN
   # la locale de quien corre la autoprueba en C -sin UTF-8-, `utf8_disponible`
   # cae a ASCII y estos casos prueban la rama equivocada.
   local fila_lento
-  fila_lento=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 0)
+  fila_lento=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 0)
   check "icono: lento se suma al detalle, aparte del girador de en curso" "si|si" \
     "$(printf '%s' "$fila_lento" | grep -qF '⠿ en curso' && echo -n si || echo -n no)|$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo -n si || echo -n no)"
   check "icono: lento lleva color ámbar" si \
-    "$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
+    "$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
   # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
   # con poco espacio para DETALLE, el corte caía en medio de `\033[33m` y el
   # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes. Con
-  # COLUMNS=85 (8 celdas para DETALLE) cada apertura de color debe tener su
-  # cierre.
+  # COLUMNS=103 (6 celdas para DETALLE, ANCHO_COLUMNAS_FIJAS=97) cada
+  # apertura de color debe tener su cierre.
   check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
-    "$(fila_lento_angosta=$(COLUMNS=85 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1)
+    "$(fila_lento_angosta=$(COLUMNS=103 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 1)
        abre=$(grep -o $'\033\[33m' <<<"$fila_lento_angosta" | wc -l)
        cierra=$(grep -o $'\033\[0m' <<<"$fila_lento_angosta" | wc -l)
        [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
@@ -5358,14 +5467,14 @@ FIN
   check "recortar: ancho 0 o negativo nunca revienta" '…' "$(recortar hola 0)"
   local motivo_largo fila_ancha
   motivo_largo=$(printf 'motivo bien largo %.0s' $(seq 1 20))
-  fila_ancha=$(COLUMNS=100 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high)
+  fila_ancha=$(COLUMNS=100 formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_largo")
   check "formatear_fila: la fila entera no pasa del ancho de la terminal" 1 \
     "$([ "${#fila_ancha}" -le 100 ] && echo 1 || echo 0)"
   check "formatear_fila: DETALLE recortado termina en puntos suspensivos" '…' \
     "${fila_ancha: -1}"
   check "formatear_fila: sin recorte, un DETALLE corto queda entero" "$motivo_largo" \
-    "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high \
-        | sed -E 's/^.{79}//')"
+    "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_largo" \
+        | sed -E 's/^.{97}//')"
 
   # DEVKIT-97 H1: sin COLUMNS/LINES pero con TERM definido (el contenedor,
   # watch.sh, cron con TERM heredado, `--estado | grep`) no hay tty real, y
@@ -5379,8 +5488,8 @@ FIN
     "$(unset LINES; TERM=xterm alto_terminal)"
   check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
     "$motivo_medio" \
-    "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_medio" opus/high \
-        | sed -E 's/^.{79}//')"
+    "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_medio" \
+        | sed -E 's/^.{97}//')"
 
   # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
   # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
