@@ -23,3 +23,9 @@
 # task-submit.sh (DEVKIT-91): la skill lo escribe, el script lo lee y lo
 # borra al terminar. No es código del repo.
 /.devkit/pr-body.md
+
+# Informe que redacta la skill pr-review, en tránsito hacia
+# review-publish.sh (DEVKIT-93), que lo publica y lo borra al terminar
+# (DEVKIT-99). Por si el script no llega a correr, o corre con
+# `--conservar` para depurar, no queda sin seguimiento en el workspace.
+/.devkit/review-*.md

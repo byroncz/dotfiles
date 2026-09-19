@@ -119,9 +119,12 @@ turnos que esta card elimina.
    no redactes tú ese comentario, ni lo dupliques. Con veredicto `CAMBIOS`,
    la card se queda en `Revisión automática` sin que este script toque nada
    más: `task-fix` lee el bloque de hallazgos directamente en el PR. Si
-   falla, el error va en stderr; corrígelo (el informe suele ser la causa:
-   revisa que empiece con el marcador) y vuelve a ejecutarlo, no publiques un
-   segundo informe con `gh pr review` a mano.
+   falla, el error va en stderr y `.devkit/review-<N>.md` ya no existe: el
+   script lo borra al salir, también cuando falla (DEVKIT-99). Vuelve a
+   escribir el informe corregido -el marcador suele ser la causa- antes de
+   reintentar, o repite con `--conservar` como primer argumento si necesitas
+   inspeccionar el archivo que falló. No publiques un segundo informe con
+   `gh pr review` a mano.
 5. Responde con una línea: PR, veredicto y número de hallazgos.
 
 ## Reglas

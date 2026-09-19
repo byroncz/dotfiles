@@ -97,7 +97,7 @@ git config --global init.defaultBranch main
 git config --global pull.rebase false
 git config --global core.excludesFile "$HOME/.config/git/ignore"
 mkdir -p "$HOME/.config/git"
-printf '%s\n' '*.local' '*.local.*' '.DS_Store' '.env' '.env.*' '!.env.example' '.ipynb_checkpoints/' '__pycache__/' '.venv/' '.devkit/costos.log' '.devkit/pr-body.md' > "$HOME/.config/git/ignore"
+printf '%s\n' '*.local' '*.local.*' '.DS_Store' '.env' '.env.*' '!.env.example' '.ipynb_checkpoints/' '__pycache__/' '.venv/' '.devkit/costos.log' '.devkit/pr-body.md' '.devkit/review-*.md' > "$HOME/.config/git/ignore"
 if [ -n "${GH_TOKEN:-}" ]; then
   gh auth setup-git >/dev/null 2>&1 && log "gh autenticado como $(gh api user -q .login 2>/dev/null || echo '?')"
 fi
