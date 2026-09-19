@@ -1895,6 +1895,137 @@ recortar() {  # recortar <texto> <ancho>
   printf '%s…' "${s:0:$((n - 1))}"
 }
 
+# Iconos y color de `--estado`/`--tablero` (DEVKIT-106): un vistazo sin leer
+# texto. Sin UTF-8 declarada en LANG/LC_ALL caen a un respaldo ASCII de un
+# carácter -bash cuenta bytes, no caracteres, fuera de una locale UTF-8, y un
+# icono multibyte desalinearía `rellenar` igual que "terminó" antes de
+# DEVKIT-81 H7-.
+utf8_disponible() {
+  case "${LC_ALL:-${LANG:-}}" in
+    *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Girador de "en curso" (DEVKIT-106): el de npm/ora, un punto braille por
+# refresco de `--seguir`; fijo en ⠿ en una sola foto de `--estado`.
+GIRO_BRAILLE='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+
+# Aplica el color ANSI de <color> ("verde"/"ambar"/"rojo"/"gris"/vacío) a
+# <texto> si <habilitado> es 1 -mismo patrón que <color> en `senal_bucle`:
+# quien arma el cuadro dentro de un `$(...)` no puede decidirlo ahí adentro
+# con `[ -t 1 ]` y lo resuelve antes, afuera. Sin color que aplicar (vacío o
+# <habilitado> distinto de 1), <texto> vuelve intacto.
+colorear() {  # colorear <color> <texto> <habilitado>
+  local color=$1 texto=$2 habilitado=$3 code=''
+  if [ "$habilitado" = 1 ]; then
+    case "$color" in
+      verde) code=$'\033[32m' ;;
+      ambar) code=$'\033[33m' ;;
+      rojo) code=$'\033[31m' ;;
+      gris) code=$'\033[90m' ;;
+    esac
+  fi
+  if [ -n "$code" ]; then printf '%s%s\033[0m' "$code" "$texto"; else printf '%s' "$texto"; fi
+}
+
+# Glifo sin color de una fila de `estado_filas` (skill/tarea). "en curso" gira
+# en braille, una posición por refresco (<idx>), fijo en ⠿ con <fijo>=1 (una
+# sola foto de `--estado` sin `--seguir`); terminó ✔; error -mismo icono para
+# "falló", el texto que trae la línea cruda de watch.log antes de que
+# `estado_filas` lo normalice a "error"- ✖; bloqueada ⛔; no arrancó (la card
+# nunca llegó a lanzar; "no lanzó" es el mismo caso con otro nombre) ○;
+# cualquier otro valor -hoy solo "sin registro", un `claude -p` vivo que
+# `devkit-run` no reconoce- ⚠, la misma alarma que "lento": es una anomalía,
+# no un paso esperado del ciclo. Separado de `color_de_estado_fila` para que
+# `formatear_fila` rellene la columna con el texto plano -sin las secuencias
+# ANSI, que `rellenar` contaría como caracteres visibles y correría el resto
+# de la tabla- y recién después pinte el glifo ya alineado.
+glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
+  local estado=$1 idx=$2 fijo=$3 utf=$4
+  case "$estado" in
+    "en curso")
+      if [ "$fijo" = 1 ]; then
+        [ "$utf" = 1 ] && printf '⠿' || printf '*'
+      elif [ "$utf" = 1 ]; then
+        printf '%s' "${GIRO_BRAILLE:$((idx % 10)):1}"
+      else
+        printf '*'
+      fi
+      ;;
+    terminó) [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
+    error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
+    bloqueada) [ "$utf" = 1 ] && printf '⛔' || printf '!!' ;;
+    "no arrancó"|"no lanzó") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
+    *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
+  esac
+}
+
+# Color del glifo de `glifo_estado_fila` para el mismo <estado>. "en curso"
+# vuelve vacío -el girador no lleva color, ya se distingue por moverse-.
+color_de_estado_fila() {  # color_de_estado_fila <estado>
+  case "$1" in
+    "en curso") printf '' ;;
+    terminó) printf verde ;;
+    error|falló|"falló ("*|bloqueada) printf rojo ;;
+    "no arrancó"|"no lanzó") printf gris ;;
+    *) printf ambar ;;
+  esac
+}
+
+# Mismo set de iconos que `glifo_estado_fila`/`color_de_estado_fila`, sobre el
+# Estado de Notion de una fila de `--tablero` (DEVKIT-106): "En progreso" y
+# "Revisión automática" son trabajo activo -mismo braille que "en curso"-;
+# "Lista para merge" ya terminó el trabajo del agente; "Lista" es la cola,
+# todavía sin lanzar -mismo icono que "no arrancó"-; "Bloqueada" es la misma
+# palabra que en `estado_filas`.
+glifo_estado_tablero() {  # glifo_estado_tablero <estado card> <idx> <fijo:0|1> <utf:0|1>
+  case "$1" in
+    "En progreso"|"Revisión automática") glifo_estado_fila "en curso" "$2" "$3" "$4" ;;
+    "Lista para merge") glifo_estado_fila terminó 0 1 "$4" ;;
+    Bloqueada) glifo_estado_fila bloqueada 0 1 "$4" ;;
+    Lista) glifo_estado_fila "no arrancó" 0 1 "$4" ;;
+    *) glifo_estado_fila desconocido 0 1 "$4" ;;
+  esac
+}
+
+color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
+  case "$1" in
+    "En progreso"|"Revisión automática") printf '' ;;
+    "Lista para merge") printf verde ;;
+    Bloqueada) printf rojo ;;
+    Lista) printf gris ;;
+    *) printf ambar ;;
+  esac
+}
+
+# Punto de la cabecera de `--estado`/`--tablero --seguir` (DEVKIT-106): verde
+# "ejecutando" con al menos una fila "en curso" en <filas> (la salida de
+# `estado_filas`); si no hay ninguna, ámbar "en espera" con el bucle vivo o
+# esperando una skill, rojo "parado" con el bucle MUERTO o SIN SEÑAL -las
+# mismas ramas que ya distingue el texto de <bucle> (`senal_bucle`), leídas de
+# ahí para no duplicar esa lógica-. <fijo>=1 (una sola foto de `--estado`, sin
+# `--seguir`) deja el punto sin parpadeo; en `--seguir` alterna ● lleno/○
+# hueco con <idx>, la señal de vida del propio monitor (DEVKIT-81): si dos
+# refrescos seguidos muestran el mismo símbolo, el monitor está congelado.
+punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> <idx> <fijo:0|1> <utf:0|1> <color_habilitado>
+  local filas=$1 bucle=$2 idx=$3 fijo=$4 utf=$5 habilitado=$6 color palabra relleno
+  if printf '%s\n' "$filas" | awk -F'\t' '$5=="en curso"{f=1} END{exit !f}'; then
+    color=verde; palabra=ejecutando
+  else
+    case "$bucle" in
+      *MUERTO*|*'SIN SEÑAL'*) color=rojo; palabra=parado ;;
+      *) color=ambar; palabra="en espera" ;;
+    esac
+  fi
+  if [ "$fijo" = 1 ] || [ "$((idx % 2))" -eq 0 ]; then
+    relleno=$([ "$utf" = 1 ] && printf '●' || printf '*')
+  else
+    relleno=$([ "$utf" = 1 ] && printf '○' || printf 'o')
+  fi
+  printf '%s %s' "$(colorear "$color" "$relleno" "$habilitado")" "$(colorear "$color" "$palabra" "$habilitado")"
+}
+
 encabezado_tabla() {
   # ESTADO mide 14, no 12 (DEVKIT-81 H7): "sin registro" ya mide 12, y sin
   # margen queda pegado a la columna MODELO.
@@ -1909,15 +2040,39 @@ encabezado_tabla() {
 # colgada de un `sin registro` (o cualquier motivo largo) desbordaba una
 # sola fila a veinte líneas de pantalla, y el redibujo en el sitio de
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
-formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo>
-  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 frena=""
+# <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
+# el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
+# directas de la autoprueba (sin esos tres argumentos) no cambian. El ancho de
+# ESTADO no crece: "sin registro" ya mide 12 (DEVKIT-81 H7) y el icono+espacio
+# ocupan justo los 2 que le sobraban a la columna de 14.
+formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo> [idx=0] [fijo=1] [color=]
+  local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 \
+        idx=${8:-0} fijo=${9:-1} color_habilitado=${10:-} frena="" utf glifo color estado_col icono_len glifo_lento
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
   fi
+  utf8_disponible && utf=1 || utf=0
+  # "lento" (el detalle que deja `estado_filas` cuando un "en curso" supera
+  # SKILL_TIMEOUT) suma su propio icono ámbar delante, aparte del girador de
+  # ESTADO: son dos alarmas distintas, sigue en curso pero además va lento.
+  case "$detalle" in
+    lento|"lento;"*)
+      glifo_lento=$([ "$utf" = 1 ] && printf '⚠' || printf '!')
+      [ "$color_habilitado" = 1 ] && glifo_lento=$(colorear ambar "$glifo_lento" 1)
+      detalle="$glifo_lento $detalle"
+      ;;
+  esac
   detalle=$(recortar "$detalle" "$(( $(ancho_terminal) - ANCHO_COLUMNAS_FIJAS ))")
+  glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
+  color=$(color_de_estado_fila "$estado")
+  estado_col=$(rellenar "$glifo $estado" 14)
+  if [ -n "$color" ] && [ "$color_habilitado" = 1 ]; then
+    icono_len=${#glifo}
+    estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
+  fi
   printf '%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-    "$(rellenar "$edad" 8)" "$(rellenar "$estado" 14)" "$(rellenar "$modelo" 16)" "$detalle"
+    "$(rellenar "$edad" 8)" "$estado_col" "$(rellenar "$modelo" 16)" "$detalle"
 }
 
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
@@ -1944,8 +2099,8 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
   printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
-mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1]
-  local permitir_refresco_cuota=${1:-1}
+mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=]
+  local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
   local filas skill clave origen edad estado detalle modelo
   filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
   if [ -z "$filas" ]; then
@@ -1987,7 +2142,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1]
         printf '%s\n' "$e"
         encabezado_tabla
         while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
-          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
+          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado"
         done <<<"$filas"
       done
       # Filas sin Épica activa (sin Padre En progreso, o sin Clave): quedan
@@ -2001,13 +2156,13 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1]
           encabezado_tabla
           hay_sin=1
         fi
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
+        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado"
       done <<<"$filas"
     else
       encabezado_tabla
       local -a filas_fmt=()
       while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
-        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo")")
+        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo" "$idx" "$fijo" "$color_habilitado")")
       done <<<"$filas"
       imprimir_tabla "${filas_fmt[@]}"
     fi
@@ -2108,8 +2263,9 @@ calcular_permitir_refresco_cuota() {  # calcular_permitir_refresco_cuota <desde>
 }
 
 seguir_estado() {
-  local giros='|/-\' i=0 c frame ahora color_tty='' desde
+  local i=0 frame ahora color_tty='' desde utf filas bucle punto
   desde=${DEVKIT_AHORA:-$(date +%s)}
+  utf8_disponible && utf=1 || utf=0
   if [ -t 1 ]; then
     tput civis 2>/dev/null
     trap 'tput cnorm 2>/dev/null' EXIT
@@ -2117,23 +2273,29 @@ seguir_estado() {
     color_tty=1
   fi
   while true; do
-    c=${giros:$((i % ${#giros})):1}
-    i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
     # `COLUMNS`/`LINES` de verdad, tomados acá afuera (DEVKIT-97): adentro del
     # `$(...)` de más abajo `tput` ya no ve la tty real -mismo problema que
     # `color` en `senal_bucle`-, y se toman de nuevo en cada vuelta por si el
     # humano cambió el tamaño de la ventana mientras `--seguir` corría.
     if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
+    # El punto de la cabecera (DEVKIT-106) lee las mismas <filas> y el mismo
+    # <bucle> que ya arma esta vuelta para `mostrar_estado`/`senal_bucle`: sin
+    # esto, `punto_estado` volvería a leer watch.log por su cuenta, cachés
+    # tibias aparte.
+    filas=$(estado_filas "$WATCH_LOG" "$ahora")
+    bucle=$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")
+    punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # `frame=$(...)` recorta *todos* los saltos de línea finales de lo que
     # captura, no uno solo (DEVKIT-97/DEVKIT-85): con "...\n\n" al final del
     # `printf`, la sustitución se comía las dos líneas en blanco antes de que
     # `frame+=` pegara la tabla, y la fila de títulos quedaba pegada a la
     # cabecera. El separador se agrega aparte, después de la sustitución.
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
-      "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+      "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty")
+    i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -2161,8 +2323,9 @@ seguir_estado() {
 # calcular_permitir_refresco_cuota-: un task-fix o pr-review largo también
 # corre desatendido.
 seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
-  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0 desde
+  local id=$1 pid=$2 i=0 frame ahora color_tty='' resumen_final muerto_desde=0 desde utf filas bucle punto
   desde=${DEVKIT_AHORA:-$(date +%s)}
+  utf8_disponible && utf=1 || utf=0
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
@@ -2170,18 +2333,22 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     exit 130
   ' INT TERM
   while true; do
-    c=${giros:$((i % ${#giros})):1}
-    i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
     # COLUMNS/LINES de verdad, tomados acá afuera: mismo motivo que en
     # seguir_estado (DEVKIT-97).
     if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
+    # Punto de cabecera (DEVKIT-106): mismas <filas>/<bucle> de esta vuelta,
+    # ver el comentario de seguir_estado.
+    filas=$(estado_filas "$WATCH_LOG" "$ahora")
+    bucle=$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")
+    punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
     # el separador va aparte de la sustitución que trae senal_bucle.
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
-      "$id" "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+      "$id" "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty")
+    i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -2214,10 +2381,23 @@ encabezado_tablero() {
     "$(rellenar PR 40)" 'BLOQUEA A'
 }
 
-formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr>
-  local clave=$1 estado=$2 tipo=$3 pr=$4 frena
+# <idx>/<fijo>/<color> (DEVKIT-106): mismos iconos y mismo punto de cabecera
+# que `--estado`, ver `glifo_estado_tablero`. La columna ESTADO tampoco crece:
+# "Revisión automática" mide 19 y el icono+espacio ocupan 2 de los 3 que le
+# sobran a la columna de 22.
+formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr> [idx=0] [fijo=1] [color=]
+  local clave=$1 estado=$2 tipo=$3 pr=$4 idx=${5:-0} fijo=${6:-1} color_habilitado=${7:-} \
+        frena utf glifo color estado_col icono_len
   frena=$(bloquea_a "$clave")
-  printf '%s%s%s%s%s\n' "$(rellenar "$clave" 12)" "$(rellenar "$estado" 22)" "$(rellenar "$tipo" 10)" \
+  utf8_disponible && utf=1 || utf=0
+  glifo=$(glifo_estado_tablero "$estado" "$idx" "$fijo" "$utf")
+  color=$(color_de_estado_tablero "$estado")
+  estado_col=$(rellenar "$glifo $estado" 22)
+  if [ -n "$color" ] && [ "$color_habilitado" = 1 ]; then
+    icono_len=${#glifo}
+    estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
+  fi
+  printf '%s%s%s%s%s\n' "$(rellenar "$clave" 12)" "$estado_col" "$(rellenar "$tipo" 10)" \
     "$(rellenar "$pr" 40)" "${frena#bloquea a: }"
 }
 
@@ -2232,7 +2412,8 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
 # vuelta paga hasta tres consultas -activas, bloqueos y epicas-, no una sola
 # (H1 de pr-review en DEVKIT-82: antes salía plano y sin "bloquea a" la
 # primera vez, porque esas dos cachés recién arrancaban a llenarse detrás).
-mostrar_tablero() {
+mostrar_tablero() {  # mostrar_tablero [idx=0] [fijo=1] [color=]
+  local idx=${1:-0} fijo=${2:-1} color_habilitado=${3:-}
   local codigo filas
   codigo=$(project_code)
   if [ -z "$codigo" ]; then
@@ -2270,7 +2451,7 @@ mostrar_tablero() {
       printf '%s\n' "$e"
       encabezado_tablero
       while IFS=$'\t' read -r clave estado tipo pr; do
-        [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+        [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr" "$idx" "$fijo" "$color_habilitado"
       done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
     done
     local hay_sin=0
@@ -2282,12 +2463,12 @@ mostrar_tablero() {
         encabezado_tablero
         hay_sin=1
       fi
-      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr" "$idx" "$fijo" "$color_habilitado"
     done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
   else
     encabezado_tablero
     while IFS=$'\t' read -r clave estado tipo pr; do
-      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr"
+      formatear_fila_tablero "$clave" "$estado" "$tipo" "$pr" "$idx" "$fijo" "$color_habilitado"
     done < <(jq -r '.[] | [.clave, .estado, (.tipo // "" | if . == "" then "-" else . end), (.pr // "" | if . == "" then "-" else . end)] | @tsv' <<<"$filas")
   fi
 }
@@ -2297,7 +2478,8 @@ mostrar_tablero() {
 # vuelta paga una consulta real a Notion, sin la caché de 30 s que sí
 # protege a `--estado`).
 seguir_tablero() {
-  local giros='|/-\' i=0 c frame ahora color_tty=''
+  local i=0 frame ahora color_tty='' utf filas bucle punto
+  utf8_disponible && utf=1 || utf=0
   if [ -t 1 ]; then
     tput civis 2>/dev/null
     trap 'tput cnorm 2>/dev/null' EXIT
@@ -2305,15 +2487,21 @@ seguir_tablero() {
     color_tty=1
   fi
   while true; do
-    c=${giros:$((i % ${#giros})):1}
-    i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
+    # Punto de cabecera (DEVKIT-106): el mismo que `--estado`, calculado
+    # sobre `estado_filas`/`senal_bucle` de WATCH_LOG -es la misma realidad
+    # (¿hay algo lanzado ahora mismo? ¿el bucle vive?), sin importar cuál
+    # tabla la esté mostrando.
+    filas=$(estado_filas "$WATCH_LOG" "$ahora")
+    bucle=$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")
+    punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
     # el separador va aparte de la sustitución que trae senal_bucle.
     frame=$(printf 'devkit-run --tablero  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
-      "$(date +%T)" "$c" "$TABLERO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+      "$(date +%T)" "$punto" "$TABLERO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_tablero)
+    frame+=$(mostrar_tablero "$i" 0 "$color_tty")
+    i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -4703,6 +4891,93 @@ FIN
   check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
+
+  # DEVKIT-106: un icono por estado, sobre las mismas filas de arriba. `fijo=1`
+  # (una sola foto) deja "en curso" quieto en ⠿; con `fijo=0` (--seguir) gira
+  # una posición por <idx>.
+  local estado_de
+  estado_de() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
+  check "icono: en curso, girador fijo en una sola foto" '⠿' \
+    "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 0 1 1)"
+  check "icono: en curso, gira una posición por refresco de --seguir" '⠙' \
+    "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 1 0 1)"
+  check "icono: terminó" '✔' "$(glifo_estado_fila "$(estado_de DEVKIT-56)" 0 1 1)"
+  check "icono: terminó, color verde" verde "$(color_de_estado_fila "$(estado_de DEVKIT-56)")"
+  check "icono: error" '✖' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 1)"
+  check "icono: error, color rojo" rojo "$(color_de_estado_fila "$(estado_de DEVKIT-58)")"
+  check "icono: bloqueada" '⛔' "$(glifo_estado_fila "$(estado_de DEVKIT-59)" 0 1 1)"
+  check "icono: bloqueada, color rojo" rojo "$(color_de_estado_fila "$(estado_de DEVKIT-59)")"
+  check "icono: no arrancó (una card que nunca llegó a lanzar)" '○' \
+    "$(glifo_estado_fila "$(estado_de DEVKIT-60)" 0 1 1)"
+  check "icono: no arrancó, color gris" gris "$(color_de_estado_fila "$(estado_de DEVKIT-60)")"
+  check "icono: \"no lanzó\" es el mismo caso que \"no arrancó\", mismo icono" '○' \
+    "$(glifo_estado_fila "no lanzó" 0 1 1)"
+  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 77 \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 bucle 1m terminó - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+  check "columna ESTADO no cambia de ancho con el estado más largo (no arrancó)" 77 \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "no arrancó" - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+
+  # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
+  # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
+  # esa locale, y un icono multibyte desalinearía `rellenar`.
+  check "utf8_disponible: LANG=C.UTF-8 cuenta como UTF-8" si \
+    "$(LC_ALL= LANG=C.UTF-8 utf8_disponible && echo si || echo no)"
+  check "utf8_disponible: LANG=C no cuenta como UTF-8" no \
+    "$(LC_ALL= LANG=C utf8_disponible && echo si || echo no)"
+  check "icono ASCII: en curso" '*' "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 0 1 0)"
+  check "icono ASCII: terminó" 'ok' "$(glifo_estado_fila "$(estado_de DEVKIT-56)" 0 1 0)"
+  check "icono ASCII: error" 'x' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 0)"
+  check "icono ASCII: bloqueada" '!!' "$(glifo_estado_fila "$(estado_de DEVKIT-59)" 0 1 0)"
+  check "icono ASCII: no arrancó" 'o' "$(glifo_estado_fila "$(estado_de DEVKIT-60)" 0 1 0)"
+
+  # Punto de la cabecera (DEVKIT-106): verde con una fila en curso (aunque el
+  # bucle esté MUERTO: la fila manda), ámbar sin ninguna pero con el bucle
+  # vivo o esperando una skill, rojo con el bucle MUERTO o SIN SEÑAL.
+  local filas_punto_en_curso filas_punto_sin
+  filas_punto_en_curso=$'skill\tDEVKIT-1\torigen\t1s\ten curso\t-\tmodelo'
+  filas_punto_sin=$'skill\tDEVKIT-1\torigen\t1s\tterminó\t-\tmodelo'
+  check "punto: verde con una fila en curso, aunque el bucle esté MUERTO" si \
+    "$(punto_estado "$filas_punto_en_curso" 'bucle: MUERTO, no encuentro watch.sh en ps' 0 1 1 1 \
+        | grep -qF $'\033[32m' && echo si || echo no)"
+  check "punto: ámbar sin filas en curso, con el bucle vivo" si \
+    "$(punto_estado "$filas_punto_sin" 'bucle: vivo, último tick hace 3s' 0 1 1 1 \
+        | grep -qF $'\033[33m' && echo si || echo no)"
+  check "punto: ámbar sin filas en curso, con el bucle esperando una skill" si \
+    "$(punto_estado "$filas_punto_sin" 'bucle: esperando pr-review-58 hace 10s' 0 1 1 1 \
+        | grep -qF $'\033[33m' && echo si || echo no)"
+  check "punto: rojo con el bucle MUERTO" si \
+    "$(punto_estado "$filas_punto_sin" 'bucle: MUERTO, no encuentro watch.sh en ps' 0 1 1 1 \
+        | grep -qF $'\033[31m' && echo si || echo no)"
+  check "punto: rojo con el bucle SIN SEÑAL" si \
+    "$(punto_estado "$filas_punto_sin" 'bucle: SIN SEÑAL hace 10m' 0 1 1 1 \
+        | grep -qF $'\033[31m' && echo si || echo no)"
+  check "punto: la palabra junto al punto (ejecutando/en espera/parado)" \
+    "ejecutando|en espera|parado" \
+    "$(printf '%s|%s|%s' \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: MUERTO' 0 1 0 0 | cut -d' ' -f2-)" \
+        "$(punto_estado "$filas_punto_sin" 'bucle: vivo, último tick hace 1s' 0 1 0 0 | cut -d' ' -f2-)" \
+        "$(punto_estado "$filas_punto_sin" 'bucle: MUERTO' 0 1 0 0 | cut -d' ' -f2-)")"
+  check "punto: alterna ● lleno y ○ hueco entre dos refrescos de --seguir" '●|○' \
+    "$(printf '%s|%s' \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 0 1 0 | cut -d' ' -f1)" \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 0 1 0 | cut -d' ' -f1)")"
+  check "punto: en una sola foto (sin --seguir) no parpadea, siempre lleno" '●|●' \
+    "$(printf '%s|%s' \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 1 1 0 | cut -d' ' -f1)" \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 1 1 0 | cut -d' ' -f1)")"
+  check "punto ASCII: alterna * lleno y o hueco" '*|o' \
+    "$(printf '%s|%s' \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 0 0 0 | cut -d' ' -f1)" \
+        "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 0 0 0 | cut -d' ' -f1)")"
+
+  # Iconos de `--tablero` (DEVKIT-106): mismo set, sobre el Estado de Notion.
+  check "icono tablero: En progreso gira como en curso" '⠿' "$(glifo_estado_tablero "En progreso" 0 1 1)"
+  check "icono tablero: Revisión automática gira como en curso" '⠿' \
+    "$(glifo_estado_tablero "Revisión automática" 0 1 1)"
+  check "icono tablero: Lista para merge" '✔' "$(glifo_estado_tablero "Lista para merge" 0 1 1)"
+  check "icono tablero: Lista, la cola, todavía sin lanzar" '○' "$(glifo_estado_tablero Lista 0 1 1)"
+  check "icono tablero: Bloqueada" '⛔' "$(glifo_estado_tablero Bloqueada 0 1 1)"
+
   # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
   check "agentes_en_curso_rapido coincide con las filas en curso de estado_filas" 2 \
@@ -5002,6 +5277,15 @@ FIN
   check "lento: una fila en curso que pasa SKILL_TIMEOUT se marca" "en curso|lento" \
     "$(PS_BIN="$pslist_lento" LOCK="$est/skill.lock" estado_filas "$lento_log" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-90" {print $5"|"$6}')"
+  # DEVKIT-106: "lento" suma su propio icono ámbar delante del detalle,
+  # aparte del girador de ESTADO -son dos alarmas distintas, sigue en curso
+  # pero además va lento.
+  local fila_lento
+  fila_lento=$(formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 0)
+  check "icono: lento se suma al detalle, aparte del girador de en curso" "si|si" \
+    "$(printf '%s' "$fila_lento" | grep -qF '⠿ en curso' && echo -n si || echo -n no)|$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo -n si || echo -n no)"
+  check "icono: lento lleva color ámbar" si \
+    "$(formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
 
   # DEVKIT-97: DETALLE se recorta al ancho disponible de la terminal -sin
   # esto, un motivo largo (una card completa, un "murió sin resumen; ver
@@ -5619,9 +5903,12 @@ FIN
     "lanzando (origen=${origen_esperado:-?}): \"/task-submit DEVKIT-7\"" \
     "$(grep -oE 'lanzando \(origen=[^)]*\)( modelo=[^ ]+ esfuerzo=[^ ]+ ronda=[^:]+)?: "/task-submit DEVKIT-7"' "$tmp/run/watch.log" \
         | sed -E 's/\) modelo=[^:]+:/):/' | head -1)"
-  check "lanzamiento real: --estado lo muestra terminado" "terminó" \
+  # DEVKIT-106: la columna ESTADO ahora lleva un icono delante ("✔ terminó"),
+  # así que el 5º campo por espacios ya no es la palabra -se busca la palabra
+  # en la fila entera, sin fijarse en su posición.
+  check "lanzamiento real: --estado lo muestra terminado" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-        bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/ {print $5}')"
+        bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/' | grep -qF 'terminó' && echo si || echo no)"
 
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
   # queda mostrando --estado hasta que termina; la última línea es el
@@ -5718,6 +6005,11 @@ FIN
     "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -q 'DEVKIT-61' && echo si || echo no)"
   check "--tablero: DEVKIT-59 sin Épica activa cae en el bloque final" si \
     "$(printf '%s\n' "$salida_tablero" | awk '/^\(sin Épica\)$/{f=1} f' | grep -q 'DEVKIT-59' && echo si || echo no)"
+  # DEVKIT-106: --tablero reutiliza los mismos iconos que --estado.
+  check "--tablero: DEVKIT-57 En progreso lleva el girador de en curso" si \
+    "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-57' | grep -qF '⠿' && echo si || echo no)"
+  check "--tablero: DEVKIT-58 Lista para merge lleva ✔" si \
+    "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -qF '✔' && echo si || echo no)"
 
   # H1 (pr-review sobre DEVKIT-82): con las cachés de bloqueos/epicas vacías
   # -contenedor recién arrancado, sin ningún `--estado` previo-, `--tablero`
@@ -6545,12 +6837,17 @@ $card_md"
     # motivo que en seguir_estado, para que un `--estado` interactivo (sin
     # `--seguir`) también recorte al tamaño real en vez del respaldo ancho.
     if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
-    mostrar_estado
+    # Una sola foto (DEVKIT-106): girador y punto fijos (fijo=1), color solo
+    # con tty real -acá `[ -t 1 ]` sí ve la tty de verdad, a diferencia de
+    # dentro de un `$(...)` (ver seguir_estado/senal_bucle).
+    estado_color=''; [ -t 1 ] && estado_color=1
+    mostrar_estado 1 0 1 "$estado_color"
     exit 0
     ;;
   --tablero)
     if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
-    mostrar_tablero
+    tablero_color=''; [ -t 1 ] && tablero_color=1
+    mostrar_tablero 0 1 "$tablero_color"
     exit $?
     ;;
   --agentes)
