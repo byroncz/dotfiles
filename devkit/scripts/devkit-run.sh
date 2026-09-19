@@ -5314,20 +5314,22 @@ FIN
         | awk -F'\t' '$2 == "DEVKIT-90" {print $5"|"$6}')"
   # DEVKIT-106: "lento" suma su propio icono ámbar delante del detalle,
   # aparte del girador de ESTADO -son dos alarmas distintas, sigue en curso
-  # pero además va lento.
+  # pero además va lento. LC_ALL=C.UTF-8 fijo (DEVKIT-106 H6): sin esto, con
+  # la locale de quien corre la autoprueba en C -sin UTF-8-, `utf8_disponible`
+  # cae a ASCII y estos casos prueban la rama equivocada.
   local fila_lento
-  fila_lento=$(formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 0)
+  fila_lento=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 0)
   check "icono: lento se suma al detalle, aparte del girador de en curso" "si|si" \
     "$(printf '%s' "$fila_lento" | grep -qF '⠿ en curso' && echo -n si || echo -n no)|$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo -n si || echo -n no)"
   check "icono: lento lleva color ámbar" si \
-    "$(formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
+    "$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
   # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
   # con poco espacio para DETALLE, el corte caía en medio de `\033[33m` y el
   # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes. Con
   # COLUMNS=85 (8 celdas para DETALLE) cada apertura de color debe tener su
   # cierre.
   check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
-    "$(fila_lento_angosta=$(COLUMNS=85 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1)
+    "$(fila_lento_angosta=$(COLUMNS=85 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1)
        abre=$(grep -o $'\033\[33m' <<<"$fila_lento_angosta" | wc -l)
        cierra=$(grep -o $'\033\[0m' <<<"$fila_lento_angosta" | wc -l)
        [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
@@ -6043,7 +6045,10 @@ FIN
   printf '%s\t%s\n' "$(date +%s)" \
     '[{"clave":"DEVKIT-57","epica":"DEVKIT-50","epica_titulo":"Alfa"},{"clave":"DEVKIT-58","epica":"DEVKIT-51","epica_titulo":"Beta"}]' \
     >"$tablero_epic/epicas.cache"
-  salida_tablero=$(NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+  # LC_ALL=C.UTF-8 fijo (DEVKIT-106 H6): mismo motivo que en las pruebas de
+  # "lento" -sin esto, con la locale de quien corre la autoprueba en C, los
+  # casos de icono de abajo prueban la rama ASCII en vez de la UTF-8.
+  salida_tablero=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
     BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
     EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
     mostrar_tablero)
