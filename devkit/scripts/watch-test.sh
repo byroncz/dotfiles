@@ -67,6 +67,26 @@ check() {
   fi
 }
 
+# check_tsv <nombre> <campo> <esperado> <head> <reviews...> -- <comments...>:
+# como check(), pero compara un campo cualquiera de la salida de --decide, no
+# solo la acción (campo 1). La usa DEVKIT-101 para el campo 5 (informe).
+check_tsv() {
+  local name=$1 field=$2 want=$3 head=$4; shift 4
+  local reviews=() comments=() got
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do reviews+=("$1"); shift; done
+  [ $# -eq 0 ] || shift
+  comments=("$@")
+  got=$(printf '{"headRefOid":"%s","reviews":[%s],"comments":[%s]}' \
+          "$head" "$(join "${reviews[@]}")" "$(join "${comments[@]}")" \
+        | bash "$WATCH" --decide | cut -f"$field")
+  if [ "$got" = "$want" ]; then
+    printf 'ok   %-58s %s\n' "$name" "$got"
+  else
+    printf 'FAIL %-58s esperado %s, obtenido %s\n' "$name" "$want" "${got:-<vacío>}"
+    fail=1
+  fi
+}
+
 check "PR sin marcadores" revisar a1 --
 check "CAMBIOS para el head, sin respuesta" fix a1 "$(rev T01 a1 CAMBIOS)" --
 check "CAMBIOS respondido con head nuevo" revisar b2 "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 b2 a1)"
@@ -117,6 +137,53 @@ check "bloqueo, comentario humano y respuesta con head nuevo (caso J)" revisar e
 check "informe CAMBIOS nuevo tras el bloqueo reinicia el conteo" fix e5 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" "$(rev T10 e5 CAMBIOS)" -- \
   "$(fix T02 b2 a1)" "$(fix T04 c3 b2)" "$(fix T06 d4 c3)" "$(block T07 d4)" "$(comment humano T08 'sigue')" "$(fix T09 e5 d4)"
+
+# --- El informe habilita un lanzamiento nuevo aunque el head no cambie
+# (DEVKIT-101) ----------------------------------------------------------------
+# PR 68 (DEVKIT-94): CAMBIOS en 1f31202 (22:23), task-fix respondió sin
+# commits (22:30) y una segunda revisión CAMBIOS sobre el mismo head (22:31)
+# no relanzaba task-fix, porque `launched` solo llevaba el sha y ya tenía
+# `fix:68:1f31202` de la primera ronda. El campo 5 (informe) es el
+# `submittedAt` del último devkit-review: cambia en cada ronda aunque el head
+# se repita, así que la clave de `launched` que arma watch.sh (`fix:$num:$ref:
+# $informe`) también cambia.
+check_tsv "DEVKIT-101: informe de la primera ronda CAMBIOS" 5 T01 a1 "$(rev T01 a1 CAMBIOS)" --
+check "DEVKIT-101: primera ronda, sin respuesta todavía" fix a1 "$(rev T01 a1 CAMBIOS)" --
+check_tsv "DEVKIT-101: informe de la segunda ronda, tras fix sin push" 5 T03 a1 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 a1 CAMBIOS)" -- "$(fix T02 a1 a1)"
+check "DEVKIT-101: segundo CAMBIOS sobre el mismo head vuelve a pedir fix" fix a1 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 a1 CAMBIOS)" -- "$(fix T02 a1 a1)"
+# Tres rondas de CAMBIOS respondidas sin empujar nunca un commit (el head no
+# cambia en ningún momento): la guarda de tres ciclos (DEVKIT-56) sigue
+# contando igual y bloquea apenas se responde la tercera, sin esperar una
+# cuarta revisión.
+check "DEVKIT-101: tercer CAMBIOS respondido sin push bloquea por la guarda" bloquear a1 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 a1 CAMBIOS)" "$(rev T05 a1 CAMBIOS)" -- \
+  "$(fix T02 a1 a1)" "$(fix T04 a1 a1)" "$(fix T06 a1 a1)"
+
+# --- Un comentario humano manda sobre corregir, no solo sobre documentar
+# (DEVKIT-101, ampliación del 2026-09-18 18:20) -------------------------------
+# Antes, `fix-humano` solo salía con el último informe OK: con CAMBIOS
+# vigente (respondido o no) el comentario se ignoraba y la rama fix seguía
+# chocando con `launched` (PR 68, comentario del humano a las 18:08).
+check "DEVKIT-101: CAMBIOS pendiente y comentario humano posterior: atiende el comentario" fix-humano a1 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(comment humano T02 'urgente: revierte esto')"
+check "DEVKIT-101: CAMBIOS ya respondido y comentario humano posterior: atiende el comentario" fix-humano a1 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix T02 a1 a1)" "$(comment humano T03 'espera, no lo hagas así')"
+
+# --- Un informe no consume un comentario humano pendiente (DEVKIT-101,
+# ampliación del 2026-09-18 19:15) --------------------------------------------
+# PR 68: comentario humano a las 19:09, informe OK a las 19:13. El corte para
+# "qué comentario ya está atendido" era el último marcador de cualquier tipo
+# (incluidas las revisiones), así que el informe posterior lo tapaba y el
+# comentario se perdía. El corte correcto es el último devkit-fix (o
+# devkit-block): un devkit-review no atiende comentarios, solo corrige.
+check "DEVKIT-101: comentario humano tras un fix, con un OK posterior: no se pierde" fix-humano a1 \
+  "$(rev T03 a1 OK)" -- "$(fix T01 a1 a0)" "$(comment humano T02 'falta validar el caso límite')"
+# El caso ya cubierto por "comentario humano anterior al marcador" (arriba)
+# sigue sin cambiar: sin ningún devkit-fix todavía, el corte sigue siendo el
+# último devkit-review, para no reabrir un comentario que ya quedó atrás
+# cuando el ciclo cerró con OK y se documentó.
 
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
@@ -933,6 +1000,105 @@ check_igual "fix vacío: si el reintento corrige, no bloquea" "2 no" \
 corre_fix "informe desactualizado, esperando a pr-review" "no debe correr" b2c3d4e
 check_igual "fix vacío: con el head ya cambiado no hay alarma" "0 1" \
   "$(grep -c 'ALARMA' "$OUT") $(cat "$FIX_DIR_ACTUAL/llamadas")"
+
+# --- Guarda de `launched` con el informe incluido (DEVKIT-101) --------------
+# `caso_fix`/`caso_revisar` son las mismas funciones que usa el bucle
+# principal: con el mismo informe ya lanzado, avisan una sola vez y no
+# relanzan nada; con un informe nuevo, marcan y lanzan de verdad. Reutilizan
+# los dobles de `--fix` (task-fix) y de `corre_doble` (pr-review), en un
+# directorio propio por escenario para que `launched` persista entre las dos
+# llamadas de cada prueba.
+corre_caso_fix_dos_veces() {  # corre_caso_fix_dos_veces <dir> <informe 1> <informe 2>
+  local dir=$1 informe1=$2 informe2=$3
+  OUT="$dir/watch.log"
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix 45 DEVKIT-9 https://github.com/o/r/pull/45 a1b2c3d a1b2c3d "$informe1" >"$OUT" 2>&1
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix 45 DEVKIT-9 https://github.com/o/r/pull/45 a1b2c3d a1b2c3d "$informe2" >>"$OUT" 2>&1
+}
+
+DIR_MISMO_INFORME=$(mktemp -d -p "$TMP")
+corre_caso_fix_dos_veces "$DIR_MISMO_INFORME" T01 T01
+check_igual "DEVKIT-101 (fix): mismo informe, no relanza task-fix" 1 \
+  "$(cat "$DIR_MISMO_INFORME/llamadas" 2>/dev/null || echo 0)"
+check_log "DEVKIT-101 (fix): avisa una vez que ya está lanzada para este informe" \
+  'PR #45 \(DEVKIT-9\) fix ya lanzada para este informe; esperando'
+check_igual "DEVKIT-101 (fix): el aviso no se repite" 1 \
+  "$(grep -c 'ya lanzada para este informe; esperando' "$OUT")"
+
+DIR_INFORME_NUEVO=$(mktemp -d -p "$TMP")
+corre_caso_fix_dos_veces "$DIR_INFORME_NUEVO" T01 T03
+check_igual "DEVKIT-101 (fix): informe nuevo relanza task-fix" 2 \
+  "$(cat "$DIR_INFORME_NUEVO/llamadas" 2>/dev/null || echo 0)"
+check_igual "DEVKIT-101 (fix): informe nuevo, sin aviso de 'ya lanzada'" 0 \
+  "$(grep -c 'ya lanzada para este informe' "$OUT")"
+
+corre_caso_revisar_dos_veces() {  # corre_caso_revisar_dos_veces <dir> <ref 1> <informe 1> <ref 2> <informe 2>
+  local dir=$1 ref1=$2 informe1=$3 ref2=$4 informe2=$5
+  OUT="$dir/watch.log"
+  DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS=0 DEVKIT_TEST_RESULT=listo \
+  DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+    bash "$WATCH" --caso-revisar 9 DEVKIT-9 abc1234 "$ref1" "$informe1" >"$OUT" 2>&1
+  DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS=0 DEVKIT_TEST_RESULT=listo \
+  DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+    bash "$WATCH" --caso-revisar 9 DEVKIT-9 abc1234 "$ref2" "$informe2" >>"$OUT" 2>&1
+}
+
+DIR_REVISAR_MISMO=$(mktemp -d -p "$TMP")
+corre_caso_revisar_dos_veces "$DIR_REVISAR_MISMO" abc1234 T01 abc1234 T01
+check_igual "DEVKIT-101 (revisar): mismo informe, no relanza pr-review" 1 \
+  "$(cat "$DIR_REVISAR_MISMO/llamadas" 2>/dev/null || echo 0)"
+check_log "DEVKIT-101 (revisar): avisa una vez que ya está lanzada para este informe" \
+  'PR #9 \(DEVKIT-9\) revisar ya lanzada para este informe; esperando'
+
+DIR_REVISAR_NUEVO=$(mktemp -d -p "$TMP")
+corre_caso_revisar_dos_veces "$DIR_REVISAR_NUEVO" abc1234 T01 abc1234 T03
+check_igual "DEVKIT-101 (revisar): informe nuevo relanza pr-review" 2 \
+  "$(cat "$DIR_REVISAR_NUEVO/llamadas" 2>/dev/null || echo 0)"
+
+# `caso_fix_humano` pasa por la misma guarda (DEVKIT-101 H1): antes, un
+# comentario humano ya lanzado se descartaba en silencio si el task-fix
+# correspondiente no llegaba a publicar nada (cuota, error, corte de
+# presupuesto), y como la clave solo lleva $ref, nada lo destrababa. Ahora
+# avisa una vez, igual que `fix` y `revisar`.
+corre_caso_fix_humano_dos_veces() {  # corre_caso_fix_humano_dos_veces <dir> <ref>
+  local dir=$1 ref=$2 extra
+  extra=$(printf 'comentario humano' | base64)
+  OUT="$dir/watch.log"
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix-humano 45 DEVKIT-9 "$ref" "$extra" >"$OUT" 2>&1
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix-humano 45 DEVKIT-9 "$ref" "$extra" >>"$OUT" 2>&1
+}
+
+DIR_FIX_HUMANO_MISMO=$(mktemp -d -p "$TMP")
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_MISMO" a1b2c3d
+check_igual "DEVKIT-101 H1 (fix-humano): mismo comentario, no relanza dos veces" 1 \
+  "$(cat "$DIR_FIX_HUMANO_MISMO/llamadas" 2>/dev/null || echo 0)"
+check_log "DEVKIT-101 H1 (fix-humano): avisa una vez que ya está lanzada" \
+  'PR #45 \(DEVKIT-9\) fix-humano ya lanzada para este informe; esperando'
+check_igual "DEVKIT-101 H1 (fix-humano): el aviso no se repite" 1 \
+  "$(grep -c 'ya lanzada para este informe; esperando' "$OUT")"
+
+DIR_FIX_HUMANO_NUEVO=$(mktemp -d -p "$TMP")
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" a1b2c3d
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" e5f6a7b
+check_igual "DEVKIT-101 H1 (fix-humano): comentario nuevo (otro \$ref) relanza" 2 \
+  "$(cat "$DIR_FIX_HUMANO_NUEVO/llamadas" 2>/dev/null || echo 0)"
 
 # --- Presupuesto de turnos exigible en el ciclo automático, vía task-fix
 # (DEVKIT-94) --------------------------------------------------------------

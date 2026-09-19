@@ -109,19 +109,31 @@ TASK_DOCUMENT="${DEVKIT_TASK_DOCUMENT_BIN:-$SCRIPTS_DIR/task-document.sh}"
 MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
-# línea con cuatro campos separados por tabulador (acción, head, referencia,
-# extra), nunca vacíos ("-" si no aplica):
-#   revisar    <head> <sha del marcador anterior o el propio head> -
-#   fix        <head> <sha del marcador CAMBIOS>      -
-#   fix-humano <head> <fecha del último comentario>   <texto en base64>
-#   documentar <head> OK                              -
-#   bloquear   <head> <ciclos respondidos sin OK>     -
-#   bloqueado  <head> <fecha del bloqueo>             -
-#   nada       <head> <veredicto vigente>             -
+# línea con cinco campos separados por tabulador (acción, head, referencia,
+# extra, informe), nunca vacíos ("-" si no aplica):
+#   revisar    <head> <sha del marcador anterior o el propio head> - <informe>
+#   fix        <head> <sha del marcador CAMBIOS>      -              <informe>
+#   fix-humano <head> <fecha del último comentario>   <texto b64>    <informe>
+#   documentar <head> OK                              -              <informe>
+#   bloquear   <head> <ciclos respondidos sin OK>     -              <informe>
+#   bloqueado  <head> <fecha del bloqueo>             -              <informe>
+#   nada       <head> <veredicto vigente>             -              <informe>
+# `informe` es el submittedAt del último devkit-review (o "-" sin ninguno):
+# dos rondas de `fix` o `revisar` sobre el mismo head, una tras otra, traen
+# informes distintos y por lo tanto claves de `launched` distintas (DEVKIT-101:
+# antes esas claves solo llevaban el sha, y una segunda ronda de CAMBIOS sobre
+# el mismo head -el corrector respondió sin empujar commits, dos veces- se
+# perdía porque `launched` ya tenía la clave de la primera).
 # Los marcadores se reconocen por su texto, no por su autor: así valen aunque
 # el informe lo haya publicado el humano desde otra sesión. Lo humano es todo
 # lo que no lleva marcador, no lo firma la cuenta máquina y llega después del
-# último marcador; los approve no cuentan (los cierra el auto-merge).
+# último devkit-fix o devkit-block que lo haya atendido (DEVKIT-101): un
+# devkit-review posterior no cuenta para este corte, porque revisar no es
+# atender un comentario -solo corregir lo hace-, y si no ha habido ningún
+# devkit-fix ni devkit-block todavía se usa el último devkit-review como
+# corte, para no reabrir un comentario que ya quedó atrás cuando se cerró el
+# primer ciclo (caso "comentario humano anterior al marcador" de
+# watch-test.sh). Los approve no cuentan (los cierra el auto-merge).
 # Un bloqueo manda hasta que aparece un devkit-fix posterior a él: esa
 # respuesta del corrector (al comentario humano) reanuda el ciclo y el head
 # nuevo vuelve a la rama normal (revisar). Los casos están en watch-test.sh.
@@ -135,7 +147,10 @@ MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
 # Documentación se escribe al aprobar, no al cerrar. Si la card vuelve atrás
 # y un head nuevo recibe otro OK, falta el marcador de ese head y task-document
 # corre de nuevo sobre la misma entrada. Un comentario humano manda sobre
-# documentar: primero se corrige.
+# documentar y sobre corregir: con el head vigente (OK o CAMBIOS, con o sin
+# respuesta), un comentario humano posterior siempre lanza `fix-humano`
+# primero (DEVKIT-101, ampliación del 2026-09-18 18:20: antes solo mandaba
+# sobre un OK, y con CAMBIOS vigente el comentario se ignoraba).
 #
 # La guarda de tres ciclos (DEVKIT-56). Un ciclo es un informe CAMBIOS que el
 # corrector respondió con su `devkit-fix`. `bloquear` sale solo cuando ya hay
@@ -165,14 +180,22 @@ def markers($re; $ts):
 | ([$ok_at, $block_at, $manual_at] | max) as $reset_at
 | ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at) | . as $r
     | select(any($fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
-| (([$reviews[].at, $fixes[].at, $blocks[].at] | max) // "") as $bot_at
+# Corte para "qué comentario humano ya está atendido": solo un devkit-fix o un
+# devkit-block lo atienden; un devkit-review no (DEVKIT-101). Sin ningún fix ni
+# block todavía, se usa el último devkit-review como corte, igual que antes:
+# así un comentario anterior al primer informe, ya cerrado con OK y
+# documentado, no reabre el ciclo (caso "comentario humano anterior al
+# marcador" de watch-test.sh).
+| (([$fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | max)
+   // "") as $human_cutoff
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),
      (.comments[] | {body, at: .createdAt, login: .author.login}) ]
    | map(select(.login != $bot
                 and ((.body // "") | test("<!-- devkit-") | not)
                 and ((.body // "") | gsub("\\s"; "") != "")
-                and .at > $bot_at))
+                and .at > $human_cutoff))
    | sort_by(.at)) as $human
 | (if $last != null then
      [$fixes[] | select(.review == $last.sha and .at > $last.at)] | length
@@ -183,23 +206,24 @@ def markers($re; $ts):
    and $fix_after > 0) as $fix_responded
 | ($human | map(.body) | join("\n\n") | @base64) as $human_text
 | (($human | last | .at) // "-") as $human_at
+| ($last.at // "-") as $informe
 | if $blocked then
-    (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text]
-     else ["bloqueado", $head, $block_at, "-"] end)
-  elif ($human | length) > 0 and $last != null and $last.verdict == "OK" and $last.sha == $head then
-    ["fix-humano", $head, $human_at, $human_text]
+    (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text, $informe]
+     else ["bloqueado", $head, $block_at, "-", $informe] end)
+  elif ($human | length) > 0 and $last != null and $last.sha == $head then
+    ["fix-humano", $head, $human_at, $human_text, $informe]
   elif $ciclos >= $max and $last != null and $last.verdict == "CAMBIOS" and $last.sha == $head then
-    ["bloquear", $head, ($ciclos | tostring), "-"]
+    ["bloquear", $head, ($ciclos | tostring), "-", $informe]
   elif $last == null or $last.sha != $head then
-    ["revisar", $head, ($last.sha // "-"), "-"]
+    ["revisar", $head, ($last.sha // "-"), "-", $informe]
   elif $pending_fix then
-    ["fix", $head, $last.sha, "-"]
+    ["fix", $head, $last.sha, "-", $informe]
   elif $fix_responded then
-    ["revisar", $head, $last.sha, "-"]
+    ["revisar", $head, $last.sha, "-", $informe]
   elif $last.verdict == "OK" and ([$docs[] | select(.sha == $head)] | length) == 0 then
-    ["documentar", $head, "OK", "-"]
+    ["documentar", $head, "OK", "-", $informe]
   else
-    ["nada", $head, $last.verdict, "-"]
+    ["nada", $head, $last.verdict, "-", $informe]
   end
 | @tsv
 '
@@ -739,20 +763,92 @@ decision_fresca() {  # decision_fresca <num>
 }
 
 # Caso `fix` del bucle: task-fix y, si respondió vacío, la alarma.
-atender_fix() {  # atender_fix <num> <Clave> <url> <head> <ref>
-  local num=$1 key=$2 url=$3 head=$4 ref=$5 name accion head_ahora siguiente
+#
+# [clave de launched] (sexto argumento, opcional) es la que ya marcó quien
+# llama; por defecto "fix:$num:$ref", la forma anterior a DEVKIT-101, para no
+# romper al hook `--fix` de watch-test.sh, que no la pasa. `caso_fix` sí la
+# pasa siempre, con el informe incluido: sin ese mismo valor, una pausa por
+# cuota (quota_pause) reescribiría una clave que no coincide con la que
+# `caso_fix` marcó en `launched`, y la reanudación se perdería.
+atender_fix() {  # atender_fix <num> <Clave> <url> <head> <ref> [clave de launched]
+  local num=$1 key=$2 url=$3 head=$4 ref=$5 lkey=${6:-} name accion head_ahora siguiente
+  [ -n "$lkey" ] || lkey="fix:$num:$ref"
   name="task-fix-$num-${head:0:7}"
-  run_skill "$name" "/task-fix $key" "fix:$num:$ref"
+  run_skill "$name" "/task-fix $key" "$lkey"
   IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
   fix_vacio "$RUN_DIR/$name.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
   siguiente=$("$DEVKIT_RUN" --siguiente-modelo "$ULTIMO_MODELO")
   log "ALARMA: $name terminó con \"$(frase_fix_vacio "$RUN_DIR/$name.log")\" con CAMBIOS vigente sobre ${head:0:7}; relanzo task-fix con ${siguiente:-el modelo del rol} (antes $ULTIMO_MODELO)"
-  run_skill "$name-reintento" "/task-fix $key" "fix:$num:$ref" 1 "$siguiente"
+  run_skill "$name-reintento" "/task-fix $key" "$lkey" 1 "$siguiente"
   IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
   fix_vacio "$RUN_DIR/$name-reintento.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
   log "ALARMA: $name-reintento también terminó con \"$(frase_fix_vacio "$RUN_DIR/$name-reintento.log")\" con CAMBIOS vigente sobre ${head:0:7}"
   block_pr "$num" "$key" "$url" "$head" "-" \
     "task-fix respondió sin corregir con dos modelos ($ULTIMO_MODELO el último) mientras el informe CAMBIOS sobre ${head:0:7} sigue vigente"
+}
+
+# Aviso de una sola vez cuando `decide` repite la misma acción ya lanzada
+# para el mismo informe (DEVKIT-101): sin él, un lanzamiento que `launched`
+# descarta queda mudo y el humano solo lo nota mirando `--estado` mucho
+# después (pasó con el PR 68: quince minutos quieto sin que nadie avisara).
+# La marca `aviso:<clave>` es aparte de la propia clave: existe solo para no
+# repetir la línea en cada vuelta del bucle mientras siga sin haber un
+# informe nuevo.
+avisar_si_lanzada() {  # avisar_si_lanzada <num> <Clave> <acción> <clave de launched>
+  local num=$1 key=$2 accion=$3 lkey=$4
+  launched "$lkey" || return 1
+  if ! launched "aviso:$lkey"; then
+    mark "aviso:$lkey"
+    log "PR #$num ($key) $accion ya lanzada para este informe; esperando"
+  fi
+  return 0
+}
+
+# Caso `fix`: la clave de `launched` incluye el informe (DEVKIT-101), así que
+# un segundo CAMBIOS sobre el mismo head, tras una respuesta sin commits,
+# vuelve a lanzar task-fix en vez de quedar atascado en la clave de la
+# primera ronda.
+caso_fix() {  # caso_fix <num> <Clave> <url> <head> <ref> <informe>
+  local num=$1 key=$2 url=$3 head=$4 ref=$5 informe=$6 lkey
+  lkey="fix:$num:$ref:$informe"
+  avisar_si_lanzada "$num" "$key" fix "$lkey" && return
+  mark "$lkey"
+  log "PR #$num ($key) CAMBIOS en ${head:0:7}: lanzando task-fix"
+  atender_fix "$num" "$key" "$url" "$head" "$ref" "$lkey"
+}
+
+# Caso `revisar`: misma guarda que `caso_fix`. El mensaje sigue distinguiendo
+# "respuesta sin push" (ref == head, DEVKIT-22) de "sin informe" (head nuevo).
+caso_revisar() {  # caso_revisar <num> <Clave> <head> <ref> <informe>
+  local num=$1 key=$2 head=$3 ref=$4 informe=$5 lkey short
+  short=${head:0:7}
+  lkey="revisar:$num:$head:$ref:$informe"
+  avisar_si_lanzada "$num" "$key" revisar "$lkey" && return
+  mark "$lkey"
+  if [ "$ref" = "$head" ]; then
+    log "PR #$num ($key) head $short con respuesta sin push: lanzando pr-review otra vez"
+  else
+    log "PR #$num ($key) head $short sin informe: lanzando pr-review"
+  fi
+  run_skill "pr-review-$num-$short" "/pr-review $num" "$lkey" 1 "" "$key"
+}
+
+# Caso `fix-humano`: misma guarda que `caso_fix`/`caso_revisar` (DEVKIT-101
+# H1). Antes marcaba `fix-humano:$num:$ref` directo y salía mudo si ya estaba
+# lanzada: un task-fix que termina sin publicar nada para ese comentario
+# (error, cuota, corte de presupuesto) dejaba el comentario atascado para
+# siempre, porque $ref no cambia hasta el próximo comentario humano. Con
+# `avisar_si_lanzada`, al menos avisa una vez en vez de quedar en silencio.
+caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
+  local num=$1 key=$2 ref=$3 extra=$4 lkey text
+  lkey="fix-humano:$num:$ref"
+  avisar_si_lanzada "$num" "$key" fix-humano "$lkey" && return
+  mark "$lkey"
+  text=$(printf '%s' "$extra" | base64 -d 2>/dev/null)
+  log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
+  # La fecha del comentario en el nombre: un PR puede recibir varios
+  # comentarios humanos y cada ejecución conserva su log.
+  run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "$lkey"
 }
 
 # Siguiente hija al OK del revisor, en bash (DEVKIT-56). La línea de watch.log
@@ -865,10 +961,16 @@ check_merged_prs() {
 #   --documentar <num> <Clave> <head> <cuerpo>
 #                           el caso `documentar`: task-document.sh, o el
 #                           agente si el cuerpo trae "Tipo: decisión"
+#   --caso-fix <num> <Clave> <url> <head> <ref> <informe>
+#   --caso-revisar <num> <Clave> <head> <ref> <informe>
+#                           la guarda de `launched` con el informe incluido
+#                           (DEVKIT-101): si la clave ya está lanzada, avisa
+#                           una sola vez y sale; si no, marca y lanza
 # Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los
 # siguientes, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
 # DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh; `--fix`, en
-# ambos. Ver watch-test.sh.
+# ambos; `--caso-fix`/`--caso-revisar`, en los mismos que `--fix`/`--run-skill`
+# y en DEVKIT_RUN_DIR para `launched`. Ver watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -918,6 +1020,21 @@ case "${1:-}" in
     atender_fix "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
+  --caso-fix)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    caso_fix "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}" "${7:-}"
+    exit 0
+    ;;
+  --caso-revisar)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    caso_revisar "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+    exit 0
+    ;;
+  --caso-fix-humano)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    caso_fix_humano "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    exit 0
+    ;;
 esac
 
 log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos; PRs mergeados cada ${MERGED_INTERVAL}s)"
@@ -950,43 +1067,25 @@ while true; do
         # es lo único que necesita el caso `documentar` para saber si el PR
         # trae la marca "Tipo: decisión"; decide() la ignora, sin cambios.
         pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body 2>/dev/null)
-        IFS=$'\t' read -r action head ref extra < <(printf '%s' "$pr_full" | decide "$BOT")
+        IFS=$'\t' read -r action head ref extra informe < <(printf '%s' "$pr_full" | decide "$BOT")
         [ -n "${action:-}" ] || continue
         short=${head:0:7}
         case "$action" in
           revisar)
-            # La clave incluye $ref: cuando el head no cambia pero el
-            # corrector ya respondió sin empujar commits (DEVKIT-22), $ref
-            # es igual al head y $head:$ref difiere de la marca que dejó el
-            # primer "revisar" de ese mismo head (donde $ref era el sha
-            # anterior o "-"). Sin $ref, `launched` daría por hecho que ese
-            # head ya se lanzó y el segundo aviso se perdería.
-            launched "revisar:$num:$head:$ref" && continue
-            mark "revisar:$num:$head:$ref"
-            if [ "$ref" = "$head" ]; then
-              log "PR #$num ($key) head $short con respuesta sin push: lanzando pr-review otra vez"
-            else
-              log "PR #$num ($key) head $short sin informe: lanzando pr-review"
-            fi
-            # `$key` (sexto argumento): `/pr-review <N>` no trae la Clave en
-            # el prompt, así que el corte por presupuesto (DEVKIT-94) la
-            # necesita aparte.
-            run_skill "pr-review-$num-$short" "/pr-review $num" "revisar:$num:$head:$ref" 1 "" "$key"
+            # La clave incluye $ref y $informe (DEVKIT-101): cuando el head no
+            # cambia pero el corrector ya respondió sin empujar commits
+            # (DEVKIT-22), $ref es igual al head y $head:$ref difiere de la
+            # marca que dejó el primer "revisar" de ese mismo head (donde $ref
+            # era el sha anterior o "-"); $informe distingue, además, una
+            # ronda de otra cuando el head vuelve a repetirse sin cambiar
+            # ni $ref (dos CAMBIOS seguidos, ambos respondidos sin push).
+            caso_revisar "$num" "$key" "$head" "$ref" "$informe"
             ;;
           fix)
-            launched "fix:$num:$ref" && continue
-            mark "fix:$num:$ref"
-            log "PR #$num ($key) CAMBIOS en $short: lanzando task-fix"
-            atender_fix "$num" "$key" "$url" "$head" "$ref"
+            caso_fix "$num" "$key" "$url" "$head" "$ref" "$informe"
             ;;
           fix-humano)
-            launched "fix-humano:$num:$ref" && continue
-            mark "fix-humano:$num:$ref"
-            text=$(printf '%s' "$extra" | base64 -d 2>/dev/null)
-            log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
-            # La fecha del comentario en el nombre: un PR puede recibir varios
-            # comentarios humanos y cada ejecución conserva su log.
-            run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "fix-humano:$num:$ref"
+            caso_fix_humano "$num" "$key" "$ref" "$extra"
             ;;
           documentar)
             if ! launched "documentar:$num:$head"; then
