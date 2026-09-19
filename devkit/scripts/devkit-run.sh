@@ -4112,6 +4112,28 @@ FIN
     "$(grep -c 'Estado=En progreso Agente=claude Rama=' "$tb_dir/ronda/set-llamadas" 2>/dev/null)"
   check "H6: el agente sí llega a arrancar" 1 \
     "$([ -s "$tb_dir/run/task-start-4.log" ] && echo 1 || echo 0)"
+
+  # DEVKIT-100: el slug de la rama era el título entero (170 caracteres en el
+  # caso real que motivó esta card). Con un título largo, la rama solo lleva
+  # las primeras cinco palabras -sin "al", una contracción de
+  # artículo+preposición- recortadas a 40 caracteres.
+  printf '{"id":"pagina-9098","estado":"Lista","tipo":"feature","titulo":"PR review proporcional al diff preparación y comprobaciones mecánicas por script informe publicado desde un archivo sin worktree para PRs de solo documentación"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9098.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9098 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-5.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-100: título largo -> rama corta feat/DEVKIT-9098-pr-review-proporcional-diff" 1 \
+    "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9098-pr-review-proporcional-diff$')"
+
+  # DEVKIT-100: título con acentos, sin partir palabras al recortar.
+  git -C "$tb_dir/ws" switch -q main
+  printf '{"id":"pagina-9099","estado":"Lista","tipo":"bug","titulo":"Depuración rápida según el pipeline de ingestión"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9099.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9099 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-6.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-100: título con acentos -> rama fix/DEVKIT-9099-depuracion-rapida-segun-pipeline" 1 \
+    "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'fix/DEVKIT-9099-depuracion-rapida-segun-pipeline$')"
   rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
