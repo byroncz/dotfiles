@@ -884,9 +884,15 @@ refrescar_cuota_bg() {
     # bash): con `set -u`, "$prev_tsok" más abajo revienta la subshell entera
     # si nunca se llega al `read` (sin caché previa). Se inicializan vacías a
     # propósito.
-    local cuota prev_sp='' prev_sr='' prev_wp='' prev_wr='' prev_tsok=''
+    local cuota prev_ts='' prev_estado='' prev_sp='' prev_sr='' prev_wp='' prev_wr='' prev_tsok=''
     if [ -s "$CUOTA_CACHE" ]; then
-      IFS=$'\t' read -r _ _ prev_sp prev_sr prev_wp prev_wr prev_tsok <"$CUOTA_CACHE"
+      IFS=$'\t' read -r prev_ts prev_estado prev_sp prev_sr prev_wp prev_wr prev_tsok <"$CUOTA_CACHE"
+      # Caché del formato viejo, de 6 campos sin `ts_ok` (H4, pr-review
+      # DEVKIT-78): una lectura `ok` de ese formato es su propia lectura
+      # buena. Sin esto, el primer fallo tras actualizar el devkit caía en la
+      # rama sin `prev_tsok` de más abajo y borraba esa lectura, justo lo que
+      # esta card quiere evitar.
+      [ "$prev_estado" = ok ] && [ -z "$prev_tsok" ] && prev_tsok=$prev_ts
     fi
     if cuota=$(leer_cuota); then
       printf '%s\tok\t%s\t%s\n' "$(date +%s)" "$cuota" "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
@@ -5423,6 +5429,26 @@ FIN
     sleep 0.3
   done
   check "el refresco en segundo plano reemplaza la caché vencida" 1 "$refrescada"
+
+  # H4 de pr-review DEVKIT-78: una caché `ok` del formato viejo, de 6 campos
+  # sin `ts_ok` (la que ya existe en `.devkit/run/` al actualizar el devkit),
+  # es su propia lectura buena. El primer fallo tras el cambio no debe
+  # borrarla -antes caía en la rama sin `prev_tsok` y perdía el porcentaje.
+  local cuota_vieja_h4 ts_vieja_h4 refrescada_h4
+  cuota_vieja_h4="$tmp/cuota-vieja-h4"
+  mkdir -p "$cuota_vieja_h4"
+  ts_vieja_h4=$(( $(date +%s) - 120 ))
+  printf '%s\tok\t10\tya\t10\tya\n' "$ts_vieja_h4" >"$cuota_vieja_h4/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_vieja_h4/cuota.cache" \
+    CUOTA_LOCK="$cuota_vieja_h4/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  refrescada_h4=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f2 "$cuota_vieja_h4/cuota.cache" 2>/dev/null)" = fail ] && { refrescada_h4=1; break; }
+    sleep 0.3
+  done
+  check "H4: el primer fallo tras una caché ok de 6 campos corre" 1 "$refrescada_h4"
+  check "H4: ese fallo conserva ts_ok con la hora de la lectura ok vieja, no la borra" "$ts_vieja_h4" \
+    "$(cut -f7 "$cuota_vieja_h4/cuota.cache" 2>/dev/null)"
 
   # DEVKIT-78: un fallo con una lectura buena previa (más vieja que CUOTA_TTL,
   # el caso del criterio de aceptación) no borra esa lectura: --estado sigue
