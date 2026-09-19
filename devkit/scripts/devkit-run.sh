@@ -1933,7 +1933,9 @@ colorear() {  # colorear <color> <texto> <habilitado>
 # en braille, una posición por refresco (<idx>), fijo en ⠿ con <fijo>=1 (una
 # sola foto de `--estado` sin `--seguir`); terminó ✔; error -mismo icono para
 # "falló", el texto que trae la línea cruda de watch.log antes de que
-# `estado_filas` lo normalice a "error"- ✖; bloqueada ⛔; no arrancó (la card
+# `estado_filas` lo normalice a "error"- ✖; bloqueada ⊘ -no ⛔: ese glifo es
+# East Asian Wide y mide dos celdas, mientras que `rellenar` cuenta caracteres
+# (DEVKIT-106 H1)-; no arrancó (la card
 # nunca llegó a lanzar; "no lanzó" es el mismo caso con otro nombre) ○;
 # cualquier otro valor -hoy solo "sin registro", un `claude -p` vivo que
 # `devkit-run` no reconoce- ⚠, la misma alarma que "lento": es una anomalía,
@@ -1955,7 +1957,7 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
       ;;
     terminó) [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
-    bloqueada) [ "$utf" = 1 ] && printf '⛔' || printf '!!' ;;
+    bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
     "no arrancó"|"no lanzó") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
     *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
   esac
@@ -4905,8 +4907,13 @@ FIN
   check "icono: terminó, color verde" verde "$(color_de_estado_fila "$(estado_de DEVKIT-56)")"
   check "icono: error" '✖' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 1)"
   check "icono: error, color rojo" rojo "$(color_de_estado_fila "$(estado_de DEVKIT-58)")"
-  check "icono: bloqueada" '⛔' "$(glifo_estado_fila "$(estado_de DEVKIT-59)" 0 1 1)"
+  check "icono: bloqueada" '⊘' "$(glifo_estado_fila "$(estado_de DEVKIT-59)" 0 1 1)"
   check "icono: bloqueada, color rojo" rojo "$(color_de_estado_fila "$(estado_de DEVKIT-59)")"
+  # DEVKIT-106 H1: `⛔` es East Asian Wide y mide dos celdas visibles aunque
+  # `rellenar` la cuente como una -el icono debe medir una sola celda, igual
+  # que el resto de la tabla.
+  check "icono: bloqueada mide una sola celda visible, igual que terminó" si \
+    "$([ "$(printf '⊘' | wc -L)" -eq "$(printf '✔' | wc -L)" ] && echo si || echo no)"
   check "icono: no arrancó (una card que nunca llegó a lanzar)" '○' \
     "$(glifo_estado_fila "$(estado_de DEVKIT-60)" 0 1 1)"
   check "icono: no arrancó, color gris" gris "$(color_de_estado_fila "$(estado_de DEVKIT-60)")"
@@ -4976,7 +4983,7 @@ FIN
     "$(glifo_estado_tablero "Revisión automática" 0 1 1)"
   check "icono tablero: Lista para merge" '✔' "$(glifo_estado_tablero "Lista para merge" 0 1 1)"
   check "icono tablero: Lista, la cola, todavía sin lanzar" '○' "$(glifo_estado_tablero Lista 0 1 1)"
-  check "icono tablero: Bloqueada" '⛔' "$(glifo_estado_tablero Bloqueada 0 1 1)"
+  check "icono tablero: Bloqueada" '⊘' "$(glifo_estado_tablero Bloqueada 0 1 1)"
 
   # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
