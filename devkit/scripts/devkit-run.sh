@@ -2666,13 +2666,19 @@ clave_de_lanzamiento() {  # clave_de_lanzamiento <prompt> <id>
 # cerró). Un cierre con error cuenta igual que uno exitoso (H2 de pr-review en
 # DEVKIT-89), así que se empareja también "$id falló (rc=" (task-close-N,
 # task-next-N) y "ALARMA: $id terminó con error" (`run_skill` en watch.sh, que
-# no deja línea "$id terminado:" cuando falla). Los IDs no son únicos para
-# siempre -se reinician en cada `devkit recreate`, igual que en watch.log-,
-# así que se empareja con el cierre más cercano, no con uno global.
+# no deja línea "$id terminado:" cuando falla). "$id no lanzó: " también
+# cierra (DEVKIT-107 H2): sin esto, un pr-review que no lanzó (por ejemplo
+# "ya revisado en <sha>") y que luego se relanza con el mismo id -mismo head,
+# tras un devkit-fix sin push- deja sin emparejar su propio cierre; la
+# búsqueda salta hasta el "terminado" del relanzamiento y `costos_filas`
+# cuenta ese costo dos veces, una por cada "lanzando". Los IDs no son únicos
+# para siempre -se reinician en cada `devkit recreate`, igual que en
+# watch.log-, así que se empareja con el cierre más cercano, no con uno
+# global.
 costos_cierre_de() {  # costos_cierre_de <archivo> <línea de "lanzando"> <id>
   local file=$1 desde=$2 id=$3
   tail -n +"$((desde + 1))" "$file" 2>/dev/null | grep -m1 -E \
-    "^[^ ]+ ($id (terminado|falló \(rc=[0-9]+\)): |ALARMA: $id terminó con error \(rc=[0-9]+\): |devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:)"
+    "^[^ ]+ ($id (terminado|falló \(rc=[0-9]+\)|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\): |devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:)"
 }
 
 # Un campo "campo=N" de una línea de cierre, vacío si no está (bash no gasta
@@ -2700,6 +2706,10 @@ costos_filas() {  # costos_filas <archivo> [Clave]
     [ -z "$filtro" ] || [ "$clave" = "$filtro" ] || continue
     skill=${prompt#/}; skill=${skill%% *}
     cierre=$(costos_cierre_de "$file" "$ln" "$id")
+    # Un cierre "no lanzó" (DEVKIT-107 H2) no tiene costo ni turnos: no es un
+    # lanzamiento real de claude -p, sino review-prep.sh/task-begin.sh
+    # cortando antes. Se descarta en vez de imprimir una fila en blanco.
+    case "$cierre" in *" no lanzó: "*) continue ;; esac
     c=$(costos_campo "${cierre:-}" costo); t=$(costos_campo "${cierre:-}" turnos); d=$(costos_campo "${cierre:-}" duracion)
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$ts" "$clave" "$skill" "$id" "$modelo" "$esfuerzo" "$ronda" "${t:--}" "${c:--}" "${d:--}"
   done < <(lanzamientos "$file")
@@ -6470,6 +6480,27 @@ FIN
     "$(costos_filas "$costos_error/costos.log" DEVKIT-80 | cut -f9)"
   check "costos_resumen_proyecto no cuenta un task-close-N falló como card cerrada" 1 \
     "$(COSTOS_LOG="$costos_error/costos.log" costos_resumen_proyecto | grep -c 'Sin cards cerradas')"
+
+  # DEVKIT-107 H2: un pr-review que no lanzó ("ya revisado en <sha>") y que
+  # luego se relanza con el mismo id (mismo head, tras un devkit-fix sin
+  # push) no debe emparejar el cierre del primer lanzamiento con el
+  # "terminado" del segundo, ni contar ese costo dos veces.
+  local no_lanzo_log=$tmp/no-lanzo-costos.log cache_no_lanzo
+  cache_no_lanzo=$(mktemp)
+  printf '73\tDEVKIT-73\n' >"$cache_no_lanzo"
+  cat >"$no_lanzo_log" <<'FIN'
+2026-09-19T12:00:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log
+2026-09-19T12:00:05-05:00 pr-review-73-abc1234 no lanzó: nada que revisar (ya revisado en abc1234)
+2026-09-19T12:05:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log
+2026-09-19T12:10:00-05:00 pr-review-73-abc1234 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=10 duracion=30s tokens: entrada=1 cache=1 salida=1 :: revisado
+FIN
+  check "costos_cierre_de empareja 'no lanzó' como cierre, sin saltar al del relanzamiento" 1 \
+    "$(costos_cierre_de "$no_lanzo_log" 1 pr-review-73-abc1234 | grep -c 'no lanzó')"
+  check "costos_filas no cuenta dos veces el costo de un id relanzado tras 'no lanzó'" 1 \
+    "$(CLAVE_DE_PR_CACHE="$cache_no_lanzo" costos_filas "$no_lanzo_log" DEVKIT-73 | wc -l)"
+  check "costos_filas: la única fila trae el costo del relanzamiento, no uno vacío" 0.20 \
+    "$(CLAVE_DE_PR_CACHE="$cache_no_lanzo" costos_filas "$no_lanzo_log" DEVKIT-73 | cut -f9)"
+  rm -f "$cache_no_lanzo"
 
   check "--costos-totales de la card, por línea de comandos" "14	0.3600	3	1" \
     "$(DEVKIT_GH_BIN="$costos_tmp/gh-doble" DEVKIT_COSTOS_LOG="$costos_tmp/costos.log" \
