@@ -93,7 +93,7 @@ esac
 # Lista los archivos sucios en el propio mensaje (DEVKIT-99): sin esto, el
 # humano tenía que entrar al contenedor y correr `git status` a mano para
 # saber qué borrar o commitear antes de relanzar.
-sucio=$(git -C "$WS" status --porcelain 2>/dev/null)
+sucio=$(git -C "$WS" status --porcelain --untracked-files=all 2>/dev/null)
 if [ -n "$sucio" ]; then
   err "el workspace tiene cambios sin commit; no puedo iniciar $clave sin mezclar trabajo de otra card: $(printf '%s' "$sucio" | tr '\n' ' ')"
   exit 1
