@@ -11,8 +11,14 @@ trabajo de `pr-review`.
 
 ## Pasos
 
-1. Localiza la card por `ID` y `Proyecto`. Su `Estado` debe ser
-   `Revisión automática` o `Lista para merge`; en otro caso responde el
+1. El argumento es la Clave, no el número de PR: si lo que llega antes del
+   primer espacio es solo dígitos (sin letras ni guion), no es una Clave.
+   Responde "task-fix recibe la Clave (por ejemplo DEVKIT-94), no el número
+   de PR (<lo recibido>)" y termina ahí mismo, sin consultar Notion
+   (DEVKIT-102: `devkit-run task-fix 68` tomó "68" como si fuera DEVKIT-68,
+   una card distinta ya Hecha, y salió sin avisar del error de uso).
+   Si es una Clave, localiza la card por `ID` y `Proyecto`. Su `Estado` debe
+   ser `Revisión automática` o `Lista para merge`; en otro caso responde el
    estado y termina. Toma el número de PR de la propiedad `PR`; si está
    vacía, comenta en la card que falta el PR y termina.
 2. Lee el PR: `gh pr view <N> --json state,url,headRefName,headRefOid,reviews,comments`.
@@ -20,6 +26,14 @@ trabajo de `pr-review`.
 3. Decide qué atender, en este orden:
    - **Texto recibido como argumento**: es un hallazgo único con id `C<n>`,
      donde `n` es uno más que el último `C` que hayas respondido en ese PR.
+     Si ese texto nombra otro PR -una URL `github.com/.../pull/<M>` con `M`
+     distinto de este PR, u otra Clave del proyecto que no sea la de esta
+     card- no es un comentario sobre este PR: no lo trates como hallazgo.
+     Comenta en la card qué llegó como argumento y por qué no aplica, y
+     termina sin publicar ningún `devkit-fix` (DEVKIT-102: una fila ajena de
+     `gh pr list` se coló una vez como argumento por una tubería de
+     `watch.sh` sin cerrar, y el corrector la trató como un hallazgo real en
+     vez de notar que hablaba de otro PR).
    - **Sin argumento y card en `Revisión automática`**: busca el último
      marcador `<!-- devkit-review sha=<head> verdict=<OK|CAMBIOS> -->` sobre
      `reviews` del paso 2, el mismo `jq` del paso 3 de `pr-review`:
@@ -49,7 +63,11 @@ trabajo de `pr-review`.
      Si pasa todo, extrae el bloque
      `<!-- devkit-findings -->` ... `<!-- /devkit-findings -->` de ese
      informe: una línea por hallazgo, cinco campos separados por ` | `:
-     `id | severidad | archivo:línea | qué falla | qué hacer`.
+     `id | severidad | archivo:línea | qué falla | qué hacer`. Si ese bloque
+     no trae ninguna línea con id `H<n>` -viene vacío, con otro formato, o el
+     propio informe nombra un PR distinto de este-, no lo proceses como si
+     tuviera hallazgos: comenta en la card qué trae el bloque y termina sin
+     publicar.
    - **Sin argumento y card en `Lista para merge`**: toma los comentarios y
      reviews del PR de un autor distinto de la cuenta máquina
      (`gh api user --jq .login`), posteriores al último marcador. Cada uno es
@@ -94,8 +112,8 @@ trabajo de `pr-review`.
    corrígelo dentro del commit del hallazgo correspondiente.
 7. `git push origin <headRefName>`. Nunca `--force`: el revisor compara
    heads, y reescribir la historia lo dejaría sin referencia.
-8. Responde en el PR con `gh pr comment --body-file - <N>`. Solo esto, sin
-   saludos ni resumen:
+8. Escribe la respuesta en `.devkit/fix-<N>.md`. Solo esto, sin saludos ni
+   resumen:
 
    ```
    <!-- devkit-fix sha=<head nuevo> review=<sha del marcador atendido><marca manual> -->
@@ -117,6 +135,25 @@ trabajo de `pr-review`.
    `printenv DEVKIT_LANZADOR` imprime `watch` solo cuando te lanzó `watch.sh`.
    Con `manual=1`, el bucle reinicia su conteo de tres ciclos y revisa tu
    head en vez de bloquear la card (DEVKIT-56).
+
+   Publícala con
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/fix-publish.sh" <N> .devkit/fix-<N>.md`
+   (mismo patrón que `review-publish.sh`: arma el archivo con el número de PR
+   en el nombre y el script lo borra al terminar, publique o no). El script
+   toma el último marcador `devkit-review` del PR, no el que tu respuesta
+   declara en `review=`: si ese último informe es CAMBIOS y tu respuesta trae
+   algún id `H<n>`, o no trae ni `manual=1` ni responde a un comentario
+   humano posterior al último `devkit-fix`/`devkit-block` (o, sin ellos, al
+   último `devkit-review`), compara cada id contra los `H<n>` de ese informe
+   y aborta antes de comentar en el PR si alguno no está -la guarda mecánica
+   de DEVKIT-102, para que una lectura equivocada de un paso anterior no
+   cierre un informe con hallazgos reales sin atender-. Si el último informe
+   es OK, o tu respuesta solo trae `C<n>` y lleva `manual=1` o responde a ese
+   comentario humano, publica sin comparar (DEVKIT-102, H5: cubre el
+   `fix-humano` que lanza el bucle sobre un informe CAMBIOS vigente, sin
+   `manual=1`). Si aborta, deja el motivo en watch.log y en la card. Si
+   aborta, no insistas ni reescribas la respuesta para forzarla: ya quedó el
+   motivo; termina sin repetir el paso 9.
 9. `Estado` de la card = `Revisión automática`, venga de ahí o de
    `Lista para merge`. No comentes en la card: el ciclo vive en el PR.
 10. Limpia la copia de trabajo si la creaste (paso 4).

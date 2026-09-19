@@ -118,6 +118,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
+# Transcripción de cada `claude -p` real, junto a su log (DEVKIT-102): sin
+# ella, diagnosticar un caso como el del PR 68 -task-fix leyó una fila ajena
+# colada en su propio prompt- exige rastrear a mano los .jsonl de sesión bajo
+# `~/.claude/projects/`, que no llevan el nombre del lanzamiento y viven fuera
+# de /run/devkit. Configurable para que la autoprueba no toque el directorio
+# real.
+CLAUDE_PROJECTS_DIR="${DEVKIT_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 ROLES_FILE="${DEVKIT_ROLES_FILE:-}"
 if [ -z "$ROLES_FILE" ]; then
   if [ -f "$WS/.devkit/roles.toml" ]; then
@@ -709,15 +716,60 @@ $material"
   # entorno de quien llama (con marcas de sesión anidada de sobra) daría un
   # falso "no conectado" justo en el caso que la lista blanca de arriba
   # arregla.
+  #
+  # `</dev/null` en las dos llamadas de acá abajo no es decorativo, mismo
+  # motivo que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin
+  # esto, un lanzamiento hecho desde dentro de un `while read` sobre una
+  # tubería (watch.sh:1061, `gh pr list | while read -r num url title; do ...
+  # run_skill ...; done`) hereda esa tubería como su entrada estándar y se
+  # come la fila que le tocaba a la siguiente vuelta del bucle, que termina
+  # pegada al final del prompt real. Pasó con task-fix sobre el PR 68
+  # (DEVKIT-94): se tragó la fila de PR #67/DEVKIT-93 de `gh pr list` y la
+  # leyó como si fuera "texto recibido como argumento" (paso 3 de la skill),
+  # así que respondió un hallazgo `C1` inventado y nunca llegó a los cinco
+  # hallazgos reales del informe (DEVKIT-102).
   if [ "$NOTION_CHECK" != 0 ] \
-     && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
+     && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list </dev/null 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
     alarma_sin_notion "$1"
     return 67
   fi
   "${lanzador[@]}" "$CLAUDE_BIN" -p "$prompt" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
     --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
-      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion"
+      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion" \
+    </dev/null
+}
+
+# Copia recortada de la transcripción de un `claude -p` real, junto a su log
+# (DEVKIT-102). `<logf>` ya trae el JSON de resultado en su última línea, con
+# `session_id`: de ahí sale el nombre del `.jsonl` de sesión, bajo
+# `$CLAUDE_PROJECTS_DIR/<cwd con / por ->/`, la misma regla que usa Claude
+# Code para nombrar esa carpeta. Sin `session_id` (un log vacío o sin JSON,
+# por ejemplo un rc=3 de "nada que revisar") no hay nada que copiar.
+#
+# Se queda solo con el primer turno de usuario -trae el argumento tal como
+# llegó, `<command-args>` incluido: es lo que habría mostrado de inmediato que
+# el PR 68 recibió una fila ajena de PR 67 en vez de su propio argumento- y el
+# resultado ya presente en `<logf>`, no la sesión entera: una skill de quince
+# turnos deja un archivo de un puñado de líneas, no un volcado completo.
+#
+# Vive aquí y no en watch.sh (mudanza de DEVKIT-102, H2): así también cubre
+# `--worker` (task-start, task-close, epic-plan y `devkit-run <skill>
+# <Clave>` manual), no solo el bucle. Watch.sh la llama con `--guardar-
+# transcripcion` en vez de repetirla.
+guardar_transcripcion() {  # guardar_transcripcion <logf> <destino>
+  local logf=$1 destino=$2 session_id slug transcript primera
+  session_id=$(tail -1 "$logf" 2>/dev/null | jq -r '.session_id // empty' 2>/dev/null)
+  [ -n "$session_id" ] || return 0
+  slug=$(printf '%s' "$WS" | tr '/' '-')
+  transcript="$CLAUDE_PROJECTS_DIR/$slug/$session_id.jsonl"
+  [ -f "$transcript" ] || return 0
+  primera=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null | head -1)
+  [ -n "$primera" ] || return 0
+  {
+    printf '%s\n' "$primera"
+    tail -1 "$logf"
+  } > "$destino" 2>/dev/null
 }
 
 # Línea de costo/tokens/turnos/modelo/esfuerzo de un log ya terminado. La
@@ -2908,6 +2960,36 @@ FIN
   check "nada que revisar: no llama a claude -p (cero turnos de Opus)" 0 \
     "$(wc -l <"$tmp/claude-llamadas" | tr -d ' ')"
 
+  # --- run_claude no hereda la tubería de quien lo lanza (DEVKIT-102) --------
+  # `watch.sh:1061` recorre los PRs abiertos con `gh pr list | while read -r
+  # num url title; do ... done`; dentro de ese `while`, `run_skill` lanza
+  # `devkit-run.sh --sync` en segundo plano sin tocar su entrada estándar
+  # (watch.sh:530). Sin `</dev/null` en el `claude -p` real de `run_claude`,
+  # ese lanzamiento hereda la tubería y se come la fila que le tocaba a la
+  # siguiente vuelta del bucle -pasó con la fila de PR #67/DEVKIT-93 mientras
+  # se corregía el PR 68/DEVKIT-94-, y esa fila termina pegada al final del
+  # prompt real. El doble de abajo copia a un archivo lo que de verdad llega
+  # a su entrada estándar: con la tubería reproducida tal cual, ese archivo
+  # debe quedar vacío.
+  local traga_stdin
+  traga_stdin="$tmp/claude-traga-stdin"
+  cat >"$traga_stdin" <<FIN
+#!/usr/bin/env bash
+cat >"$tmp/stdin-recibido" 2>/dev/null
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$traga_stdin"
+  : >"$tmp/stdin-recibido"
+  printf 'fila-actual\tsim\tsim\nfila-de-otro-pr\thttps://example.com/pull/67\tDEVKIT-93 otro PR\n' | {
+    IFS=$'\t' read -r _sim_num _sim_url _sim_title
+    DEVKIT_CLAUDE_BIN="$traga_stdin" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+      DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-102" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+      bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' >/dev/null 2>&1 &
+    wait
+  }
+  check "el claude -p real no se come la fila que le tocaba al bucle (DEVKIT-102)" "" \
+    "$(cat "$tmp/stdin-recibido" 2>/dev/null)"
+
   # --- review-prep.sh de verdad: worktree y entorno heredado (DEVKIT-93, H1 y
   # H2 de la revisión del PR 67) ---------------------------------------------
   # Los dobles de más arriba nunca tocan gh, Notion ni crean un worktree de
@@ -3099,6 +3181,260 @@ FIN
   check "ciclo limpio: task-submit.sh sale con 0" 0 "$?"
   check "ciclo limpio: git status --porcelain queda vacío tras el ciclo completo" "" \
     "$(git -C "$ciclo_dir/ws" status --porcelain)"
+
+  # --- fix-publish.sh: guarda mecánica del paso 8 de task-fix (DEVKIT-102) ---
+  # Compara cada id de la respuesta contra los `H<n>` del informe CAMBIOS que
+  # declara atender (`review=` del propio marcador). El caso real del PR 68
+  # (DEVKIT-94): la respuesta solo traía "C1", que no está entre los
+  # hallazgos del informe -debía abortar en vez de publicarse.
+  local fp_dir
+  fp_dir=$(mktemp -d "$tmp/fp.XXXXXX")
+  cat >"$fp_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\nH2 | media | b.sh:2 | falla otra cosa | arreglarla\\n<!-- /devkit-findings -->"}]}'
+        ;;
+      comments) [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}' ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9305: probar fix-publish" || echo '{"title":"DEVKIT-9305: probar fix-publish"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir/gh-doble"
+  cat >"$fp_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9305"}' ;;
+  comentar) shift 2; printf '%s\n' "$*" >>"$(dirname "$0")/comentario" ;;
+esac
+FIN
+  chmod +x "$fp_dir/notion-doble"
+  local fp_env=(DEVKIT_GH_BIN="$fp_dir/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir/run" DEVKIT_WATCH_LOG="$fp_dir/run/watch.log")
+  mkdir -p "$fp_dir/run"
+
+  cat >"$fp_dir/respuesta-c1.md" <<'FIN'
+<!-- devkit-fix sha=def456 review=abc123 -->
+<!-- devkit-fixes -->
+C1 | descartado | hace referencia al PR #67, no a este PR
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-c1.md" >"$fp_dir/salida-c1.out" 2>"$fp_dir/salida-c1.err"
+  check "fix-publish.sh: un id ausente del informe aborta (rc)" 1 "$?"
+  check "fix-publish.sh: un id ausente no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+  check "fix-publish.sh: el motivo nombra el id y el sha del informe" 1 \
+    "$(cat "$fp_dir/salida-c1.out" "$fp_dir/salida-c1.err" | grep -c 'C1.*no está entre los hallazgos.*abc123')"
+  check "fix-publish.sh: el motivo queda en watch.log como ALARMA" 1 \
+    "$(grep -c 'ALARMA: fix-publish PR #9305 aborta' "$fp_dir/run/watch.log")"
+  check "fix-publish.sh: el motivo queda comentado en la card" 1 \
+    "$(grep -c 'fix-publish: la respuesta trae' "$fp_dir/comentario" 2>/dev/null)"
+  check "fix-publish.sh: borra el archivo de respuesta aunque aborte (mismo criterio que DEVKIT-99)" 1 \
+    "$([ -e "$fp_dir/respuesta-c1.md" ] && echo 0 || echo 1)"
+
+  cat >"$fp_dir/respuesta-h.md" <<'FIN'
+<!-- devkit-fix sha=def789 review=abc123 -->
+<!-- devkit-fixes -->
+H1 | atendido | def789
+H2 | descartado | fuera de alcance
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-h.md" >"$fp_dir/salida-h.out" 2>"$fp_dir/salida-h.err"
+  check "fix-publish.sh: todos los ids en el informe, publica (rc)" 0 "$?"
+  check "fix-publish.sh: todos los ids en el informe, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Respuesta a un comentario humano: `review=` es el headRefOid leído en el
+  # paso 2, no el sha de un informe CAMBIOS. Sin informe que coincida, no hay
+  # `devkit-findings` que cumplir y un C<n> se publica sin más (paso 3,
+  # tercera viñeta de task-fix/SKILL.md).
+  cat >"$fp_dir/respuesta-humano.md" <<'FIN'
+<!-- devkit-fix sha=def999 review=cafe00 manual=1 -->
+<!-- devkit-fixes -->
+C1 | atendido | def999
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-humano.md" >"$fp_dir/salida-humano.out" 2>"$fp_dir/salida-humano.err"
+  check "fix-publish.sh: respuesta a comentario humano, sin informe que comparar, publica (rc)" 0 "$?"
+  check "fix-publish.sh: respuesta a comentario humano, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # `review=` con un sha corto (prefijo de abc123): no cuela, aunque el id sea
+  # válido. La comparación es carácter a carácter, sin aceptar prefijos.
+  cat >"$fp_dir/respuesta-sha-corto.md" <<'FIN'
+<!-- devkit-fix sha=defaaa review=abc12 -->
+<!-- devkit-fixes -->
+H1 | atendido | defaaa
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-sha-corto.md" >"$fp_dir/salida-sha-corto.out" 2>"$fp_dir/salida-sha-corto.err"
+  check "fix-publish.sh: sha corto en review= aborta (rc)" 1 "$?"
+  check "fix-publish.sh: sha corto en review= no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # `review=` con el sha del head nuevo (el que declara `sha=`), no el del
+  # último informe: tampoco cuela.
+  cat >"$fp_dir/respuesta-head-nuevo.md" <<'FIN'
+<!-- devkit-fix sha=def456 review=def456 -->
+<!-- devkit-fixes -->
+H1 | atendido | def456
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-head-nuevo.md" >"$fp_dir/salida-head-nuevo.out" 2>"$fp_dir/salida-head-nuevo.err"
+  check "fix-publish.sh: review=head nuevo aborta (rc)" 1 "$?"
+  check "fix-publish.sh: review=head nuevo no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Sin bloque devkit-fixes: nada que publicar, aborta en vez de comentar un
+  # cuerpo vacío.
+  cat >"$fp_dir/respuesta-sin-bloque.md" <<'FIN'
+<!-- devkit-fix sha=defbbb review=abc123 -->
+Sin hallazgos que reportar.
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-sin-bloque.md" >"$fp_dir/salida-sin-bloque.out" 2>"$fp_dir/salida-sin-bloque.err"
+  check "fix-publish.sh: sin bloque devkit-fixes aborta (rc)" 1 "$?"
+  check "fix-publish.sh: sin bloque devkit-fixes no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Un informe CAMBIOS seguido de un OK sobre el mismo sha (respuesta sin
+  # push, DEVKIT-22): el último marcador es el OK, así que una respuesta a un
+  # comentario humano sobre ese mismo sha publica sin comparar contra el
+  # CAMBIOS viejo (antes era un falso positivo: DEVKIT-102, H3).
+  local fp_dir2
+  fp_dir2=$(mktemp -d "$tmp/fp2.XXXXXX")
+  cat >"$fp_dir2/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\n<!-- /devkit-findings -->"},{"submittedAt":"2026-01-01T00:05:00Z","body":"<!-- devkit-review sha=abc123 verdict=OK -->\\nRevisado tras una respuesta sin push."}]}'
+        ;;
+      comments) [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}' ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9306: probar fix-publish CAMBIOS+OK" || echo '{"title":"DEVKIT-9306: probar fix-publish CAMBIOS+OK"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir2/gh-doble"
+  local fp_env2=(DEVKIT_GH_BIN="$fp_dir2/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir2/run" DEVKIT_WATCH_LOG="$fp_dir2/run/watch.log")
+  mkdir -p "$fp_dir2/run"
+  cat >"$fp_dir2/respuesta-cambios-ok.md" <<'FIN'
+<!-- devkit-fix sha=def777 review=abc123 manual=1 -->
+<!-- devkit-fixes -->
+C1 | atendido | def777
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir2/llamadas"
+  env "${fp_env2[@]}" bash "$HERE/fix-publish.sh" 9306 "$fp_dir2/respuesta-cambios-ok.md" >"$fp_dir2/salida.out" 2>"$fp_dir2/salida.err"
+  check "fix-publish.sh: último informe OK tras un CAMBIOS en el mismo sha, publica (rc)" 0 "$?"
+  check "fix-publish.sh: último informe OK tras un CAMBIOS en el mismo sha, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir2/llamadas")"
+
+  # `fix-humano` (watch.sh) lanza task-fix sin `manual=1` cuando el último
+  # informe sigue en CAMBIOS: una respuesta que solo trae `C<n>` no tiene
+  # `devkit-findings` que cumplir si responde a un comentario humano genuino
+  # posterior al corte (mismo criterio que `$human` en `decide`), aunque no
+  # lleve `manual=1` (DEVKIT-102, H5). Sin ese comentario -el caso del PR
+  # 68- sigue abortando.
+  local fp_dir3
+  fp_dir3=$(mktemp -d "$tmp/fp3.XXXXXX")
+  cat >"$fp_dir3/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "api user") [ "$con_jq" = 1 ] && echo "bot-ci" || echo '{"login":"bot-ci"}' ;;
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","state":"COMMENTED","author":{"login":"bot-ci"},"body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\n<!-- /devkit-findings -->"}]}'
+        ;;
+      comments)
+        if [ -e "$(dirname "$0")/con-humano" ]; then
+          if [ "$con_jq" = 1 ]; then
+            echo ""
+          else
+            printf '{"comments":[{"createdAt":"2026-01-01T01:00:00Z","author":{"login":"humano-x"},"body":"Por favor revisen esto de nuevo."}]}'
+          fi
+        else
+          [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}'
+        fi
+        ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9307: probar fix-publish comentario humano" || echo '{"title":"DEVKIT-9307: probar fix-publish comentario humano"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir3/gh-doble"
+  local fp_env3=(DEVKIT_GH_BIN="$fp_dir3/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir3/run" DEVKIT_WATCH_LOG="$fp_dir3/run/watch.log")
+  mkdir -p "$fp_dir3/run"
+
+  cat >"$fp_dir3/respuesta-humano-sin-manual.md" <<'FIN'
+<!-- devkit-fix sha=defccc review=abc123 -->
+<!-- devkit-fixes -->
+C1 | atendido | defccc
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir3/llamadas"
+  env "${fp_env3[@]}" bash "$HERE/fix-publish.sh" 9307 "$fp_dir3/respuesta-humano-sin-manual.md" \
+    >"$fp_dir3/salida-sin-humano.out" 2>"$fp_dir3/salida-sin-humano.err"
+  check "fix-publish.sh: C1 sin manual=1 y sin comentario humano, aborta (rc)" 1 "$?"
+  check "fix-publish.sh: C1 sin manual=1 y sin comentario humano, no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir3/llamadas")"
+
+  touch "$fp_dir3/con-humano"
+  cat >"$fp_dir3/respuesta-humano-sin-manual.md" <<'FIN'
+<!-- devkit-fix sha=defccc review=abc123 -->
+<!-- devkit-fixes -->
+C1 | atendido | defccc
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir3/llamadas"
+  env "${fp_env3[@]}" bash "$HERE/fix-publish.sh" 9307 "$fp_dir3/respuesta-humano-sin-manual.md" \
+    >"$fp_dir3/salida-con-humano.out" 2>"$fp_dir3/salida-con-humano.err"
+  check "fix-publish.sh: C1 sin manual=1 pero con comentario humano posterior, publica (rc)" 0 "$?"
+  check "fix-publish.sh: C1 sin manual=1 pero con comentario humano posterior, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir3/llamadas")"
 
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
@@ -3923,6 +4259,33 @@ FIN
     bash "$HERE/devkit-run.sh" --worker '/task-start DEVKIT-3' "$tmp/run/notion-ok.log" modelo-x high 40 >/dev/null 2>&1
   check "Notion conectada: el lanzamiento sigue normal" 'listo' \
     "$(jq -r .result "$tmp/run/notion-ok.log" 2>/dev/null)"
+
+  # --worker deja transcripción del claude -p real, igual que el bucle
+  # (DEVKIT-102, H2): antes solo watch.sh la guardaba (dentro de run_skill),
+  # así que un lanzamiento manual (`devkit-run task-fix 68`) o uno hecho por
+  # task-start/task-close/epic-plan (que también usan --worker) no dejaba
+  # nada que diagnosticar.
+  local trans2_dir trans2_slug trans2_doble
+  trans2_dir=$(mktemp -d "$tmp/trans2.XXXXXX")
+  trans2_slug=$(printf '%s' "$trans2_dir" | tr '/' '-')
+  mkdir -p "$trans2_dir/proyectos/$trans2_slug" "$trans2_dir/run"
+  cat >"$trans2_dir/proyectos/$trans2_slug/22222222-2222-2222-2222-222222222222.jsonl" <<'FIN'
+{"type":"user","message":{"role":"user","content":"/task-fix DEVKIT-94"}}
+{"type":"assistant","message":{"role":"assistant","content":"trabajando"}}
+FIN
+  trans2_doble="$tmp/claude-worker-transcripcion"
+  cat >"$trans2_doble" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3,"session_id":"22222222-2222-2222-2222-222222222222"}\n'
+FIN
+  chmod +x "$trans2_doble"
+  DEVKIT_CLAUDE_BIN="$trans2_doble" DEVKIT_RUN_DIR="$trans2_dir/run" DEVKIT_WS="$trans2_dir" \
+    DEVKIT_CLAUDE_PROJECTS_DIR="$trans2_dir/proyectos" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1.log" modelo-x high 40 >/dev/null 2>&1
+  check "--worker deja transcripción, sin pasar por watch.sh (rc)" 1 \
+    "$([ -f "$trans2_dir/run/task-fix-1-transcript.jsonl" ] && echo 1 || echo 0)"
+  check "--worker: la transcripción trae el primer mensaje de usuario" 1 \
+    "$(grep -c 'task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1-transcript.jsonl" 2>/dev/null)"
 
   # Sin Notion conectada (un doble que no entiende `mcp list` se ve igual que
   # un servidor caído), no corre el `claude -p` real y queda la alarma en vez
@@ -5734,6 +6097,14 @@ case "${1:-}" in
     resumen "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
+  --guardar-transcripcion)
+    # --guardar-transcripcion <logf> <destino>: lo llama watch.sh tras su
+    # propio `--sync` (DEVKIT-102, H2), que redirige la salida de `claude -p`
+    # a un log que solo watch.sh conoce; `--worker` (más abajo) llama a
+    # `guardar_transcripcion` directo, porque ya tiene `$logf` a mano.
+    guardar_transcripcion "${2:-}" "${3:-}"
+    exit 0
+    ;;
   --worker)
     # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto> [manual] [ronda]: ya
     # corre dentro de un proceso desacoplado (nohup); toma el mismo candado
@@ -5804,6 +6175,11 @@ $card_md"
     kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
     flock -u 9
     exec 9>&-
+    # rc=3 (DEVKIT-93, "nada que revisar") corta antes de cualquier `claude
+    # -p` real: no hay session_id que buscar. Cubre task-start, task-close,
+    # epic-plan y `devkit-run <skill> <Clave>` manual (DEVKIT-102, H2): antes
+    # solo watch.sh dejaba transcripción.
+    [ "$rc" -eq 3 ] || guardar_transcripcion "$logf" "$RUN_DIR/$(basename "$logf" .log)-transcript.jsonl"
     estado=terminado
     if [ "$rc" -eq 3 ]; then
       # DEVKIT-93: review-prep.sh dijo que no había nada que revisar; el
