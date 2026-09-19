@@ -2051,7 +2051,7 @@ encabezado_tabla() {
 # 14, y sin margen quedaba pegado a MODELO.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo> [idx=0] [fijo=1] [color=]
   local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 \
-        idx=${8:-0} fijo=${9:-1} color_habilitado=${10:-} frena="" utf glifo color estado_col icono_len glifo_lento
+        idx=${8:-0} fijo=${9:-1} color_habilitado=${10:-} frena="" utf glifo color estado_col icono_len glifo_lento glifo_lento_len
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
@@ -2060,14 +2060,23 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <d
   # "lento" (el detalle que deja `estado_filas` cuando un "en curso" supera
   # SKILL_TIMEOUT) suma su propio icono ámbar delante, aparte del girador de
   # ESTADO: son dos alarmas distintas, sigue en curso pero además va lento.
+  # El color se aplica DESPUÉS de `recortar` (DEVKIT-106 H3), no antes: si se
+  # pintara acá, `recortar` contaría las secuencias ANSI como caracteres
+  # visibles y, con poco espacio para DETALLE, el corte podía caer en medio
+  # de `\033[33m`, dejando un color ámbar sin su `\033[0m` que se extendía a
+  # las filas siguientes.
+  glifo_lento_len=0
   case "$detalle" in
     lento|"lento;"*)
       glifo_lento=$([ "$utf" = 1 ] && printf '⚠' || printf '!')
-      [ "$color_habilitado" = 1 ] && glifo_lento=$(colorear ambar "$glifo_lento" 1)
+      glifo_lento_len=${#glifo_lento}
       detalle="$glifo_lento $detalle"
       ;;
   esac
   detalle=$(recortar "$detalle" "$(( $(ancho_terminal) - ANCHO_COLUMNAS_FIJAS ))")
+  if [ "$glifo_lento_len" -gt 0 ] && [ "$color_habilitado" = 1 ]; then
+    detalle="$(colorear ambar "${detalle:0:glifo_lento_len}" 1)${detalle:glifo_lento_len}"
+  fi
   glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
   color=$(color_de_estado_fila "$estado")
   estado_col=$(rellenar "$glifo $estado" 16)
@@ -5301,6 +5310,16 @@ FIN
     "$(printf '%s' "$fila_lento" | grep -qF '⠿ en curso' && echo -n si || echo -n no)|$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo -n si || echo -n no)"
   check "icono: lento lleva color ámbar" si \
     "$(formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
+  # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
+  # con poco espacio para DETALLE, el corte caía en medio de `\033[33m` y el
+  # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes. Con
+  # COLUMNS=85 (8 celdas para DETALLE) cada apertura de color debe tener su
+  # cierre.
+  check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
+    "$(fila_lento_angosta=$(COLUMNS=85 formatear_fila task-fix DEVKIT-90 humano 5m "en curso" lento opus/high 0 1 1)
+       abre=$(grep -o $'\033\[33m' <<<"$fila_lento_angosta" | wc -l)
+       cierra=$(grep -o $'\033\[0m' <<<"$fila_lento_angosta" | wc -l)
+       [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
 
   # DEVKIT-97: DETALLE se recorta al ancho disponible de la terminal -sin
   # esto, un motivo largo (una card completa, un "murió sin resumen; ver
