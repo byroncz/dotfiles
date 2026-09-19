@@ -2112,10 +2112,20 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
   printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
-mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=]
+mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=]
   local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
   local filas skill clave origen edad estado detalle modelo
-  filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
+  # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
+  # -para el punto de la cabecera, en `seguir_estado`/`seguir_lanzamiento`/
+  # `--estado` sin `--seguir`- se las pasa acá para no leer watch.log/ps dos
+  # veces por refresco y arriesgar que el punto y la tabla salgan de fotos
+  # distintas. `$#` -ge 5, no el valor: una llamada sin filas activas de
+  # verdad pasa una cadena vacía a propósito.
+  if [ $# -ge 5 ]; then
+    filas=$5
+  else
+    filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
+  fi
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
   else
@@ -2293,9 +2303,10 @@ seguir_estado() {
     # humano cambió el tamaño de la ventana mientras `--seguir` corría.
     if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
     # El punto de la cabecera (DEVKIT-106) lee las mismas <filas> y el mismo
-    # <bucle> que ya arma esta vuelta para `mostrar_estado`/`senal_bucle`: sin
-    # esto, `punto_estado` volvería a leer watch.log por su cuenta, cachés
-    # tibias aparte.
+    # <bucle> que ya arma esta vuelta para `mostrar_estado`/`senal_bucle`, y
+    # se las pasa a `mostrar_estado` como quinto argumento (DEVKIT-106 H5):
+    # sin esto, `mostrar_estado` volvía a leer watch.log/ps por su cuenta y el
+    # punto y la tabla podían salir de fotos distintas.
     filas=$(estado_filas "$WATCH_LOG" "$ahora")
     bucle=$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")
     punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
@@ -2307,7 +2318,7 @@ seguir_estado() {
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -2360,7 +2371,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -6882,7 +6893,8 @@ $card_md"
     estado_color=''; [ -t 1 ] && estado_color=1
     # Misma cabecera que --seguir, con el punto fijo (DEVKIT-106 H4): sin
     # esto, la foto única no mostraba el punto que pide la card, solo la
-    # tabla.
+    # tabla. <estado_filas_una> se reutiliza en `mostrar_estado` (DEVKIT-106
+    # H5) para no leer watch.log/ps dos veces en esta misma foto.
     estado_ahora_una=${DEVKIT_AHORA:-$(date +%s)}
     estado_filas_una=$(estado_filas "$WATCH_LOG" "$estado_ahora_una")
     estado_bucle_una=$(senal_bucle "$WATCH_LOG" "$estado_ahora_una" "$estado_color")
@@ -6890,7 +6902,7 @@ $card_md"
     printf 'devkit-run --estado  %s %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
       "$estado_bucle_una"
-    mostrar_estado 1 0 1 "$estado_color"
+    mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una"
     exit 0
     ;;
   --tablero)
