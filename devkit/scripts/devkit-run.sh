@@ -4924,8 +4924,11 @@ FIN
   estado_de() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
   check "icono: en curso, girador fijo en una sola foto" '⠿' \
     "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 0 1 1)"
+  # LC_ALL=C.UTF-8 fijo (DEVKIT-106 H6, reabierto): sin esto, bash corta
+  # `${GIRO_BRAILLE:1:1}` por bytes bajo la locale de quien corre la
+  # autoprueba y devuelve un byte suelto en vez de ⠙.
   check "icono: en curso, gira una posición por refresco de --seguir" '⠙' \
-    "$(glifo_estado_fila "$(estado_de DEVKIT-57)" 1 0 1)"
+    "$(LC_ALL=C.UTF-8 glifo_estado_fila "$(estado_de DEVKIT-57)" 1 0 1)"
   check "icono: terminó" '✔' "$(glifo_estado_fila "$(estado_de DEVKIT-56)" 0 1 1)"
   check "icono: terminó, color verde" verde "$(color_de_estado_fila "$(estado_de DEVKIT-56)")"
   check "icono: error" '✖' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 1)"
