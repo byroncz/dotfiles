@@ -5943,6 +5943,11 @@ FIN
   check "lanzamiento real: --estado lo muestra terminado" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/' | grep -qF 'terminó' && echo si || echo no)"
+  # DEVKIT-106 H4: `--estado` sin `--seguir` (una sola foto) también muestra
+  # la cabecera con el punto fijo, no solo la tabla.
+  check "--estado (foto única) muestra la cabecera con el punto" si \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+        bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^devkit-run --estado  .*[●*]' && echo si || echo no)"
 
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
   # queda mostrando --estado hasta que termina; la última línea es el
@@ -6875,6 +6880,16 @@ $card_md"
     # con tty real -acá `[ -t 1 ]` sí ve la tty de verdad, a diferencia de
     # dentro de un `$(...)` (ver seguir_estado/senal_bucle).
     estado_color=''; [ -t 1 ] && estado_color=1
+    # Misma cabecera que --seguir, con el punto fijo (DEVKIT-106 H4): sin
+    # esto, la foto única no mostraba el punto que pide la card, solo la
+    # tabla.
+    estado_ahora_una=${DEVKIT_AHORA:-$(date +%s)}
+    estado_filas_una=$(estado_filas "$WATCH_LOG" "$estado_ahora_una")
+    estado_bucle_una=$(senal_bucle "$WATCH_LOG" "$estado_ahora_una" "$estado_color")
+    estado_utf_una=0; utf8_disponible && estado_utf_una=1
+    printf 'devkit-run --estado  %s %s\n%s\n\n' "$(date +%T)" \
+      "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
+      "$estado_bucle_una"
     mostrar_estado 1 0 1 "$estado_color"
     exit 0
     ;;
