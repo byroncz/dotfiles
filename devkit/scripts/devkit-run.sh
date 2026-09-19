@@ -1690,27 +1690,27 @@ rellenar() {  # rellenar <texto> <ancho>
   printf '%s%*s' "$s" "$(( n > ${#s} ? n - ${#s} : 0 ))" ''
 }
 
-# Tamaño de la terminal para recortar la tabla (DEVKIT-97): `$COLUMNS`/
-# `$LINES` primero -así la autoprueba fija un tamaño sin una tty real, y
-# `seguir_estado`/`seguir_lanzamiento`/`seguir_tablero` los exportan con el
-# tamaño real antes de armar el cuadro, porque adentro de un `$(...)` -que es
-# como arman ese cuadro- `tput` ya no ve la tty real (mismo problema que
-# `color` en `senal_bucle`)-, y `tput` como respaldo si no están seteadas. Sin
-# ninguna de las dos (una tubería sin `--seguir`, `cron`, esta autoprueba): un
-# tamaño grande a propósito, no uno chico. Esta tabla ya usa 77 columnas fijas
-# antes de DETALLE; un respaldo angosto (80, el clásico) dejaría 3 caracteres
-# para DETALLE en cualquier `--estado | grep ...` sin tty, mucho peor que no
-# recortar nada cuando no hay certeza real del tamaño.
+# Tamaño de la terminal para recortar la tabla (DEVKIT-97, H1): solo
+# `$COLUMNS`/`$LINES` -así la autoprueba fija un tamaño sin una tty real, y
+# `seguir_estado`/`seguir_lanzamiento`/`seguir_tablero`/la rama `--estado` sin
+# `--seguir` los exportan con `tput` (y solo con tty real, `[ -t 1 ]`) antes de
+# armar el cuadro, porque adentro de un `$(...)` -que es como arman ese
+# cuadro- `tput` ya no ve la tty real (mismo problema que `color` en
+# `senal_bucle`). Sin ninguna de las dos (una tubería, `cron`, un lanzamiento
+# de watch.sh, esta autoprueba, todos sin tty pero a veces con `$TERM`
+# heredado): un tamaño grande a propósito, no uno chico. Un `tput` de respaldo
+# acá adentro devolvía 80/24 con `$TERM` definido pero sin tty -el caso más
+# común fuera de una terminal interactiva-, y esta tabla ya usa 77 columnas
+# fijas antes de DETALLE: quedaban 3 caracteres para DETALLE, mucho peor que
+# no recortar nada cuando no hay certeza real del tamaño.
 ancho_terminal() {
   local c=${COLUMNS:-}
-  [ -n "$c" ] || c=$(tput cols 2>/dev/null)
   [ "$c" -gt 0 ] 2>/dev/null || c=200
   printf '%s' "$c"
 }
 
 alto_terminal() {
   local l=${LINES:-}
-  [ -n "$l" ] || l=$(tput lines 2>/dev/null)
   [ "$l" -gt 0 ] 2>/dev/null || l=1000
   printf '%s' "$l"
 }
@@ -2384,6 +2384,14 @@ run_tests() {
   # la vería como "sin Notion" y no llegaría a correr. Los casos que sí
   # prueban la comprobación la reactivan a mano con DEVKIT_NOTION_CHECK=1.
   export DEVKIT_NOTION_CHECK=0
+
+  # Ancho/alto amplios por defecto (DEVKIT-97 H1): sin esto, un COLUMNS/LINES
+  # heredado de quien corre `--test` (una terminal angosta, un `COLUMNS=80` de
+  # otra invocación) angostaba los checks que no fijan su propio tamaño. Los
+  # que sí necesitan un tamaño puntual lo fijan aparte con
+  # `COLUMNS=... LINES=... <comando>`, que pisa esta exportación solo para esa
+  # invocación.
+  export COLUMNS=200 LINES=1000
 
   check "rol de pr-review" revision "$(role_of '/pr-review 31')"
   check "rol de epic-plan" revision "$(role_of '/epic-plan DEVKIT-1')"
@@ -4353,6 +4361,21 @@ FIN
     "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high \
         | sed -E 's/^.{77}//')"
 
+  # DEVKIT-97 H1: sin COLUMNS/LINES pero con TERM definido (el contenedor,
+  # watch.sh, cron con TERM heredado, `--estado | grep`) no hay tty real, y
+  # antes de este hallazgo `ancho_terminal`/`alto_terminal` caían a `tput`, que
+  # sin tty pero con TERM devuelve 80/24 en vez del respaldo ancho: DETALLE
+  # quedaba en 3 caracteres.
+  local motivo_medio="bloquea a: DEVKIT-61, DEVKIT-99"
+  check "ancho_terminal: sin COLUMNS, con TERM definido, no cae a tput (respaldo ancho)" 200 \
+    "$(unset COLUMNS; TERM=xterm ancho_terminal)"
+  check "alto_terminal: sin LINES, con TERM definido, no cae a tput (respaldo alto)" 1000 \
+    "$(unset LINES; TERM=xterm alto_terminal)"
+  check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
+    "$motivo_medio" \
+    "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_medio" opus/high \
+        | sed -E 's/^.{77}//')"
+
   # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
   # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
   # (`DEVKIT_ESTADO_TODO`) lo desactiva para verlas todas. `imprimir_tabla`
@@ -5680,6 +5703,10 @@ $card_md"
     # terminal, en cualquier posición junto a --seguir.
     case " ${2:-} ${3:-} " in *" --todo "*) export DEVKIT_ESTADO_TODO=1 ;; esac
     if [ "${2:-}" = --seguir ] || [ "${3:-}" = --seguir ]; then seguir_estado; fi
+    # COLUMNS/LINES de verdad, tomados con tty real (DEVKIT-97 H1): mismo
+    # motivo que en seguir_estado, para que un `--estado` interactivo (sin
+    # `--seguir`) también recorte al tamaño real en vez del respaldo ancho.
+    if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
     mostrar_estado
     exit 0
     ;;
