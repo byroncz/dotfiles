@@ -77,10 +77,11 @@
 #                                                    pregunta abierta, 1 si no
 #   devkit-run --presupuesto-corte <prompt> <log>
 #     <presupuesto> <turnos> [clave]                si <turnos> excede <presupuesto>,
-#                                                    bloquea la card con task-block.sh
-#                                                    (DEVKIT-94); <clave> es obligatoria
-#                                                    para pr-review, que no la trae en
-#                                                    el prompt
+#                                                    avisa: ALARMA en watch.log y un
+#                                                    comentario en la card, sin
+#                                                    bloquear (DEVKIT-105); <clave> es
+#                                                    obligatoria para pr-review, que no
+#                                                    la trae en el prompt
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
@@ -1066,6 +1067,31 @@ forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma> [cl
   motivo="devkit-run: $skill $motivo (Estado antes del bloqueo: ${estado:-desconocido}${pr:+, PR: $pr}); ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
+}
+
+# DEVKIT-105: el presupuesto de turnos de roles.toml es una meta de
+# optimización, no un límite. Antes (DEVKIT-94) exceder el presupuesto
+# llamaba a `forzar_task_block` como cualquier otro corte, y una skill que ya
+# había entregado (PR abierto, card en Revisión automática o Lista para
+# merge) quedaba Bloqueada por un aviso: la revisión que el bucle lanzaba
+# segundos después salía sin revisar y consumía su intento, y el humano tenía
+# que devolver la card a mano. Pasó cuatro veces en un día (97, 99, 101 y
+# 102). Ahora exceder el presupuesto nunca bloquea, haya entregado o no: deja
+# la ALARMA en watch.log y, si hay Clave, un comentario en la card; el ciclo
+# sigue su curso sin tocar el Estado.
+avisar_presupuesto_excedido() {  # avisar_presupuesto_excedido <prompt> <logf> <presupuesto> <turnos> [clave]
+  local prompt=$1 logf=$2 presupuesto=$3 turnos=$4 clave=${5:-} skill card_json id
+  skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  printf '%s devkit-run "%s" ALARMA: presupuesto excedido (%s turnos, presupuesto %s)\n' \
+    "$(date +%FT%T%:z)" "$prompt" "$turnos" "$presupuesto" >> "$WATCH_LOG"
+  [ -n "$clave" ] || clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  [ -n "$clave" ] || return 0
+  card_json=$("$NOTION_BIN" card "$clave" 2>/dev/null)
+  id=$(jq -r '.id // empty' <<<"$card_json" 2>/dev/null)
+  [ -n "$id" ] || return 0
+  "$NOTION_BIN" comentar "$id" \
+    "Presupuesto excedido: $turnos turnos contra $presupuesto en $skill; el ciclo sigue" \
+    >/dev/null 2>&1
 }
 
 # ¿El `claude -p` terminó sin acceso a Notion? (DEVKIT-65). Solo bloquea la
@@ -2513,7 +2539,10 @@ run_tests() {
   mkdir -p "$RONDA_DIR"
   cat >"$tmp/notion-doble" <<'FIN'
 #!/usr/bin/env bash
-[ "$1" = card ] && cat "$RONDA_DIR/card-$2.json" 2>/dev/null
+case "$1" in
+  card) cat "$RONDA_DIR/card-$2.json" 2>/dev/null ;;
+  comentar) printf '%s\t%s\n' "$2" "$3" >>"$RONDA_DIR/comentarios" ;;
+esac
 FIN
   cat >"$tmp/gh-doble" <<'FIN'
 #!/usr/bin/env bash
@@ -2746,11 +2775,13 @@ FIN
   check "sin presupuesto.pr-review, sigue el max_turns del rol" "modelo-barato high 50 -" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-presupuesto.toml" FRONTERA_CACHE_DIR="$tmp/frontera-presupuesto" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
 
-  # De punta a punta: un lanzamiento que se pasa del presupuesto corta y
-  # bloquea la card con task-block.sh, en vez de quedar solo como aviso en
-  # watch.log (comportamiento anterior a DEVKIT-94). $tmp/roles.toml no trae
-  # `presupuesto.task-fix`, así que el tope es `implementacion.max_turns`
-  # (15); el doble de `claude` responde con 99 turnos, muy por encima.
+  # De punta a punta: un lanzamiento que se pasa del presupuesto nunca
+  # bloquea la card (DEVKIT-105): el presupuesto de roles.toml es una meta de
+  # optimización, no un límite, así que solo avisa -ALARMA en watch.log y un
+  # comentario en la card-, sin llamar a task-block.sh y sin tocar el Estado.
+  # $tmp/roles.toml no trae `presupuesto.task-fix`, así que el tope es
+  # `implementacion.max_turns` (15); el doble de `claude` responde con 99
+  # turnos, muy por encima.
   local gastador bloqueo_presupuesto espera
   gastador="$tmp/claude-gastador"
   cat >"$gastador" <<'FIN'
@@ -2763,49 +2794,51 @@ FIN
   chmod +x "$bloqueo_presupuesto"
   mkdir -p "$tmp/run"
   : >"$tmp/run/ready"  # sin esto, esperar_arranque espera 120s de verdad
-  rm -f "$tmp/bloqueo.args"
+  printf '{"id":"card-3","estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-3.json"
+  rm -f "$tmp/bloqueo.args" "$RONDA_DIR/comentarios"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
-  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+  while [ ! -s "$RONDA_DIR/comentarios" ] && [ "$espera" -lt 40 ]; do
     sleep 0.1
     espera=$((espera + 1))
   done
-  check "presupuesto agotado bloquea la card con task-block.sh" \
-    'bloquea la card con task-block.sh: DEVKIT-3' \
-    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
-  check "el motivo del bloqueo nombra el presupuesto excedido" \
-    'cortó por exceder el presupuesto de 15 turnos' \
-    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'cortó por exceder el presupuesto de 15 turnos' | head -1)"
-  check "watch.log registra el corte como corte: presupuesto" \
-    'ALARMA: corte: presupuesto (99 turnos, presupuesto 15)' \
-    "$(grep -oE 'ALARMA: corte: presupuesto \(99 turnos, presupuesto 15\)' "$tmp/run/watch.log" | head -1)"
+  check "presupuesto excedido no bloquea la card con task-block.sh" 0 \
+    "$([ -e "$tmp/bloqueo.args" ] && echo 1 || echo 0)"
+  check "watch.log deja la ALARMA de presupuesto excedido" \
+    'ALARMA: presupuesto excedido (99 turnos, presupuesto 15)' \
+    "$(grep -oE 'ALARMA: presupuesto excedido \(99 turnos, presupuesto 15\)' "$tmp/run/watch.log" | head -1)"
+  check "el comentario en la card nombra el presupuesto excedido" \
+    'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' \
+    "$(grep -oE 'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' "$RONDA_DIR/comentarios" | head -1)"
 
-  # H5 del informe sobre el PR #68: si la card ya tiene Estado y PR cuando
-  # llega el corte -task-start que entregó y quedó en Revisión automática
-  # antes de pasarse del presupuesto-, el motivo los cita, para que el
-  # humano no tenga que abrir el log para saber si hubo algo entregado.
-  printf '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/61"}\n' \
+  # Mismo resultado con la card ya entregada (PR abierto, Revisión
+  # automática): antes de DEVKIT-105 esto la dejaba Bloqueada y la revisión
+  # que el bucle lanzaba segundos después salía sin revisar (pasó cuatro
+  # veces en un día: 97, 99, 101 y 102). Ahora tampoco bloquea ni cambia el
+  # Estado; solo avisa igual que arriba.
+  printf '{"id":"card-3","estado":"Revisión automática","pr":"https://github.com/o/r/pull/61"}\n' \
     >"$RONDA_DIR/card-DEVKIT-3.json"
-  rm -f "$tmp/bloqueo.args"
+  rm -f "$tmp/bloqueo.args" "$RONDA_DIR/comentarios"
   : >"$tmp/run/watch.log"
   DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
     DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
   espera=0
-  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+  while [ ! -s "$RONDA_DIR/comentarios" ] && [ "$espera" -lt 40 ]; do
     sleep 0.1
     espera=$((espera + 1))
   done
-  check "el motivo del bloqueo cita el Estado y el PR de la card al momento del corte" \
-    'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' \
-    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null \
-      | grep -oE 'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' | head -1)"
-  rm -f "$RONDA_DIR/card-DEVKIT-3.json"
+  check "presupuesto excedido con card ya entregada tampoco bloquea" 0 \
+    "$([ -e "$tmp/bloqueo.args" ] && echo 1 || echo 0)"
+  check "presupuesto excedido con card ya entregada también comenta" \
+    'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' \
+    "$(grep -oE 'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' "$RONDA_DIR/comentarios" | head -1)"
+  rm -f "$RONDA_DIR/card-DEVKIT-3.json" "$RONDA_DIR/comentarios"
 
   # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
   # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
@@ -5825,14 +5858,12 @@ $card_md"
     turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
     if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
        && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
-      # DEVKIT-94: antes esto solo quedaba como aviso en `resumen_txt`
-      # ("excede el presupuesto..."); la card seguía su curso. Ahora corta:
-      # sin límite real de la CLI (no expone `--max-turns`, ver roles.toml),
-      # el único punto donde se puede actuar es aquí, al terminar.
-      forzar_task_block "$prompt" "$logf" \
-        "cortó por exceder el presupuesto de $presupuesto turnos de roles.toml ($turnos_reales usados)" \
-        "ALARMA: corte: presupuesto ($turnos_reales turnos, presupuesto $presupuesto)"
-    elif [ $rc -eq 0 ]; then
+      # DEVKIT-105: presupuesto excedido nunca bloquea la card, es una meta
+      # de optimización, no un límite (ver el comentario sobre
+      # `avisar_presupuesto_excedido`, arriba).
+      avisar_presupuesto_excedido "$prompt" "$logf" "$presupuesto" "$turnos_reales"
+    fi
+    if [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if pregunta_abierta "$resultado"; then
         forzar_task_block "$prompt" "$logf" \
@@ -5890,18 +5921,16 @@ $card_md"
     ;;
   --presupuesto-corte)
     # --presupuesto-corte <prompt> <logf> <presupuesto> <turnos> [clave]:
-    # DEVKIT-94, H1 del informe sobre el PR #68. El corte por presupuesto
-    # (línea ~5010 de `--worker`, más abajo) solo corría ahí; `watch.sh`
-    # lanza pr-review, task-fix y task-document con `--sync`, un camino que
-    # se quedaba solo con el aviso de `resumen` sin bloquear nunca la card.
-    # Mismo `forzar_task_block` que usa `--worker`, para no duplicar la
-    # regla; `clave` viaja aparte porque `/pr-review <N>` no la trae en el
+    # DEVKIT-94, H1 del informe sobre el PR #68. `watch.sh` lanza pr-review,
+    # task-fix y task-document con `--sync`, un camino aparte de `--worker`,
+    # así que este subcomando le da el mismo aviso; se queda con el nombre
+    # histórico aunque, desde DEVKIT-105, ya no corta nada -avisa, mismo
+    # `avisar_presupuesto_excedido` que usa `--worker`, para no duplicar la
+    # regla. `clave` viaja aparte porque `/pr-review <N>` no la trae en el
     # prompt.
     if [ -n "${4:-}" ] && [ "${4:-}" != - ] && [ -n "${5:-}" ] \
        && [ "${5:-}" -gt "${4:-}" ] 2>/dev/null; then
-      forzar_task_block "${2:-}" "${3:-}" \
-        "cortó por exceder el presupuesto de ${4:-} turnos de roles.toml (${5:-} usados)" \
-        "ALARMA: corte: presupuesto (${5:-} turnos, presupuesto ${4:-})" "${6:-}"
+      avisar_presupuesto_excedido "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     fi
     exit 0
     ;;

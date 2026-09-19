@@ -451,23 +451,30 @@ check_igual "prompt acentuado largo: devkit-run --estado lo muestra" 1 \
   "$(DEVKIT_WATCH_LOG="$OUT" DEVKIT_RUN_DIR="$(dirname "$OUT")/run" bash "$HERE/devkit-run.sh" --estado 2>&1 \
     | grep -c 'DEVKIT-9')"
 
-# --- Presupuesto de turnos exigible en el ciclo automático (DEVKIT-94) ------
+# --- Presupuesto de turnos, meta que avisa sin bloquear (DEVKIT-94, DEVKIT-105)
 # `run_skill` lanza pr-review con `devkit-run.sh --sync`, no con `--worker`:
-# antes de esta card, `presupuesto.<skill>` de roles.toml solo cortaba en
-# `--worker` (task-start manual, task-close, epic-plan) y aquí se quedaba
-# solo como aviso en la línea de resumen (H1 del informe sobre el PR #68).
-# roles.toml real del template, con `presupuesto.pr-review` bajado a 1: el
-# doble de `claude` de arriba siempre responde `num_turns=3`, así que lo
-# excede. `/pr-review 9` no trae la Clave en el prompt (a diferencia de
+# `presupuesto.<skill>` de roles.toml solo cortaba en `--worker` (task-start
+# manual, task-close, epic-plan) y aquí se quedaba solo como aviso en la
+# línea de resumen (H1 del informe sobre el PR #68). DEVKIT-105 quitó el
+# corte por completo -exceder el presupuesto nunca bloquea la card, es una
+# meta de optimización- así que ahora las dos rutas terminan igual: ALARMA en
+# watch.log y un comentario en la card, sin llamar a task-block.sh. roles.toml
+# real del template, con `presupuesto.pr-review` bajado a 1: el doble de
+# `claude` de arriba siempre responde `num_turns=3`, así que lo excede.
+# `/pr-review 9` no trae la Clave en el prompt (a diferencia de
 # task-fix/task-document): CLAVE_OVERRIDE reproduce lo que `watch.sh` le
 # pasaría desde el título del PR.
 ROLES_PRESUPUESTO="$TMP/roles-presupuesto-pr-review.toml"
 sed -E 's/^presupuesto\.pr-review = [0-9]+/presupuesto.pr-review = 1/' \
   "$HERE/../agents/roles.toml" > "$ROLES_PRESUPUESTO"
+COMENTARIOS_PRESUPUESTO="$TMP/comentarios-presupuesto"
 NOTION_PRESUPUESTO="$TMP/notion-presupuesto"
-cat >"$NOTION_PRESUPUESTO" <<'FIN'
+cat >"$NOTION_PRESUPUESTO" <<FIN
 #!/usr/bin/env bash
-[ "$1" = card ] && printf '{"clave":"%s","estado":"Revisión automática"}\n' "$2"
+case "\$1" in
+  card) printf '{"id":"card-9","clave":"%s","estado":"Revisión automática"}\n' "\$2" ;;
+  comentar) printf '%s\t%s\n' "\$2" "\$3" >>"$COMENTARIOS_PRESUPUESTO" ;;
+esac
 FIN
 chmod +x "$NOTION_PRESUPUESTO"
 BLOQUEO_PRESUPUESTO="$TMP/task-block-presupuesto"
@@ -477,16 +484,18 @@ printf '%s|' "$@" >"$DEVKIT_TEST_BLOQUEO"
 FIN
 chmod +x "$BLOQUEO_PRESUPUESTO"
 BLOQUEO_PRESUPUESTO_LOG="$TMP/bloqueo-presupuesto.args"
-rm -f "$BLOQUEO_PRESUPUESTO_LOG"
+rm -f "$BLOQUEO_PRESUPUESTO_LOG" "$COMENTARIOS_PRESUPUESTO"
 ROLES_OVERRIDE="$ROLES_PRESUPUESTO" NOTION_OVERRIDE="$NOTION_PRESUPUESTO" \
   BLOCK_OVERRIDE="$BLOQUEO_PRESUPUESTO" CLAVE_OVERRIDE="DEVKIT-9" \
   DEVKIT_TEST_BLOQUEO="$BLOQUEO_PRESUPUESTO_LOG" corre_doble 0
-check_igual "presupuesto: la ALARMA de corte queda en el watch.log real" 1 \
-  "$(grep -coE 'ALARMA: corte: presupuesto \(3 turnos, presupuesto 1\)' "$RUN_WATCH_LOG" 2>/dev/null)"
-check_igual "presupuesto: bloquea con la Clave que pasó watch.sh, no la del prompt" "DEVKIT-9" \
-  "$(cut -d'|' -f1 "$BLOQUEO_PRESUPUESTO_LOG" 2>/dev/null)"
-check_igual "presupuesto: el motivo cita el presupuesto y los turnos usados" 1 \
-  "$(grep -coE 'cortó por exceder el presupuesto de 1 turnos de roles\.toml \(3 usados\)' "$BLOQUEO_PRESUPUESTO_LOG" 2>/dev/null)"
+check_igual "presupuesto: la ALARMA de exceso queda en el watch.log real" 1 \
+  "$(grep -coE 'ALARMA: presupuesto excedido \(3 turnos, presupuesto 1\)' "$RUN_WATCH_LOG" 2>/dev/null)"
+check_igual "presupuesto: no llama a task-block.sh" "" \
+  "$(cat "$BLOQUEO_PRESUPUESTO_LOG" 2>/dev/null)"
+check_igual "presupuesto: comenta en la Clave que pasó watch.sh, no la del prompt" "card-9" \
+  "$(cut -f1 "$COMENTARIOS_PRESUPUESTO" 2>/dev/null)"
+check_igual "presupuesto: el comentario cita el presupuesto y los turnos usados" 1 \
+  "$(grep -coE 'Presupuesto excedido: 3 turnos contra 1 en pr-review; el ciclo sigue' "$COMENTARIOS_PRESUPUESTO" 2>/dev/null)"
 ROLES_OVERRIDE="" NOTION_OVERRIDE="" BLOCK_OVERRIDE="" CLAVE_OVERRIDE=""
 
 # --- Costo total del ciclo de un PR (DEVKIT-45) ------------------------------
@@ -957,7 +966,10 @@ printf '%s|' "$@" >"$FIX_DIR/bloqueo"
 FIN
 cat >"$FIX/notion.sh" <<'FIN'
 #!/usr/bin/env bash
-[ "$1" = card ] && printf '{"clave":"%s","pr":"https://github.com/o/r/pull/45"}\n' "$2"
+case "$1" in
+  card) printf '{"id":"card-9","clave":"%s","pr":"https://github.com/o/r/pull/45"}\n' "$2" ;;
+  comentar) printf '%s\t%s\n' "$2" "$3" >>"$FIX_DIR/notion-comentarios" ;;
+esac
 FIN
 chmod +x "$FIX/bin/gh" "$FIX/claude" "$FIX/task-block" "$FIX/notion.sh"
 
@@ -1100,27 +1112,28 @@ corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" e5f6a7b
 check_igual "DEVKIT-101 H1 (fix-humano): comentario nuevo (otro \$ref) relanza" 2 \
   "$(cat "$DIR_FIX_HUMANO_NUEVO/llamadas" 2>/dev/null || echo 0)"
 
-# --- Presupuesto de turnos exigible en el ciclo automático, vía task-fix
-# (DEVKIT-94) --------------------------------------------------------------
-# atender_fix también lanza con `run_skill`/`--sync`: mismo corte que el caso
+# --- Presupuesto de turnos, meta que avisa sin bloquear, vía task-fix
+# (DEVKIT-94, DEVKIT-105) ---------------------------------------------------
+# atender_fix también lanza con `run_skill`/`--sync`: mismo aviso que el caso
 # de pr-review de arriba, con `/task-fix DEVKIT-9` (la Clave sí viaja en el
 # prompt, a diferencia de `/pr-review <N>`). roles.toml del template con
 # `presupuesto.task-fix` bajado a 1: el doble de `claude` de `corre_fix`
 # siempre responde `num_turns=2`, así que lo excede desde el primer llamado y
 # no llega a la lógica de "fix vacío" (H1 del informe sobre el PR #68).
+# Exceder el presupuesto no bloquea (DEVKIT-105): task-block.sh no se llama.
 ROLES_PRESUPUESTO_FIX="$TMP/roles-presupuesto-task-fix.toml"
 sed -E 's/^presupuesto\.task-fix = [0-9]+/presupuesto.task-fix = 1/' \
   "$HERE/../agents/roles.toml" > "$ROLES_PRESUPUESTO_FIX"
 ROLES_OVERRIDE="$ROLES_PRESUPUESTO_FIX" \
   corre_fix "H1 | atendido | 1234abc" "no debe correr"
-check_igual "presupuesto (task-fix): la ALARMA de corte queda en el watch.log real" 1 \
-  "$(grep -coE 'ALARMA: corte: presupuesto \(2 turnos, presupuesto 1\)' "$FIX_DIR_ACTUAL/run/watch.log" 2>/dev/null)"
+check_igual "presupuesto (task-fix): la ALARMA de exceso queda en el watch.log real" 1 \
+  "$(grep -coE 'ALARMA: presupuesto excedido \(2 turnos, presupuesto 1\)' "$FIX_DIR_ACTUAL/run/watch.log" 2>/dev/null)"
 check_igual "presupuesto (task-fix): un solo llamado, no llega al reintento de fix vacío" 1 \
   "$(cat "$FIX_DIR_ACTUAL/llamadas")"
-check_igual "presupuesto (task-fix): bloquea con la Clave del prompt" "DEVKIT-9" \
-  "$(cut -d'|' -f1 "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
-check_igual "presupuesto (task-fix): el motivo cita el presupuesto y los turnos usados" 1 \
-  "$(grep -coE 'cortó por exceder el presupuesto de 1 turnos de roles\.toml \(2 usados\)' "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
+check_igual "presupuesto (task-fix): no bloquea con task-block.sh" "" \
+  "$(cat "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
+check_igual "presupuesto (task-fix): el comentario cita el presupuesto y los turnos usados" 1 \
+  "$(grep -coE 'Presupuesto excedido: 2 turnos contra 1 en task-fix; el ciclo sigue' "$FIX_DIR_ACTUAL/notion-comentarios" 2>/dev/null)"
 ROLES_OVERRIDE=""
 
 # --- Escalera de modelos por ronda (DEVKIT-61) -------------------------------

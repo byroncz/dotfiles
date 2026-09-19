@@ -556,9 +556,12 @@ run_skill() {
   fi
   # DEVKIT-94, H1 del informe sobre el PR #68: antes esto solo quedaba como
   # aviso dentro de `summary` ("excede el presupuesto..."); pr-review,
-  # task-fix y task-document del ciclo automático corren por acá (`--sync`),
-  # así que el presupuesto de `presupuesto.<skill>` nunca bloqueaba nada aquí,
-  # solo en `--worker` (task-start manual, task-close, epic-plan).
+  # task-fix y task-document del ciclo automático corren por acá (`--sync`).
+  # DEVKIT-105: el presupuesto de `presupuesto.<skill>` es una meta de
+  # optimización, no un límite -exceder el presupuesto nunca bloquea la
+  # card, en ningún camino (`--sync` ni `--worker`)-, así que
+  # `--presupuesto-corte` solo avisa: ALARMA en watch.log y un comentario en
+  # la card.
   turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
      && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
