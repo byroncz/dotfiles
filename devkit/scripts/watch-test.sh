@@ -1064,6 +1064,42 @@ corre_caso_revisar_dos_veces "$DIR_REVISAR_NUEVO" abc1234 T01 abc1234 T03
 check_igual "DEVKIT-101 (revisar): informe nuevo relanza pr-review" 2 \
   "$(cat "$DIR_REVISAR_NUEVO/llamadas" 2>/dev/null || echo 0)"
 
+# `caso_fix_humano` pasa por la misma guarda (DEVKIT-101 H1): antes, un
+# comentario humano ya lanzado se descartaba en silencio si el task-fix
+# correspondiente no llegaba a publicar nada (cuota, error, corte de
+# presupuesto), y como la clave solo lleva $ref, nada lo destrababa. Ahora
+# avisa una vez, igual que `fix` y `revisar`.
+corre_caso_fix_humano_dos_veces() {  # corre_caso_fix_humano_dos_veces <dir> <ref>
+  local dir=$1 ref=$2 extra
+  extra=$(printf 'comentario humano' | base64)
+  OUT="$dir/watch.log"
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix-humano 45 DEVKIT-9 "$ref" "$extra" >"$OUT" 2>&1
+  FIX_DIR="$dir" FIX_R1="H1 | atendido | 1234abc" FIX_R2="no debe correr" FIX_HEAD="a1b2c3d" \
+  PATH="$FIX/bin:$PATH" DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-fix-humano 45 DEVKIT-9 "$ref" "$extra" >>"$OUT" 2>&1
+}
+
+DIR_FIX_HUMANO_MISMO=$(mktemp -d -p "$TMP")
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_MISMO" a1b2c3d
+check_igual "DEVKIT-101 H1 (fix-humano): mismo comentario, no relanza dos veces" 1 \
+  "$(cat "$DIR_FIX_HUMANO_MISMO/llamadas" 2>/dev/null || echo 0)"
+check_log "DEVKIT-101 H1 (fix-humano): avisa una vez que ya está lanzada" \
+  'PR #45 \(DEVKIT-9\) fix-humano ya lanzada para este informe; esperando'
+check_igual "DEVKIT-101 H1 (fix-humano): el aviso no se repite" 1 \
+  "$(grep -c 'ya lanzada para este informe; esperando' "$OUT")"
+
+DIR_FIX_HUMANO_NUEVO=$(mktemp -d -p "$TMP")
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" a1b2c3d
+corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" e5f6a7b
+check_igual "DEVKIT-101 H1 (fix-humano): comentario nuevo (otro \$ref) relanza" 2 \
+  "$(cat "$DIR_FIX_HUMANO_NUEVO/llamadas" 2>/dev/null || echo 0)"
+
 # --- Presupuesto de turnos exigible en el ciclo automático, vía task-fix
 # (DEVKIT-94) --------------------------------------------------------------
 # atender_fix también lanza con `run_skill`/`--sync`: mismo corte que el caso

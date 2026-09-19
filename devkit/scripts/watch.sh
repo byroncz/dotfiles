@@ -833,6 +833,24 @@ caso_revisar() {  # caso_revisar <num> <Clave> <head> <ref> <informe>
   run_skill "pr-review-$num-$short" "/pr-review $num" "$lkey" 1 "" "$key"
 }
 
+# Caso `fix-humano`: misma guarda que `caso_fix`/`caso_revisar` (DEVKIT-101
+# H1). Antes marcaba `fix-humano:$num:$ref` directo y salía mudo si ya estaba
+# lanzada: un task-fix que termina sin publicar nada para ese comentario
+# (error, cuota, corte de presupuesto) dejaba el comentario atascado para
+# siempre, porque $ref no cambia hasta el próximo comentario humano. Con
+# `avisar_si_lanzada`, al menos avisa una vez en vez de quedar en silencio.
+caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
+  local num=$1 key=$2 ref=$3 extra=$4 lkey text
+  lkey="fix-humano:$num:$ref"
+  avisar_si_lanzada "$num" "$key" fix-humano "$lkey" && return
+  mark "$lkey"
+  text=$(printf '%s' "$extra" | base64 -d 2>/dev/null)
+  log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
+  # La fecha del comentario en el nombre: un PR puede recibir varios
+  # comentarios humanos y cada ejecución conserva su log.
+  run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "$lkey"
+}
+
 # Siguiente hija al OK del revisor, en bash (DEVKIT-56). La línea de watch.log
 # es la evidencia de que la hija arrancó mientras el PR espera el approve.
 chain_next() {  # chain_next <num> <Clave>
@@ -1012,6 +1030,11 @@ case "${1:-}" in
     caso_revisar "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
+  --caso-fix-humano)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    caso_fix_humano "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    exit 0
+    ;;
 esac
 
 log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos; PRs mergeados cada ${MERGED_INTERVAL}s)"
@@ -1062,13 +1085,7 @@ while true; do
             caso_fix "$num" "$key" "$url" "$head" "$ref" "$informe"
             ;;
           fix-humano)
-            launched "fix-humano:$num:$ref" && continue
-            mark "fix-humano:$num:$ref"
-            text=$(printf '%s' "$extra" | base64 -d 2>/dev/null)
-            log "PR #$num ($key) comentario humano de $ref: lanzando task-fix"
-            # La fecha del comentario en el nombre: un PR puede recibir varios
-            # comentarios humanos y cada ejecución conserva su log.
-            run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "fix-humano:$num:$ref"
+            caso_fix_humano "$num" "$key" "$ref" "$extra"
             ;;
           documentar)
             if ! launched "documentar:$num:$head"; then
