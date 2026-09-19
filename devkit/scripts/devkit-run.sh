@@ -5100,12 +5100,12 @@ FIN
   check "icono: no arrancó, color gris" gris "$(color_de_estado_fila "$(estado_de DEVKIT-60)")"
   check "icono: \"no lanzó\" es el mismo caso que \"no arrancó\", mismo icono" '○' \
     "$(glifo_estado_fila "no lanzó" 0 1 1)"
-  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 97 \
+  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" "$ANCHO_COLUMNAS_FIJAS" \
     "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
   # El estado más largo con icono es "⚠ sin registro" (14, DEVKIT-106 H2), no
   # "no arrancó" (10): antes este caso no probaba el borde real de la
   # columna y dejaba pasar la regresión de H2.
-  check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" 97 \
+  check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" "$ANCHO_COLUMNAS_FIJAS" \
     "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
   check "columna ESTADO deja al menos un espacio antes de MODELO (sin registro)" si \
     "$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0 \
