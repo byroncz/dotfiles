@@ -1852,10 +1852,17 @@ mostrar_estado() {
 # `SIN SEÑAL` con el bucle vivo. Orden de las cuatro ramas, cada una excluye
 # a las de abajo:
 #   1. `watch.sh` no está en `ps`: `MUERTO`, no hay bucle que espere nada.
-#   2. Una fila `en curso` de origen `bucle` explica la falta de tick: el
-#      bucle está esperando a esa skill, no muerto. Sin alarma -si esa fila
-#      ya superó SKILL_TIMEOUT, la marca "lento" vive en su propia fila de la
-#      tabla (`estado_filas`); esta línea no la duplica ni la reemplaza.
+#   2. Una fila `en curso` de origen `bucle`, salvo `task-start` (DEVKIT-97
+#      H2), explica la falta de tick: el bucle está esperando a esa skill, no
+#      muerto. Sin alarma -si esa fila ya superó SKILL_TIMEOUT, la marca
+#      "lento" vive en su propia fila de la tabla (`estado_filas`); esta línea
+#      no la duplica ni la reemplaza. `task-start` con origen `bucle` viene de
+#      `chain_next` -> `task-next.sh` -> `devkit-run.sh task-start`, que lanza
+#      un worker con `nohup setsid` y vuelve enseguida (ver la cabecera de
+#      este archivo): no bloquea a `watch.sh` como sí lo hace `run_skill` con
+#      pr-review/task-fix/task-close/task-document (`--sync`, con `wait`).
+#      Contarlo aquí taparía un SIN SEÑAL real de `watch.sh` mientras ese
+#      worker, ajeno al tick, sigue corriendo.
 #   3. Sin skill que lo explique, el último tick (o su ausencia total) más
 #      viejo que el doble de INTERVALO_BUCLE: `SIN SEÑAL` de verdad.
 #   4. Cualquier otro caso: vivo, con la edad del último tick.
@@ -1877,7 +1884,7 @@ senal_bucle() {  # senal_bucle <watch.log> <ahora epoch> [color]
     return 0
   fi
   while IFS=$'\t' read -r skill clave origen edad_fila estado detalle modelo; do
-    if [ "$origen" = bucle ] && [ "$estado" = "en curso" ]; then
+    if [ "$origen" = bucle ] && [ "$estado" = "en curso" ] && [ "$skill" != task-start ]; then
       if [ "$clave" = - ]; then
         printf 'bucle: esperando %s hace %s\n' "$skill" "$edad_fila"
       else
@@ -4466,6 +4473,26 @@ FIN
     "en curso|lento" \
     "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" estado_filas "$esperando_lento_log" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-87" {print $5"|"$6}')"
+
+  # DEVKIT-97 H2: task-start con origen bucle viene de `chain_next` ->
+  # `task-next.sh` -> `devkit-run.sh task-start`, un worker `nohup setsid` que
+  # no bloquea a `watch.sh` -a diferencia de `run_skill` (pr-review/task-fix/
+  # task-close/task-document), que corre con `--sync` y `wait`. Con el worker
+  # todavía en `ps` (fila `en curso`) pero sin `--sync /task-start` y un tick
+  # viejo, el caso 2 no debe tapar el SIN SEÑAL real.
+  local ts_esperando_log pslist_ts_esperando
+  ts_esperando_log="$tmp/task-start-esperando-watch.log"
+  printf '%s task-start-90 lanzando (origen=bucle) modelo=x esfuerzo=high ronda=-: "/task-start DEVKIT-90" log=%s/task-start-90.log\n' \
+    "$(date -u -d "@$((ahora - 300))" +%FT%TZ)" "$est" >"$ts_esperando_log"
+  printf '%s consultando GitHub\n' "$(date -u -d "@$((ahora - 2 * INTERVALO_BUCLE - 60))" +%FT%TZ)" \
+    >>"$ts_esperando_log"
+  pslist_ts_esperando="$tmp/ps-task-start-esperando"
+  printf '#!/usr/bin/env bash\ncat <<TABLA\n1 bash /workspace/devkit/scripts/watch.sh\n999 bash devkit-run.sh --worker /task-start DEVKIT-90 %s/task-start-90.log opus high 40\nTABLA\n' \
+    "$est" >"$pslist_ts_esperando"
+  chmod +x "$pslist_ts_esperando"
+  check "senal_bucle: task-start en curso con origen bucle, sin --sync en ps y tick viejo, no tapa SIN SEÑAL" 1 \
+    "$(PS_BIN="$pslist_ts_esperando" LOCK="$est/skill.lock" senal_bucle "$ts_esperando_log" "$ahora" \
+        | grep -c 'SIN SEÑAL hace')"
 
   # DEVKIT-81 H5, regla sin excepción: un `claude -p` vivo de cada origen real
   # -humano (terminal), bucle (run_skill lanza pr-review/task-fix/
