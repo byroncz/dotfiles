@@ -926,9 +926,11 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
       printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
     elif [ -n "$ts_ok" ]; then
       # Fallo con una lectura buena previa (DEVKIT-78): se sigue mostrando esa
-      # lectura -no "no se pudo leer"-, con su hora y desde cuándo no se
-      # refresca.
-      printf '\nConsumo (última cuota oficial leída %s, sin refrescar desde %s)\n' \
+      # lectura -no "no se pudo leer"-. El segundo dato es la hora del último
+      # intento fallido, no la de la última lectura buena (H2, pr-review): con
+      # fallos repetidos esa hora avanza cada intento, y "sin refrescar desde"
+      # decía algo falso.
+      printf '\nConsumo (última cuota oficial leída %s, último intento fallido %s)\n' \
         "$(date -d "@$ts_ok" +%T 2>/dev/null || date -r "$ts_ok" +%T)" \
         "$(date -d "@$ts" +%T 2>/dev/null || date -r "$ts" +%T)"
       printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
@@ -5469,6 +5471,15 @@ FIN
     "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
         CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
         | sed -n 's/^  //p' | paste -sd'|')"
+
+  # H2 de pr-review DEVKIT-78: el segundo dato de esa línea es la hora del
+  # último intento fallido, no "sin refrescar desde" -esa frase usaba la
+  # misma hora y, con fallos repetidos, afirmaba algo falso.
+  check "última lectura buena más vieja que el TTL: dice 'último intento fallido', no 'sin refrescar desde'" \
+    1 \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
+        CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | grep -c -E 'Consumo \(última cuota oficial leída [0-9:]+, último intento fallido [0-9:]+\)')"
 
   # DEVKIT-78: `permitir_refresco_cuota=0` (lo que pasa `seguir_estado` pasado
   # CUOTA_DESATENDIDO) muestra la caché vencida igual, pero no dispara
