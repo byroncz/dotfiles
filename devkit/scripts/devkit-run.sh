@@ -278,9 +278,10 @@ CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 # Tope de refresco desatendido (DEVKIT-78): el incidente que abrió la card
 # corrió `--estado --seguir` sin nadie mirando durante ~2 horas, refrescando
 # la cuota cada 60 s (antes, cada 3 s con sesión persistente) cientos de
-# veces seguidas. `seguir_estado` deja de disparar `refrescar_cuota_bg` -sin
-# dejar de mostrar la última lectura buena- pasado este margen desde que
-# arrancó el bucle; una `--estado` suelta (alguien mirando de verdad) siempre
+# veces seguidas. `seguir_estado` y `seguir_lanzamiento` dejan de disparar
+# `refrescar_cuota_bg` -sin dejar de mostrar la última lectura buena- pasado
+# este margen desde que arrancó el bucle; una `--estado` suelta (alguien
+# mirando de verdad) siempre
 # refresca si venció CUOTA_TTL, sin este tope.
 CUOTA_DESATENDIDO="${DEVKIT_CUOTA_DESATENDIDO:-900}"
 # Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
@@ -919,10 +920,10 @@ refrescar_cuota_bg() {
 # esperarlo en línea, se muestra la última lectura de CUOTA_CACHE (si hay) y
 # se refresca en segundo plano cuando vence CUOTA_TTL o cuando no hay ninguna
 # todavía. Así `--estado` nunca queda atado a esa lectura (H1 de pr-review).
-# <permitir_refresco> en 0 (DEVKIT-78, lo pasa `seguir_estado` pasado
-# CUOTA_DESATENDIDO) muestra la caché igual pero no dispara un refresco
-# nuevo: por defecto en 1, así que una `--estado` suelta -sin `--seguir`- no
-# cambia de comportamiento.
+# <permitir_refresco> en 0 (DEVKIT-78, lo pasan `seguir_estado` y
+# `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché igual pero
+# no dispara un refresco nuevo: por defecto en 1, así que una `--estado`
+# suelta -sin `--seguir`- no cambia de comportamiento.
 mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
   local permitir_refresco=${1:-1}
   local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad ttl_efectivo
@@ -5535,10 +5536,10 @@ FIN
   done
   check "pasado CUOTA_TTL_FALLO, un fallo sí reintenta" 1 "$refrescado_fallo"
 
-  # DEVKIT-78: `permitir_refresco_cuota=0` (lo que pasa `seguir_estado` pasado
-  # CUOTA_DESATENDIDO) muestra la caché vencida igual, pero no dispara
-  # `refrescar_cuota_bg` -- CLAUDE_BIN apunta a un binario roto: si igual
-  # refrescara, quedaría "fail" en la caché.
+  # DEVKIT-78: `permitir_refresco_cuota=0` (lo que pasan `seguir_estado` y
+  # `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché vencida
+  # igual, pero no dispara `refrescar_cuota_bg` -- CLAUDE_BIN apunta a un
+  # binario roto: si igual refrescara, quedaría "fail" en la caché.
   local cuota_desatendida
   cuota_desatendida="$tmp/cuota-desatendida"
   mkdir -p "$cuota_desatendida"
