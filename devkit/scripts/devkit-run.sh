@@ -1929,11 +1929,13 @@ alto_terminal() {
 # Ancho de cada columna fija antes de DETALLE (DEVKIT-97, ESTADO ensanchada a
 # 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en DEVKIT-107). Angostadas en
 # DEVKIT-107 H1 a lo que de verdad usan: SKILL 14 (task-document mide 13,
-# el nombre más largo), CARD 11 (DEVKIT-9999 más el espacio), LANZÓ 8
-# ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ usan
-# minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
+# el nombre más largo), CARD 12 (DEVKIT-9999 mide 11, más un espacio de
+# separador -DEVKIT-107 H4: `rellenar` no lo agrega cuando el texto ya llena
+# el ancho, así que sin ese espacio de más "DEVKIT-1000" pegaba con LANZÓ),
+# LANZÓ 8 ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ
+# usan minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
 ANCHO_SKILL=14
-ANCHO_CARD=11
+ANCHO_CARD=12
 ANCHO_LANZO=8
 ANCHO_HACE=7
 ANCHO_DURO=7
@@ -2131,8 +2133,8 @@ encabezado_tabla() {
 # La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
 # entra en el ancho de la terminal, se recorta completa con `recortar` -no
 # solo DETALLE- y recién ahí se pintan los colores con `pintar_rango`
-# (DEVKIT-107 H1): angostar las columnas fijas (88, antes 97) no alcanza en
-# una terminal de menos de 89 columnas, y ahí hace falta comerse parte de las
+# (DEVKIT-107 H1): angostar las columnas fijas (89, antes 97) no alcanza en
+# una terminal de menos de 90 columnas, y ahí hace falta comerse parte de las
 # columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
 # antes de ese recorte final correría el corte, como ya cuidaba DEVKIT-106 H3
 # para DETALLE por separado.
@@ -5110,6 +5112,11 @@ FIN
   check "columna ESTADO deja al menos un espacio antes de MODELO (sin registro)" si \
     "$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0 \
         | grep -qF ' sonnet/high' && echo si || echo no)"
+  # DEVKIT-107 H4: con CARD=11, DEVKIT-9999 (11 caracteres) llenaba toda la
+  # columna y `rellenar` no agregaba el espacio de separación con LANZÓ.
+  check "columna CARD deja un espacio antes de LANZÓ con una Clave de 11 caracteres" si \
+    "$(COLUMNS=200 formatear_fila task-start DEVKIT-9999 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0 \
+        | grep -qF 'DEVKIT-9999 bucle' && echo si || echo no)"
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
@@ -5489,7 +5496,7 @@ FIN
   # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
   # con poco espacio para DETALLE, el corte caía en medio de `\033[33m` y el
   # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes. Con
-  # COLUMNS=94 (6 celdas para DETALLE, ANCHO_COLUMNAS_FIJAS=88) cada
+  # COLUMNS=94 (5 celdas para DETALLE, ANCHO_COLUMNAS_FIJAS=89) cada
   # apertura de color debe tener su cierre.
   check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
     "$(fila_lento_angosta=$(COLUMNS=94 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 1)
@@ -5515,9 +5522,9 @@ FIN
     "${fila_ancha: -1}"
   check "formatear_fila: sin recorte, un DETALLE corto queda entero" "$motivo_largo" \
     "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_largo" \
-        | sed -E 's/^.{88}//')"
+        | sed -E "s/^.{$ANCHO_COLUMNAS_FIJAS}//")"
 
-  # DEVKIT-107 H1: con las columnas fijas angostadas (88, antes 97) una
+  # DEVKIT-107 H1: con las columnas fijas angostadas (89, antes 97) una
   # terminal de 80 columnas -menos que las columnas fijas más un DETALLE
   # mínimo- todavía desbordaba una fila a dos líneas, rompiendo el ajuste al
   # alto de `--seguir` (DEVKIT-97). La fila entera se recorta al ancho de la
@@ -5545,7 +5552,7 @@ FIN
   check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
     "$motivo_medio" \
     "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_medio" \
-        | sed -E 's/^.{88}//')"
+        | sed -E "s/^.{$ANCHO_COLUMNAS_FIJAS}//")"
 
   # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
   # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
