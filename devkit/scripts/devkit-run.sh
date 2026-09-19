@@ -1822,6 +1822,15 @@ mostrar_estado() {
       fi
     done <<<"$filas"
 
+    # DEVKIT-97 H5: la tabla agrupada por Épica (dos o más Épicas `En
+    # progreso` entre las filas) no pasa por `imprimir_tabla` y no se recorta
+    # al alto de la terminal -a diferencia de la tabla plana, más abajo.
+    # Excepción a propósito, no un olvido: `ESTADO_FILAS` (20 por defecto) ya
+    # acota cuántos lanzamientos del log llegan hasta acá, agrupar por Épica
+    # es el caso menos frecuente (una sola card `En progreso` por Épica a la
+    # vez, AGENTS.md), y recortar por grupo sin perder la cabecera de cada
+    # Épica es harina de otro costal. Si esto empieza a desbordar `--seguir`
+    # en la práctica, se resuelve aparte.
     if [ "${#orden_epicas[@]}" -ge 2 ]; then
       local primero=1
       for e in "${orden_epicas[@]}"; do
