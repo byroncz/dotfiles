@@ -303,7 +303,7 @@ touch "$LAUNCHED"
 # solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
-    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*) ;;
+    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*|*" no lanzó: "*) ;;
     *) return 1 ;;
   esac
   printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'

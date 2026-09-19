@@ -834,7 +834,7 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
 # solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
-    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*) ;;
+    *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*|*" no lanzó: "*) ;;
     *) return 1 ;;
   esac
   printf '%s' "$1" | grep -qE '[ \[](task-start|pr-review|task-fix|task-document|task-close|epic-plan)-'
@@ -6534,12 +6534,19 @@ FIN
   local no_lanzo_log=$tmp/no-lanzo-costos.log cache_no_lanzo
   cache_no_lanzo=$(mktemp)
   printf '73\tDEVKIT-73\n' >"$cache_no_lanzo"
-  cat >"$no_lanzo_log" <<'FIN'
-2026-09-19T12:00:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log
-2026-09-19T12:00:05-05:00 pr-review-73-abc1234 no lanzó: nada que revisar (ya revisado en abc1234)
-2026-09-19T12:05:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log
-2026-09-19T12:10:00-05:00 pr-review-73-abc1234 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=10 duracion=30s tokens: entrada=1 cache=1 salida=1 :: revisado
-FIN
+  rm -f "$no_lanzo_log"
+  # Las líneas pasan por costos_log_candidata/costos_log, no se escriben a
+  # mano: así la prueba cubre también que "no lanzó" sí llegue a costos.log
+  # (reabierto en la segunda vuelta de DEVKIT-107 H2, antes descartada ahí).
+  (
+    COSTOS_LOG=$no_lanzo_log
+    costos_log '2026-09-19T12:00:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log'
+    costos_log '2026-09-19T12:00:05-05:00 pr-review-73-abc1234 no lanzó: nada que revisar (ya revisado en abc1234)'
+    costos_log '2026-09-19T12:05:00-05:00 pr-review-73-abc1234 lanzando (origen=bucle) modelo=modelo-fuerte esfuerzo=high ronda=-: "/pr-review 73" log=/run/devkit/pr-review-73-abc1234.log'
+    costos_log '2026-09-19T12:10:00-05:00 pr-review-73-abc1234 terminado: modelo=modelo-fuerte esfuerzo=high ronda=- costo=0.20 turnos=10 duracion=30s tokens: entrada=1 cache=1 salida=1 :: revisado'
+  )
+  check "costos_log copia 'no lanzó' a costos.log (H2 reabierto: antes se descartaba)" 4 \
+    "$(wc -l <"$no_lanzo_log")"
   check "costos_cierre_de empareja 'no lanzó' como cierre, sin saltar al del relanzamiento" 1 \
     "$(costos_cierre_de "$no_lanzo_log" 1 pr-review-73-abc1234 | grep -c 'no lanzó')"
   check "costos_filas no cuenta dos veces el costo de un id relanzado tras 'no lanzó'" 1 \
