@@ -56,7 +56,10 @@ verdict=$(printf '%s' "$marcador" | sed -nE 's/.*verdict=([A-Z]+).*/\1/p')
 # --- Publica la review --------------------------------------------------------
 # Idempotente: si un paso de más abajo (gh pr view, Notion) falla y la skill
 # manda repetir este script (paso 4 de `pr-review`), no publica el mismo
-# informe dos veces sobre el mismo head (H4 de la revisión del PR 67).
+# informe dos veces sobre el mismo head (H4 de la revisión del PR 67). El
+# reintento vuelve a necesitar `archivo` en disco: el trap de arriba ya lo
+# borró al salir, así que la skill lo reescribe (o corre con `--conservar`
+# para depurar) antes de repetir (DEVKIT-99).
 # Compara el cuerpo completo, no solo el marcador: dos informes sobre el
 # mismo head y el mismo veredicto pueden tener marcadores idénticos y no ser
 # el mismo informe -por ejemplo, uno posterior a una respuesta de task-fix
