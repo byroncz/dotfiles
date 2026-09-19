@@ -264,6 +264,15 @@ CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
 # cada lectura sucesiva) — refrescar más seguido no trae un dato más nuevo,
 # solo gasta la llamada.
 CUOTA_TTL="${DEVKIT_CUOTA_TTL:-60}"
+# Espera propia para una lectura fallida (H1, pr-review DEVKIT-78): CUOTA_TTL
+# mide la cadencia de una lectura buena, pero un fallo -el binario confirma
+# que el de la card fue un 429- reintentado a esa misma cadencia golpea el
+# endpoint con el ritmo del propio incidente. No se pudo medir a qué
+# intervalo el endpoint vuelve a responder tras un 429 (el fallo no se
+# reprodujo), así que se usa 1800 s: el extremo alto del rango 5/15/30 min
+# que pedía medir el criterio de la card, el valor más conservador posible
+# sin esa medición.
+CUOTA_TTL_FALLO="${DEVKIT_CUOTA_TTL_FALLO:-1800}"
 CUOTA_CACHE="${DEVKIT_CUOTA_CACHE:-$RUN_DIR/cuota.cache}"
 CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 # Tope de refresco desatendido (DEVKIT-78): el incidente que abrió la card
@@ -916,7 +925,7 @@ refrescar_cuota_bg() {
 # cambia de comportamiento.
 mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
   local permitir_refresco=${1:-1}
-  local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad
+  local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad ttl_efectivo
   if [ -s "$CUOTA_CACHE" ]; then
     IFS=$'\t' read -r ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok <"$CUOTA_CACHE"
     edad=$(( $(date +%s) - ts ))
@@ -938,7 +947,12 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
     else
       printf '\nConsumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora\n'
     fi
-    if [ "$edad" -ge "$CUOTA_TTL" ] && [ "$permitir_refresco" = 1 ]; then
+    # Un fallo espera CUOTA_TTL_FALLO, no CUOTA_TTL, antes de reintentar (H1,
+    # pr-review): contra un 429 activo, CUOTA_TTL repite la cadencia del
+    # propio incidente.
+    ttl_efectivo=$CUOTA_TTL
+    [ "$estado" = ok ] || ttl_efectivo=$CUOTA_TTL_FALLO
+    if [ "$edad" -ge "$ttl_efectivo" ] && [ "$permitir_refresco" = 1 ]; then
       refrescar_cuota_bg
     fi
   elif [ "$permitir_refresco" = 1 ]; then
@@ -5480,6 +5494,38 @@ FIN
     "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
         CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
         | grep -c -E 'Consumo \(última cuota oficial leída [0-9:]+, último intento fallido [0-9:]+\)')"
+
+  # H1 de pr-review DEVKIT-78: un fallo espera CUOTA_TTL_FALLO, no CUOTA_TTL,
+  # antes de reintentar. Con CUOTA_TTL=60 vencido pero CUOTA_TTL_FALLO=1800
+  # sin vencer, no debe disparar `refrescar_cuota_bg` -si lo hiciera, el
+  # primer campo (ts) cambiaría a "ahora".
+  local cuota_ttl_fallo ts_sin_vencer
+  cuota_ttl_fallo="$tmp/cuota-ttl-fallo"
+  mkdir -p "$cuota_ttl_fallo"
+  ts_sin_vencer=$(( $(date +%s) - 90 ))
+  printf '%s\tfail\t10\tya\t10\tya\t%s\n' "$ts_sin_vencer" "$(( $(date +%s) - 200 ))" \
+    >"$cuota_ttl_fallo/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_TTL_FALLO=1800 CUOTA_CACHE="$cuota_ttl_fallo/cuota.cache" \
+    CUOTA_LOCK="$cuota_ttl_fallo/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  sleep 0.5
+  check "un fallo no reintenta antes de CUOTA_TTL_FALLO, aunque venció CUOTA_TTL" "$ts_sin_vencer" \
+    "$(cut -f1 "$cuota_ttl_fallo/cuota.cache" 2>/dev/null)"
+
+  # Pasado CUOTA_TTL_FALLO, el fallo sí vuelve a intentar.
+  local cuota_ttl_fallo_vencido ts_vencido refrescado_fallo intento
+  cuota_ttl_fallo_vencido="$tmp/cuota-ttl-fallo-vencido"
+  mkdir -p "$cuota_ttl_fallo_vencido"
+  ts_vencido=$(( $(date +%s) - 90 ))
+  printf '%s\tfail\t10\tya\t10\tya\t%s\n' "$ts_vencido" "$(( $(date +%s) - 200 ))" \
+    >"$cuota_ttl_fallo_vencido/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_TTL_FALLO=1 CUOTA_CACHE="$cuota_ttl_fallo_vencido/cuota.cache" \
+    CUOTA_LOCK="$cuota_ttl_fallo_vencido/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  refrescado_fallo=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f1 "$cuota_ttl_fallo_vencido/cuota.cache" 2>/dev/null)" != "$ts_vencido" ] && { refrescado_fallo=1; break; }
+    sleep 0.3
+  done
+  check "pasado CUOTA_TTL_FALLO, un fallo sí reintenta" 1 "$refrescado_fallo"
 
   # DEVKIT-78: `permitir_refresco_cuota=0` (lo que pasa `seguir_estado` pasado
   # CUOTA_DESATENDIDO) muestra la caché vencida igual, pero no dispara
