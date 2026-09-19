@@ -1881,9 +1881,10 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+14+16, DEVKIT-97):
-# lo que sobra del ancho de la terminal es lo único que le toca a DETALLE.
-ANCHO_COLUMNAS_FIJAS=77
+# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+16+16, DEVKIT-97,
+# ESTADO ensanchada a 16 en DEVKIT-106 H2): lo que sobra del ancho de la
+# terminal es lo único que le toca a DETALLE.
+ANCHO_COLUMNAS_FIJAS=79
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
 # menor a 1 corta a 1 -nunca a 0 ni negativo, `${s:0:n}` con `n` negativo
@@ -2029,10 +2030,11 @@ punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> 
 }
 
 encabezado_tabla() {
-  # ESTADO mide 14, no 12 (DEVKIT-81 H7): "sin registro" ya mide 12, y sin
-  # margen queda pegado a la columna MODELO.
+  # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
+  # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
+  # pegado a la columna MODELO.
   printf '%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar ESTADO 14)" "$(rellenar MODELO 16)" DETALLE
+    "$(rellenar HACE 8)" "$(rellenar ESTADO 16)" "$(rellenar MODELO 16)" DETALLE
 }
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
@@ -2044,9 +2046,9 @@ encabezado_tabla() {
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 # <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
 # el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
-# directas de la autoprueba (sin esos tres argumentos) no cambian. El ancho de
-# ESTADO no crece: "sin registro" ya mide 12 (DEVKIT-81 H7) y el icono+espacio
-# ocupan justo los 2 que le sobraban a la columna de 14.
+# directas de la autoprueba (sin esos tres argumentos) no cambian. ESTADO
+# ensanchada a 16 (DEVKIT-106 H2): "⚠ sin registro" con icono y espacio mide
+# 14, y sin margen quedaba pegado a MODELO.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo> [idx=0] [fijo=1] [color=]
   local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 \
         idx=${8:-0} fijo=${9:-1} color_habilitado=${10:-} frena="" utf glifo color estado_col icono_len glifo_lento
@@ -2068,7 +2070,7 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <d
   detalle=$(recortar "$detalle" "$(( $(ancho_terminal) - ANCHO_COLUMNAS_FIJAS ))")
   glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
   color=$(color_de_estado_fila "$estado")
-  estado_col=$(rellenar "$glifo $estado" 14)
+  estado_col=$(rellenar "$glifo $estado" 16)
   if [ -n "$color" ] && [ "$color_habilitado" = 1 ]; then
     icono_len=${#glifo}
     estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
@@ -4919,10 +4921,16 @@ FIN
   check "icono: no arrancó, color gris" gris "$(color_de_estado_fila "$(estado_de DEVKIT-60)")"
   check "icono: \"no lanzó\" es el mismo caso que \"no arrancó\", mismo icono" '○' \
     "$(glifo_estado_fila "no lanzó" 0 1 1)"
-  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 77 \
+  check "columna ESTADO no cambia de ancho con un estado corto (terminó)" 79 \
     "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 bucle 1m terminó - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
-  check "columna ESTADO no cambia de ancho con el estado más largo (no arrancó)" 77 \
-    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "no arrancó" - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+  # El estado más largo con icono es "⚠ sin registro" (14, DEVKIT-106 H2), no
+  # "no arrancó" (10): antes este caso no probaba el borde real de la
+  # columna y dejaba pasar la regresión de H2.
+  check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" 79 \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "sin registro" - sonnet/high 0 1 0); echo $((${#fila_ancho} - 1)))"
+  check "columna ESTADO deja al menos un espacio antes de MODELO (sin registro)" si \
+    "$(COLUMNS=200 formatear_fila task-close DEVKIT-9 bucle 8m "sin registro" - sonnet/high 0 1 0 \
+        | grep -qF ' sonnet/high' && echo si || echo no)"
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
@@ -5312,7 +5320,7 @@ FIN
     "${fila_ancha: -1}"
   check "formatear_fila: sin recorte, un DETALLE corto queda entero" "$motivo_largo" \
     "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high \
-        | sed -E 's/^.{77}//')"
+        | sed -E 's/^.{79}//')"
 
   # DEVKIT-97 H1: sin COLUMNS/LINES pero con TERM definido (el contenedor,
   # watch.sh, cron con TERM heredado, `--estado | grep`) no hay tty real, y
@@ -5327,7 +5335,7 @@ FIN
   check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
     "$motivo_medio" \
     "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_medio" opus/high \
-        | sed -E 's/^.{77}//')"
+        | sed -E 's/^.{79}//')"
 
   # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
   # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
