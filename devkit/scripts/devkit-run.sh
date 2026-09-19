@@ -1926,11 +1926,21 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+8+16+16+10,
-# DEVKIT-97, ESTADO ensanchada a 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en
-# DEVKIT-107): lo que sobra del ancho de la terminal es lo único que le toca a
-# DETALLE.
-ANCHO_COLUMNAS_FIJAS=97
+# Ancho de cada columna fija antes de DETALLE (DEVKIT-97, ESTADO ensanchada a
+# 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en DEVKIT-107). Angostadas en
+# DEVKIT-107 H1 a lo que de verdad usan: SKILL 14 (task-document mide 13,
+# el nombre más largo), CARD 11 (DEVKIT-9999 más el espacio), LANZÓ 8
+# ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ usan
+# minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
+ANCHO_SKILL=14
+ANCHO_CARD=11
+ANCHO_LANZO=8
+ANCHO_HACE=7
+ANCHO_DURO=7
+ANCHO_ESTADO=16
+ANCHO_MODELO=16
+ANCHO_TURNOS=9
+ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
 # menor a 1 corta a 1 -nunca a 0 ni negativo, `${s:0:n}` con `n` negativo
@@ -1940,6 +1950,21 @@ recortar() {  # recortar <texto> <ancho>
   [ "$n" -ge 1 ] 2>/dev/null || n=1
   [ "${#s}" -gt "$n" ] || { printf '%s' "$s"; return 0; }
   printf '%s…' "${s:0:$((n - 1))}"
+}
+
+# Envuelve en color ANSI los caracteres de <fila> en [<inicio>, <inicio>+
+# <largo>) -recortado a lo que <fila> realmente tenga, para cuando el recorte
+# de la fila entera al ancho de la terminal (DEVKIT-107 H1) se llevó parte o
+# toda esa columna. Se aplica siempre DESPUÉS de recortar la fila entera,
+# nunca antes: `recortar`/`${#fila}` cuentan caracteres visibles, y una
+# secuencia ANSI de por medio correría el corte (mismo motivo por el que
+# DEVKIT-106 H3 ya pintaba cada columna después de recortar DETALLE, no
+# antes).
+pintar_rango() {  # pintar_rango <fila> <inicio> <largo> <color>
+  local fila=$1 inicio=$2 largo=$3 color=$4 visible
+  [ "$inicio" -lt "${#fila}" ] || { printf '%s' "$fila"; return 0; }
+  visible=$(( inicio + largo > ${#fila} ? ${#fila} - inicio : largo ))
+  printf '%s%s%s' "${fila:0:inicio}" "$(colorear "$color" "${fila:inicio:visible}" 1)" "${fila:$((inicio + visible))}"
 }
 
 # Iconos y color de `--estado`/`--tablero` (DEVKIT-106): un vistazo sin leer
@@ -2080,10 +2105,12 @@ encabezado_tabla() {
   # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
   # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
   # pegado a la columna MODELO. DURÓ (junto a HACE) y TURNOS (antes de
-  # DETALLE) son de DEVKIT-107.
-  printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL 15)" "$(rellenar CARD 12)" "$(rellenar LANZÓ 12)" \
-    "$(rellenar HACE 8)" "$(rellenar DURÓ 8)" "$(rellenar ESTADO 16)" "$(rellenar MODELO 16)" \
-    "$(rellenar TURNOS 10)" DETALLE
+  # DETALLE) son de DEVKIT-107; sus anchos, angostados en DEVKIT-107 H1, están
+  # en las constantes `ANCHO_*` junto a `ANCHO_COLUMNAS_FIJAS`.
+  printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
+    "$(rellenar LANZÓ "$ANCHO_LANZO")" "$(rellenar HACE "$ANCHO_HACE")" "$(rellenar DURÓ "$ANCHO_DURO")" \
+    "$(rellenar ESTADO "$ANCHO_ESTADO")" "$(rellenar MODELO "$ANCHO_MODELO")" \
+    "$(rellenar TURNOS "$ANCHO_TURNOS")" DETALLE
 }
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
@@ -2100,9 +2127,19 @@ encabezado_tabla() {
 # 14, y sin margen quedaba pegado a MODELO. <duracion> y <turnos> (DEVKIT-107)
 # ya llegan formateados desde `estado_filas` (o de la autoprueba, directo):
 # esta función solo alinea y colorea, no vuelve a calcularlos.
+#
+# La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
+# entra en el ancho de la terminal, se recorta completa con `recortar` -no
+# solo DETALLE- y recién ahí se pintan los colores con `pintar_rango`
+# (DEVKIT-107 H1): angostar las columnas fijas (88, antes 97) no alcanza en
+# una terminal de menos de 89 columnas, y ahí hace falta comerse parte de las
+# columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
+# antes de ese recorte final correría el corte, como ya cuidaba DEVKIT-106 H3
+# para DETALLE por separado.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=]
   local skill=$1 clave=$2 origen=$3 edad=$4 duracion=$5 estado=$6 modelo=$7 turnos=$8 detalle=$9 \
-        idx=${10:-0} fijo=${11:-1} color_habilitado=${12:-} frena="" utf glifo color estado_col icono_len glifo_lento glifo_lento_len turnos_col
+        idx=${10:-0} fijo=${11:-1} color_habilitado=${12:-} frena="" utf glifo color icono_len \
+        glifo_lento glifo_lento_len ancho fila off_estado off_turnos off_detalle
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
@@ -2111,11 +2148,6 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> 
   # "lento" (el detalle que deja `estado_filas` cuando un "en curso" supera
   # SKILL_TIMEOUT) suma su propio icono ámbar delante, aparte del girador de
   # ESTADO: son dos alarmas distintas, sigue en curso pero además va lento.
-  # El color se aplica DESPUÉS de `recortar` (DEVKIT-106 H3), no antes: si se
-  # pintara acá, `recortar` contaría las secuencias ANSI como caracteres
-  # visibles y, con poco espacio para DETALLE, el corte podía caer en medio
-  # de `\033[33m`, dejando un color ámbar sin su `\033[0m` que se extendía a
-  # las filas siguientes.
   glifo_lento_len=0
   case "$detalle" in
     lento|"lento;"*)
@@ -2124,26 +2156,25 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> 
       detalle="$glifo_lento $detalle"
       ;;
   esac
-  detalle=$(recortar "$detalle" "$(( $(ancho_terminal) - ANCHO_COLUMNAS_FIJAS ))")
-  if [ "$glifo_lento_len" -gt 0 ] && [ "$color_habilitado" = 1 ]; then
-    detalle="$(colorear ambar "${detalle:0:glifo_lento_len}" 1)${detalle:glifo_lento_len}"
-  fi
+  ancho=$(ancho_terminal)
+  detalle=$(recortar "$detalle" "$((ancho - ANCHO_COLUMNAS_FIJAS))")
   glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
   color=$(color_de_estado_fila "$estado")
-  estado_col=$(rellenar "$glifo $estado" 16)
-  if [ -n "$color" ] && [ "$color_habilitado" = 1 ]; then
-    icono_len=${#glifo}
-    estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
+  icono_len=${#glifo}
+  off_estado=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
+  off_turnos=$((off_estado + ANCHO_ESTADO + ANCHO_MODELO))
+  off_detalle=$((off_turnos + ANCHO_TURNOS))
+  fila="$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$origen" "$ANCHO_LANZO")"
+  fila+="$(rellenar "$edad" "$ANCHO_HACE")$(rellenar "$duracion" "$ANCHO_DURO")$(rellenar "$glifo $estado" "$ANCHO_ESTADO")"
+  fila+="$(rellenar "$modelo" "$ANCHO_MODELO")$(rellenar "$turnos" "$ANCHO_TURNOS")$detalle"
+  [ "${#fila}" -le "$ancho" ] || fila=$(recortar "$fila" "$ancho")
+  if [ "$color_habilitado" = 1 ]; then
+    [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
+    # TURNOS excedido ("67/60!", DEVKIT-107).
+    case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
+    [ -z "$color" ] || fila=$(pintar_rango "$fila" "$off_estado" "$icono_len" "$color")
   fi
-  # TURNOS excedido ("67/60!", DEVKIT-107): se rellena primero y recién
-  # después se pinta -mismo orden que ESTADO arriba- para que las secuencias
-  # ANSI no cuenten como ancho visible.
-  turnos_col=$(rellenar "$turnos" 10)
-  case "$turnos" in
-    *'!') [ "$color_habilitado" = 1 ] && turnos_col=$(colorear rojo "$turnos_col" 1) ;;
-  esac
-  printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
-    "$(rellenar "$edad" 8)" "$(rellenar "$duracion" 8)" "$estado_col" "$(rellenar "$modelo" 16)" "$turnos_col" "$detalle"
+  printf '%s\n' "$fila"
 }
 
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
@@ -5458,10 +5489,10 @@ FIN
   # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
   # con poco espacio para DETALLE, el corte caía en medio de `\033[33m` y el
   # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes. Con
-  # COLUMNS=103 (6 celdas para DETALLE, ANCHO_COLUMNAS_FIJAS=97) cada
+  # COLUMNS=94 (6 celdas para DETALLE, ANCHO_COLUMNAS_FIJAS=88) cada
   # apertura de color debe tener su cierre.
   check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
-    "$(fila_lento_angosta=$(COLUMNS=103 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 1)
+    "$(fila_lento_angosta=$(COLUMNS=94 LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 humano 5m 5m "en curso" opus/high -/60 lento 0 1 1)
        abre=$(grep -o $'\033\[33m' <<<"$fila_lento_angosta" | wc -l)
        cierra=$(grep -o $'\033\[0m' <<<"$fila_lento_angosta" | wc -l)
        [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
@@ -5484,7 +5515,22 @@ FIN
     "${fila_ancha: -1}"
   check "formatear_fila: sin recorte, un DETALLE corto queda entero" "$motivo_largo" \
     "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_largo" \
-        | sed -E 's/^.{97}//')"
+        | sed -E 's/^.{88}//')"
+
+  # DEVKIT-107 H1: con las columnas fijas angostadas (88, antes 97) una
+  # terminal de 80 columnas -menos que las columnas fijas más un DETALLE
+  # mínimo- todavía desbordaba una fila a dos líneas, rompiendo el ajuste al
+  # alto de `--seguir` (DEVKIT-97). La fila entera se recorta al ancho de la
+  # terminal como último recurso, después de angostar las columnas.
+  check "formatear_fila: con COLUMNS=80, ninguna fila pasa de 80 caracteres visibles" 1 \
+    "$(fila_80=$(COLUMNS=80 formatear_fila task-fix DEVKIT-71 humano 15m 11m terminó opus/high '67/60!' - 0 1 1)
+       visible=$(printf '%s' "$fila_80" | sed -E $'s/\x1b\\[[0-9;]*m//g')
+       [ "${#visible}" -le 80 ] && echo 1 || echo 0)"
+  check "formatear_fila: con COLUMNS=80, los colores siguen balanceados (sin uno sin cerrar)" 1 \
+    "$(fila_80=$(COLUMNS=80 formatear_fila task-fix DEVKIT-71 humano 15m 11m terminó opus/high '67/60!' - 0 1 1)
+       abre=$(grep -oE $'\x1b\\[(31|32)m' <<<"$fila_80" | wc -l)
+       cierra=$(grep -o $'\033\[0m' <<<"$fila_80" | wc -l)
+       [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
 
   # DEVKIT-97 H1: sin COLUMNS/LINES pero con TERM definido (el contenedor,
   # watch.sh, cron con TERM heredado, `--estado | grep`) no hay tty real, y
@@ -5499,7 +5545,7 @@ FIN
   check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
     "$motivo_medio" \
     "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m - "no arrancó" opus/high -/60 "$motivo_medio" \
-        | sed -E 's/^.{97}//')"
+        | sed -E 's/^.{88}//')"
 
   # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
   # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
