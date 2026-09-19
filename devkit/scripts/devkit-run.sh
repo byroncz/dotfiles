@@ -257,10 +257,33 @@ CUOTA_TIMEOUT="${DEVKIT_CUOTA_TIMEOUT:-20}"
 # La lectura en sí tarda ~1.3 s: --estado nunca la espera en línea (H1 de
 # pr-review en DEVKIT-62). CUOTA_TTL es cuánto se muestra una lectura antes de
 # refrescarla en segundo plano; CUOTA_CACHE guarda la última lectura con su
-# hora, y CUOTA_LOCK evita que dos refrescos corran a la vez.
+# hora, y CUOTA_LOCK evita que dos refrescos corran a la vez. 60 s no es un
+# número arbitrario: es la cadencia real con la que el propio `claude -p
+# "/usage"` renueva su snapshot, medida con `--debug-file` el 2026-09-19
+# (`Usage read answered from a snapshot Ns old`, N subiendo de 0 a ~60 en
+# cada lectura sucesiva) — refrescar más seguido no trae un dato más nuevo,
+# solo gasta la llamada.
 CUOTA_TTL="${DEVKIT_CUOTA_TTL:-60}"
+# Espera propia para una lectura fallida (H1, pr-review DEVKIT-78): CUOTA_TTL
+# mide la cadencia de una lectura buena, pero un fallo -el binario confirma
+# que el de la card fue un 429- reintentado a esa misma cadencia golpea el
+# endpoint con el ritmo del propio incidente. No se pudo medir a qué
+# intervalo el endpoint vuelve a responder tras un 429 (el fallo no se
+# reprodujo), así que se usa 1800 s: el extremo alto del rango 5/15/30 min
+# que pedía medir el criterio de la card, el valor más conservador posible
+# sin esa medición.
+CUOTA_TTL_FALLO="${DEVKIT_CUOTA_TTL_FALLO:-1800}"
 CUOTA_CACHE="${DEVKIT_CUOTA_CACHE:-$RUN_DIR/cuota.cache}"
 CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
+# Tope de refresco desatendido (DEVKIT-78): el incidente que abrió la card
+# corrió `--estado --seguir` sin nadie mirando durante ~2 horas, refrescando
+# la cuota cada 60 s (antes, cada 3 s con sesión persistente) cientos de
+# veces seguidas. `seguir_estado` y `seguir_lanzamiento` dejan de disparar
+# `refrescar_cuota_bg` -sin dejar de mostrar la última lectura buena- pasado
+# este margen desde que arrancó el bucle; una `--estado` suelta (alguien
+# mirando de verdad) siempre
+# refresca si venció CUOTA_TTL, sin este tope.
+CUOTA_DESATENDIDO="${DEVKIT_CUOTA_DESATENDIDO:-900}"
 # Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
 # caché que Consumo, una sola llamada a Notion por refresco. BLOQUEOS_TTL es
 # más corto que CUOTA_TTL porque el Estado de una card cambia más seguido que
@@ -858,14 +881,34 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
 # La subshell cierra sus descriptores de entrada/salida (H3 de pr-review): si
 # no, hereda los del llamador y quien lea `--estado` por pipe o `$(...)`
 # queda atado a que termine el refresco, justo lo que H1 evitaba.
+# Un fallo conserva la última lectura buena en vez de pisarla (DEVKIT-78,
+# séptimo campo `ts_ok`): antes, una sola falla borraba el porcentaje que
+# `mostrar_consumo` venía mostrando y lo cambiaba por "no se pudo leer", aun
+# con una lectura buena de hace un minuto todavía útil.
 refrescar_cuota_bg() {
   (
     mkdir -p "$(dirname "$CUOTA_CACHE")" 2>/dev/null
     exec 8>"$CUOTA_LOCK"
     flock -n 8 || exit 0
-    local cuota
+    # `local` sin asignar deja la variable sin definir, no vacía (gotcha de
+    # bash): con `set -u`, "$prev_tsok" más abajo revienta la subshell entera
+    # si nunca se llega al `read` (sin caché previa). Se inicializan vacías a
+    # propósito.
+    local cuota prev_ts='' prev_estado='' prev_sp='' prev_sr='' prev_wp='' prev_wr='' prev_tsok=''
+    if [ -s "$CUOTA_CACHE" ]; then
+      IFS=$'\t' read -r prev_ts prev_estado prev_sp prev_sr prev_wp prev_wr prev_tsok <"$CUOTA_CACHE"
+      # Caché del formato viejo, de 6 campos sin `ts_ok` (H4, pr-review
+      # DEVKIT-78): una lectura `ok` de ese formato es su propia lectura
+      # buena. Sin esto, el primer fallo tras actualizar el devkit caía en la
+      # rama sin `prev_tsok` de más abajo y borraba esa lectura, justo lo que
+      # esta card quiere evitar.
+      [ "$prev_estado" = ok ] && [ -z "$prev_tsok" ] && prev_tsok=$prev_ts
+    fi
     if cuota=$(leer_cuota); then
-      printf '%s\tok\t%s\n' "$(date +%s)" "$cuota" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
+      printf '%s\tok\t%s\t%s\n' "$(date +%s)" "$cuota" "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
+    elif [ -n "$prev_tsok" ]; then
+      printf '%s\tfail\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$prev_sp" "$prev_sr" "$prev_wp" "$prev_wr" "$prev_tsok" \
+        >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
     else
       printf '%s\tfail\n' "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
     fi
@@ -877,22 +920,48 @@ refrescar_cuota_bg() {
 # esperarlo en línea, se muestra la última lectura de CUOTA_CACHE (si hay) y
 # se refresca en segundo plano cuando vence CUOTA_TTL o cuando no hay ninguna
 # todavía. Así `--estado` nunca queda atado a esa lectura (H1 de pr-review).
-mostrar_consumo() {
-  local ts estado sesion_pct sesion_reset semana_pct semana_reset edad
+# <permitir_refresco> en 0 (DEVKIT-78, lo pasan `seguir_estado` y
+# `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché igual pero
+# no dispara un refresco nuevo: por defecto en 1, así que una `--estado`
+# suelta -sin `--seguir`- no cambia de comportamiento.
+mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
+  local permitir_refresco=${1:-1}
+  local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad ttl_efectivo
   if [ -s "$CUOTA_CACHE" ]; then
-    IFS=$'\t' read -r ts estado sesion_pct sesion_reset semana_pct semana_reset <"$CUOTA_CACHE"
+    IFS=$'\t' read -r ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok <"$CUOTA_CACHE"
     edad=$(( $(date +%s) - ts ))
     if [ "$estado" = ok ]; then
       printf '\nConsumo (cuota oficial, leída %s)\n' "$(date -d "@$ts" +%T 2>/dev/null || date -r "$ts" +%T)"
       printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
       printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
+    elif [ -n "$ts_ok" ]; then
+      # Fallo con una lectura buena previa (DEVKIT-78): se sigue mostrando esa
+      # lectura -no "no se pudo leer"-. El segundo dato es la hora del último
+      # intento fallido, no la de la última lectura buena (H2, pr-review): con
+      # fallos repetidos esa hora avanza cada intento, y "sin refrescar desde"
+      # decía algo falso.
+      printf '\nConsumo (última cuota oficial leída %s, último intento fallido %s)\n' \
+        "$(date -d "@$ts_ok" +%T 2>/dev/null || date -r "$ts_ok" +%T)" \
+        "$(date -d "@$ts" +%T 2>/dev/null || date -r "$ts" +%T)"
+      printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
+      printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
     else
       printf '\nConsumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora\n'
     fi
-    [ "$edad" -lt "$CUOTA_TTL" ] || refrescar_cuota_bg
-  else
+    # Un fallo espera CUOTA_TTL_FALLO, no CUOTA_TTL, antes de reintentar (H1,
+    # pr-review): contra un 429 activo, CUOTA_TTL repite la cadencia del
+    # propio incidente.
+    ttl_efectivo=$CUOTA_TTL
+    [ "$estado" = ok ] || ttl_efectivo=$CUOTA_TTL_FALLO
+    if [ "$edad" -ge "$ttl_efectivo" ] && [ "$permitir_refresco" = 1 ]; then
+      refrescar_cuota_bg
+    fi
+  elif [ "$permitir_refresco" = 1 ]; then
     printf '\nConsumo: todavía no hay una lectura de la cuota oficial, refrescando en segundo plano\n'
     refrescar_cuota_bg
+  else
+    printf '\nConsumo: todavía no hay una lectura de la cuota oficial y --seguir lleva desatendido más de %s sin refrescar\n' \
+      "$(hace "$CUOTA_DESATENDIDO")"
   fi
 }
 
@@ -1875,7 +1944,8 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
   printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
-mostrar_estado() {
+mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1]
+  local permitir_refresco_cuota=${1:-1}
   local filas skill clave origen edad estado detalle modelo
   filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
   if [ -z "$filas" ]; then
@@ -1942,7 +2012,7 @@ mostrar_estado() {
       imprimir_tabla "${filas_fmt[@]}"
     fi
   fi
-  mostrar_consumo
+  mostrar_consumo "$permitir_refresco_cuota"
   mkdir -p "$(dirname "$ALARMAS_VISTAS")" 2>/dev/null
   wc -l <"$WATCH_LOG" 2>/dev/null >"$ALARMAS_VISTAS.tmp" && mv -f "$ALARMAS_VISTAS.tmp" "$ALARMAS_VISTAS" \
     || echo 0 >"$ALARMAS_VISTAS"
@@ -2028,8 +2098,18 @@ cuadro_sin_parpadeo() {  # cuadro_sin_parpadeo <cuadro>
   printf '\033[H%s\033[K\n\033[J' "${1//$'\n'/$'\033[K\n'}"
 }
 
+# Si un bucle sin nadie mirando puede seguir refrescando la cuota (H3,
+# pr-review DEVKIT-78): pasado CUOTA_DESATENDIDO desde que arrancó <desde>, ya
+# no. Compartida por seguir_estado y seguir_lanzamiento -- antes solo la
+# aplicaba el primero, y el segundo (`--seguir <skill> <Clave>`) podía correr
+# igual de desatendido durante un task-fix o pr-review largo.
+calcular_permitir_refresco_cuota() {  # calcular_permitir_refresco_cuota <desde> <ahora>
+  [ "$(( $2 - $1 ))" -lt "$CUOTA_DESATENDIDO" ] && printf 1 || printf 0
+}
+
 seguir_estado() {
-  local giros='|/-\' i=0 c frame ahora color_tty=''
+  local giros='|/-\' i=0 c frame ahora color_tty='' desde
+  desde=${DEVKIT_AHORA:-$(date +%s)}
   if [ -t 1 ]; then
     tput civis 2>/dev/null
     trap 'tput cnorm 2>/dev/null' EXIT
@@ -2053,7 +2133,7 @@ seguir_estado() {
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado)
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -2076,8 +2156,13 @@ seguir_estado() {
 # fallando pasado `MARGEN_LANZAMIENTO_MUERTO`, el monitor no espera para
 # siempre -antes se quedaba corriendo hasta que algo externo lo cortara-, lo
 # dice y sale con un código distinto de cero.
+# Pasado CUOTA_DESATENDIDO desde que arrancó (H3, pr-review DEVKIT-78), deja
+# de refrescar la cuota sola -mismo tope que seguir_estado, vía
+# calcular_permitir_refresco_cuota-: un task-fix o pr-review largo también
+# corre desatendido.
 seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
-  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0
+  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0 desde
+  desde=${DEVKIT_AHORA:-$(date +%s)}
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
@@ -2096,7 +2181,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado)
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -5289,6 +5374,22 @@ FIN
   check "leer_cuota extrae cuándo reinicia la semana" "Sep 22, 11pm (UTC)" \
     "$(printf '%s' "$resultado_cuota" | cut -f4)"
 
+  # DEVKIT-78: el texto de /cost en vez del de /usage (visto de verdad el
+  # 2026-09-17, evidencia de la card) no debe confundirse con una lectura
+  # válida: sin las líneas "Current session"/"Current week", leer_cuota falla
+  # como con cualquier salida sin las líneas esperadas.
+  local doble_cuota_costo
+  doble_cuota_costo="$tmp/claude-usage-costo"
+  cat >"$doble_cuota_costo" <<'FIN'
+#!/usr/bin/env bash
+cat <<'JSON'
+{"result":"Total cost:            $0.0000\nTotal duration (API):  0s\nTotal duration (wall): 0s\nTotal code changes:    0 lines added, 0 lines removed\nUsage by model:\n\nUsage: 0 input, 0 output, 0 cache read, 0 cache write","total_cost_usd":0}
+JSON
+FIN
+  chmod +x "$doble_cuota_costo"
+  check "leer_cuota no confunde el texto de /cost con una lectura de /usage" 1 \
+    "$(CLAUDE_BIN="$doble_cuota_costo" leer_cuota >/dev/null 2>&1; echo $?)"
+
   # H2 de pr-review: leer_cuota no debe dejar una sesión propia de Claude
   # Code en ~/.claude/projects/ (con --seguir serían miles por hora).
   local doble_cuota_args args_cuota
@@ -5353,6 +5454,109 @@ FIN
     sleep 0.3
   done
   check "el refresco en segundo plano reemplaza la caché vencida" 1 "$refrescada"
+
+  # H4 de pr-review DEVKIT-78: una caché `ok` del formato viejo, de 6 campos
+  # sin `ts_ok` (la que ya existe en `.devkit/run/` al actualizar el devkit),
+  # es su propia lectura buena. El primer fallo tras el cambio no debe
+  # borrarla -antes caía en la rama sin `prev_tsok` y perdía el porcentaje.
+  local cuota_vieja_h4 ts_vieja_h4 refrescada_h4
+  cuota_vieja_h4="$tmp/cuota-vieja-h4"
+  mkdir -p "$cuota_vieja_h4"
+  ts_vieja_h4=$(( $(date +%s) - 120 ))
+  printf '%s\tok\t10\tya\t10\tya\n' "$ts_vieja_h4" >"$cuota_vieja_h4/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_vieja_h4/cuota.cache" \
+    CUOTA_LOCK="$cuota_vieja_h4/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  refrescada_h4=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f2 "$cuota_vieja_h4/cuota.cache" 2>/dev/null)" = fail ] && { refrescada_h4=1; break; }
+    sleep 0.3
+  done
+  check "H4: el primer fallo tras una caché ok de 6 campos corre" 1 "$refrescada_h4"
+  check "H4: ese fallo conserva ts_ok con la hora de la lectura ok vieja, no la borra" "$ts_vieja_h4" \
+    "$(cut -f7 "$cuota_vieja_h4/cuota.cache" 2>/dev/null)"
+
+  # DEVKIT-78: un fallo con una lectura buena previa (más vieja que CUOTA_TTL,
+  # el caso del criterio de aceptación) no borra esa lectura: --estado sigue
+  # mostrando el último porcentaje bueno, con su hora y desde cuándo no se
+  # refresca, en vez de "no se pudo leer".
+  local cuota_fail_con_buena
+  cuota_fail_con_buena="$tmp/cuota-fail-con-buena"
+  mkdir -p "$cuota_fail_con_buena"
+  printf '%s\tfail\t10\tya\t10\tya\t%s\n' "$(( $(date +%s) - 120 ))" "$(( $(date +%s) - 200 ))" \
+    >"$cuota_fail_con_buena/cuota.cache"
+  check "última lectura buena más vieja que el TTL: se sigue mostrando, no 'no se pudo leer'" \
+    "Consumo (última cuota oficial leída" \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
+        CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | grep -oE "Consumo \(última cuota oficial leída")"
+  check "última lectura buena más vieja que el TTL: trae sesión y semana" \
+    "sesión: 10% usada, reinicia ya|semana: 10% usada, reinicia ya" \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
+        CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | sed -n 's/^  //p' | paste -sd'|')"
+
+  # H2 de pr-review DEVKIT-78: el segundo dato de esa línea es la hora del
+  # último intento fallido, no "sin refrescar desde" -esa frase usaba la
+  # misma hora y, con fallos repetidos, afirmaba algo falso.
+  check "última lectura buena más vieja que el TTL: dice 'último intento fallido', no 'sin refrescar desde'" \
+    1 \
+    "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
+        CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
+        | grep -c -E 'Consumo \(última cuota oficial leída [0-9:]+, último intento fallido [0-9:]+\)')"
+
+  # H1 de pr-review DEVKIT-78: un fallo espera CUOTA_TTL_FALLO, no CUOTA_TTL,
+  # antes de reintentar. Con CUOTA_TTL=60 vencido pero CUOTA_TTL_FALLO=1800
+  # sin vencer, no debe disparar `refrescar_cuota_bg` -si lo hiciera, el
+  # primer campo (ts) cambiaría a "ahora".
+  local cuota_ttl_fallo ts_sin_vencer
+  cuota_ttl_fallo="$tmp/cuota-ttl-fallo"
+  mkdir -p "$cuota_ttl_fallo"
+  ts_sin_vencer=$(( $(date +%s) - 90 ))
+  printf '%s\tfail\t10\tya\t10\tya\t%s\n' "$ts_sin_vencer" "$(( $(date +%s) - 200 ))" \
+    >"$cuota_ttl_fallo/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_TTL_FALLO=1800 CUOTA_CACHE="$cuota_ttl_fallo/cuota.cache" \
+    CUOTA_LOCK="$cuota_ttl_fallo/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  sleep 0.5
+  check "un fallo no reintenta antes de CUOTA_TTL_FALLO, aunque venció CUOTA_TTL" "$ts_sin_vencer" \
+    "$(cut -f1 "$cuota_ttl_fallo/cuota.cache" 2>/dev/null)"
+
+  # Pasado CUOTA_TTL_FALLO, el fallo sí vuelve a intentar.
+  local cuota_ttl_fallo_vencido ts_vencido refrescado_fallo intento
+  cuota_ttl_fallo_vencido="$tmp/cuota-ttl-fallo-vencido"
+  mkdir -p "$cuota_ttl_fallo_vencido"
+  ts_vencido=$(( $(date +%s) - 90 ))
+  printf '%s\tfail\t10\tya\t10\tya\t%s\n' "$ts_vencido" "$(( $(date +%s) - 200 ))" \
+    >"$cuota_ttl_fallo_vencido/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_TTL_FALLO=1 CUOTA_CACHE="$cuota_ttl_fallo_vencido/cuota.cache" \
+    CUOTA_LOCK="$cuota_ttl_fallo_vencido/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  refrescado_fallo=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f1 "$cuota_ttl_fallo_vencido/cuota.cache" 2>/dev/null)" != "$ts_vencido" ] && { refrescado_fallo=1; break; }
+    sleep 0.3
+  done
+  check "pasado CUOTA_TTL_FALLO, un fallo sí reintenta" 1 "$refrescado_fallo"
+
+  # DEVKIT-78: `permitir_refresco_cuota=0` (lo que pasan `seguir_estado` y
+  # `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché vencida
+  # igual, pero no dispara `refrescar_cuota_bg` -- CLAUDE_BIN apunta a un
+  # binario roto: si igual refrescara, quedaría "fail" en la caché.
+  local cuota_desatendida
+  cuota_desatendida="$tmp/cuota-desatendida"
+  mkdir -p "$cuota_desatendida"
+  printf '%s\tok\t10\tya\t10\tya\n' "$(( $(date +%s) - 120 ))" >"$cuota_desatendida/cuota.cache"
+  CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_desatendida/cuota.cache" \
+    CUOTA_LOCK="$cuota_desatendida/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado 0 >/dev/null
+  sleep 0.5
+  check "permitir_refresco_cuota=0: no dispara un refresco de fondo con la caché vencida" ok \
+    "$(cut -f2 "$cuota_desatendida/cuota.cache" 2>/dev/null)"
+
+  # H3 de pr-review DEVKIT-78: calcular_permitir_refresco_cuota es la función
+  # compartida por seguir_estado y seguir_lanzamiento -- antes solo el primero
+  # cortaba el refresco pasado CUOTA_DESATENDIDO.
+  check "calcular_permitir_refresco_cuota: recién arrancado, permite refrescar" 1 \
+    "$(CUOTA_DESATENDIDO=900 calcular_permitir_refresco_cuota 1000 1000)"
+  check "calcular_permitir_refresco_cuota: pasado CUOTA_DESATENDIDO, ya no permite" 0 \
+    "$(CUOTA_DESATENDIDO=900 calcular_permitir_refresco_cuota 1000 2000)"
 
   # H3 de pr-review: la subshell de refrescar_cuota_bg no debe heredar los
   # descriptores del llamador. Antes de cerrarlos, leer --estado por pipe (o
