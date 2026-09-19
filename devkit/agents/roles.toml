@@ -25,8 +25,10 @@ frontera = ["fable", "opus", "sonnet"]
 # tokens de entrada/salida) y la evidencia de Opus como implementador ya
 # está: los PR 39 a 43 necesitaron 1, 1, 0, 0 y 0 ciclos de corrección
 # (DEVKIT-54). `max_turns` es un presupuesto, no un límite: la CLI instalada
-# (2.1.270) no expone `--max-turns`, así que devkit-run compara `num_turns`
-# del resultado contra este número y solo avisa en el log si se excede.
+# no expone `--max-turns`, así que devkit-run compara `num_turns` del
+# resultado contra este número. `presupuesto.pr-review`, más abajo, lo anula
+# y hace el tope exigible: si se excede, corta y bloquea la card con
+# `task-block.sh` (DEVKIT-94) en vez de solo avisar en watch.log.
 #
 # `resolver_modelo` solo avanza desde `model_index` hacia el final de la
 # lista, nunca hacia atrás: si Opus no responde, cae a Sonnet y ahí se queda,
@@ -68,3 +70,31 @@ implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
 # No hay rol para cerrar ni bloquear una card (DEVKIT-55): `task-close.sh` y
 # `task-block.sh` son bash contra la API de Notion y no lanzan modelo. El rol
 # `contabilidad` que los agrupaba se retiró con ellos.
+
+# Presupuesto de turnos por skill (DEVKIT-94), clave punteada bajo
+# `presupuesto` con el mismo mecanismo que anula `model_index`/`effort` por
+# skill (`role_field`, arriba): no hace falta un parser de tablas nuevo, el
+# grep de `role_field presupuesto <skill>` ya entiende
+# `presupuesto.<skill> = N` como TOML de clave punteada válido. Antes, el
+# único presupuesto era el de `implementacion.max_turns`/`revision.max_turns`
+# (arriba) y `resumen()` solo lo escribía en watch.log como aviso: la card
+# seguía su curso aunque se pasara. Ahora `devkit-run --worker` (task-start
+# manual, task-close, epic-plan) y `run_skill`/`--sync` en watch.sh (el ciclo
+# automático: pr-review, task-fix, task-document) comparan los turnos reales
+# contra el valor de aquí y, si se excede, cortan y bloquean la card con
+# `task-block.sh` en vez de dejarla avanzar sin límite. La CLI instalada
+# sigue sin exponer `--max-turns`, así que el corte es posterior a la
+# ejecución, no un límite que Claude Code aplique mientras corre.
+#
+# Valores iniciales, decididos por el humano en DEVKIT-94 con las medidas de
+# las hijas 87 a 90: pr-review entre 16 y 33 turnos, task-fix entre 30
+# (ronda 2) y 87 (ronda 1), task-start entre 43 y 125 antes de
+# `task-begin.sh`. Se ajustan con `devkit-run --costos` tras cuatro o cinco
+# cards con el flujo nuevo. Una skill sin entrada aquí usa el `max_turns` de
+# su rol (`implementacion` o `revision`, arriba); `task-submit` y
+# `task-document` no tienen entrada propia a propósito, todavía con el valor
+# de `implementacion.max_turns`.
+presupuesto.task-start = 120
+presupuesto.pr-review = 40
+presupuesto.task-fix = 60
+presupuesto.epic-plan = 60

@@ -69,6 +69,12 @@
 #                                                    si está libre, 1 si no
 #   devkit-run --pregunta-abierta "<resultado>"     sale 0 si el resultado es una
 #                                                    pregunta abierta, 1 si no
+#   devkit-run --presupuesto-corte <prompt> <log>
+#     <presupuesto> <turnos> [clave]                si <turnos> excede <presupuesto>,
+#                                                    bloquea la card con task-block.sh
+#                                                    (DEVKIT-94); <clave> es obligatoria
+#                                                    para pr-review, que no la trae en
+#                                                    el prompt
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
@@ -534,6 +540,11 @@ ronda_de() {  # ronda_de <prompt>
 # [ronda] viene cuando quien llama ya la resolvió (watch.sh la pasa de `--rol`
 # a `--sync` en DEVKIT_RONDA): no se vuelve a consultar el PR ni se repiten
 # los avisos en watch.log.
+#
+# El presupuesto de turnos sigue la misma regla que el esfuerzo: el
+# `max_turns` del rol, anulado por `presupuesto.<skill>` si roles.toml trae
+# una entrada (DEVKIT-94). `--worker` lo usa para cortar y bloquear la card
+# cuando el lanzamiento se pasa, no solo para avisar.
 model_effort_of() {  # model_effort_of <prompt> [ronda]
   local role skill idx modelo esfuerzo turnos ronda avisar=1 elem alias esf i
   local -a rondas=()
@@ -572,6 +583,8 @@ model_effort_of() {  # model_effort_of <prompt> [ronda]
   esf=$(role_field "$skill" effort)
   [ -z "$esf" ] || esfuerzo=$esf
   turnos=$(role_field "$role" max_turns)
+  i=$(role_field presupuesto "$skill")
+  [ -z "$i" ] || turnos=$i
   # Campos vacíos como "-": `read` parte por espacios y se salta los campos
   # vacíos, así que un modelo vacío se leía como si fuera el esfuerzo
   # (DEVKIT-55).
@@ -1009,22 +1022,32 @@ task_begin_fallo() {  # task_begin_fallo <prompt> <clave> <motivo>
   esac
 }
 
-forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma>
-  local prompt=$1 logf=$2 motivo=$3 alarma=$4 skill clave estado
+forzar_task_block() {  # forzar_task_block <prompt> <logf> <motivo> <alarma> [clave]
+  local prompt=$1 logf=$2 motivo=$3 alarma=$4 clave=${5:-} skill estado card_json pr
   skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
-  clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  # `/pr-review <N>` no trae Clave en el prompt: quien la conoce (watch.sh,
+  # por el título del PR) la pasa explícita en vez de que se pierda en el
+  # regex de abajo (DEVKIT-94, H1 del informe sobre el PR #68).
+  [ -n "$clave" ] || clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
   if [ -z "$clave" ]; then
     printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
     return 0
   fi
-  estado=$(jq -r '.estado // empty' <<<"$("$NOTION_BIN" card "$clave" 2>/dev/null)" 2>/dev/null)
+  card_json=$("$NOTION_BIN" card "$clave" 2>/dev/null)
+  estado=$(jq -r '.estado // empty' <<<"$card_json" 2>/dev/null)
   if [ "$estado" = "Hecha" ]; then
     printf '%s devkit-run "%s" ALARMA: terminó sin estado observable sobre una card ya Hecha; no se bloquea (%s)\n' \
       "$(date +%FT%T%:z)" "$prompt" "$motivo" >> "$WATCH_LOG"
     return 1
   fi
   printf '%s devkit-run "%s" %s\n' "$(date +%FT%T%:z)" "$prompt" "$alarma" >> "$WATCH_LOG"
-  motivo="devkit-run: $skill $motivo; ver $logf"
+  # H5 del informe sobre el PR #68: un corte puede llegar después de que la
+  # skill ya entregó (task-start dejó el PR abierto y la card en Revisión
+  # automática antes de pasarse del presupuesto). Sin el Estado y el PR de
+  # ese momento en el motivo, el humano tenía que abrir el log para saber si
+  # había algo entregado antes de desbloquear.
+  pr=$(jq -r '.pr // empty' <<<"$card_json" 2>/dev/null)
+  motivo="devkit-run: $skill $motivo (Estado antes del bloqueo: ${estado:-desconocido}${pr:+, PR: $pr}); ver $logf"
   printf '%s devkit-run "%s" bloquea la card con task-block.sh: %s\n' "$(date +%FT%T%:z)" "$prompt" "$clave" >> "$WATCH_LOG"
   "$TASK_BLOCK_BIN" "$clave" "$motivo" >>"$WATCH_LOG" 2>&1
 }
@@ -1941,7 +1964,11 @@ seguir_tablero() {
 # --- devkit-run --costos [<Clave>] (DEVKIT-89) ------------------------------
 # Mide el costo por card desde costos.log, que sobrevive a `devkit recreate`.
 # Solo suma cifras que ya están en el log (costo=, turnos=, duracion=);
-# prohibido estimar (misma regla que DEVKIT-62).
+# prohibido estimar (misma regla que DEVKIT-62). `--costos <Clave>` marca con
+# "!" pegado al número de turnos las filas que superaron el presupuesto
+# vigente en roles.toml para ese skill (DEVKIT-94); el resumen de proyecto
+# (sin Clave) agrega turnos de varios skills por card y no tiene un único
+# presupuesto contra el que comparar, así que no lleva marca.
 
 # Precarga `CLAVE_DE_PR_CACHE` con una sola llamada a `gh pr list`, en vez de
 # una `gh pr view` por cada PR distinto del log (H3 de pr-review en
@@ -2076,9 +2103,21 @@ costos_totales_card() {  # costos_totales_card <Clave>
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
 }
 
+# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
+# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
+# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
+# a partir del nombre del skill solo, para marcar filas ya cerradas en
+# `--costos`.
+presupuesto_de_skill() {  # presupuesto_de_skill <skill>
+  local skill=$1 valor
+  valor=$(role_field presupuesto "$skill")
+  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
+  printf '%s' "$valor"
+}
+
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
 costos_tabla_card() {
-  local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0
+  local clave=$1 ts c_clave skill id modelo esfuerzo ronda t c d modelo_col min filas=0 presupuesto t_col
   # FECHA mide 27, no 21 (H7 de pr-review en DEVKIT-89): el timestamp con
   # zona (`2026-09-18T10:05:00-05:00`) mide 25, y `rellenar` no trunca.
   printf '%s%s%s%s%s%s\n' "$(rellenar SKILL 16)" "$(rellenar FECHA 27)" "$(rellenar MODELO/ESFUERZO/RONDA 28)" \
@@ -2091,8 +2130,15 @@ costos_tabla_card() {
     else modelo_col="$modelo/$esfuerzo r$ronda"; fi
     min=-
     [ "$d" = - ] || min=$((d / 60))
+    t_col=$t
+    if [ "$t" != - ] && [ -n "$t" ]; then
+      presupuesto=$(presupuesto_de_skill "$skill")
+      if [ -n "$presupuesto" ] && [ "$t" -gt "$presupuesto" ] 2>/dev/null; then
+        t_col="${t}!"
+      fi
+    fi
     printf '%s%s%s%s%s%s\n' "$(rellenar "$skill" 16)" "$(rellenar "$ts" 27)" "$(rellenar "$modelo_col" 28)" \
-      "$(rellenar "$t" 8)" "$(rellenar "$c" 10)" "$min"
+      "$(rellenar "$t_col" 8)" "$(rellenar "$c" 10)" "$min"
   done < <(costos_filas "$COSTOS_LOG" "$clave")
   if [ "$filas" = 0 ]; then
     echo "Sin lanzamientos de $clave en $COSTOS_LOG."
@@ -2465,6 +2511,85 @@ FIN
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-epic" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/epic-plan DEVKIT-1')"
   check "modelo/esfuerzo de task-fix (rol implementación)" "modelo-barato low 15 1" \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-fix" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+
+  # --- Presupuesto de turnos por skill (DEVKIT-94) ---------------------------
+  # `presupuesto.task-fix` anula `implementacion.max_turns` (15 en
+  # $tmp/roles.toml), igual que ya hacían `model_index`/`effort` por skill.
+  cat >"$tmp/roles-presupuesto.toml" <<'FIN'
+frontera = ["modelo-barato"]
+implementacion.model_index = 1
+implementacion.effort = "low"
+implementacion.max_turns = 40
+revision.model_index = 1
+revision.effort = "high"
+revision.max_turns = 50
+presupuesto.task-fix = 7
+FIN
+  check "model_effort_of usa presupuesto.task-fix, no implementacion.max_turns" "modelo-barato low 7 1" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-presupuesto.toml" FRONTERA_CACHE_DIR="$tmp/frontera-presupuesto" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/task-fix DEVKIT-2')"
+  check "sin presupuesto.pr-review, sigue el max_turns del rol" "modelo-barato high 50 -" \
+    "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-presupuesto.toml" FRONTERA_CACHE_DIR="$tmp/frontera-presupuesto" WATCH_LOG="$tmp/sonda-watch.log" model_effort_of '/pr-review 9')"
+
+  # De punta a punta: un lanzamiento que se pasa del presupuesto corta y
+  # bloquea la card con task-block.sh, en vez de quedar solo como aviso en
+  # watch.log (comportamiento anterior a DEVKIT-94). $tmp/roles.toml no trae
+  # `presupuesto.task-fix`, así que el tope es `implementacion.max_turns`
+  # (15); el doble de `claude` responde con 99 turnos, muy por encima.
+  local gastador bloqueo_presupuesto espera
+  gastador="$tmp/claude-gastador"
+  cat >"$gastador" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"Completé DEVKIT-3: listo.","total_cost_usd":0.5,"num_turns":99}\n'
+FIN
+  chmod +x "$gastador"
+  bloqueo_presupuesto="$tmp/task-block-doble-presupuesto"
+  printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >"%s/bloqueo.args"\n' "$tmp" >"$bloqueo_presupuesto"
+  chmod +x "$bloqueo_presupuesto"
+  mkdir -p "$tmp/run"
+  : >"$tmp/run/ready"  # sin esto, esperar_arranque espera 120s de verdad
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "presupuesto agotado bloquea la card con task-block.sh" \
+    'bloquea la card con task-block.sh: DEVKIT-3' \
+    "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-3' "$tmp/run/watch.log" | head -1)"
+  check "el motivo del bloqueo nombra el presupuesto excedido" \
+    'cortó por exceder el presupuesto de 15 turnos' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -oE 'cortó por exceder el presupuesto de 15 turnos' | head -1)"
+  check "watch.log registra el corte como corte: presupuesto" \
+    'ALARMA: corte: presupuesto (99 turnos, presupuesto 15)' \
+    "$(grep -oE 'ALARMA: corte: presupuesto \(99 turnos, presupuesto 15\)' "$tmp/run/watch.log" | head -1)"
+
+  # H5 del informe sobre el PR #68: si la card ya tiene Estado y PR cuando
+  # llega el corte -task-start que entregó y quedó en Revisión automática
+  # antes de pasarse del presupuesto-, el motivo los cita, para que el
+  # humano no tenga que abrir el log para saber si hubo algo entregado.
+  printf '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/61"}\n' \
+    >"$RONDA_DIR/card-DEVKIT-3.json"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$gastador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo_presupuesto" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-3 >/dev/null 2>&1
+  espera=0
+  while [ ! -e "$tmp/bloqueo.args" ] && [ "$espera" -lt 40 ]; do
+    sleep 0.1
+    espera=$((espera + 1))
+  done
+  check "el motivo del bloqueo cita el Estado y el PR de la card al momento del corte" \
+    'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null \
+      | grep -oE 'Estado antes del bloqueo: Revisión automática, PR: https://github.com/o/r/pull/61' | head -1)"
+  rm -f "$RONDA_DIR/card-DEVKIT-3.json"
 
   # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
   # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
@@ -4617,6 +4742,26 @@ FIN
   check "costos_filas trae las cuatro filas de la card (task-close incluido)" 4 \
     "$(costos_filas "$COSTOS_LOG" DEVKIT-77 | wc -l)"
 
+  # DEVKIT-94: `--costos <Clave>` marca con "!" la fila cuyos turnos pasaron
+  # el presupuesto vigente en roles.toml para ese skill. task-fix-31 gastó 8
+  # turnos; con `presupuesto.task-fix = 5` queda marcado, task-start (1
+  # turno, tope 40 por defecto) y pr-review (5 turnos, tope 50 por defecto)
+  # no.
+  cat >"$costos_tmp/roles.toml" <<'FIN'
+frontera = ["modelo-barato"]
+implementacion.model_index = 1
+implementacion.effort = "low"
+implementacion.max_turns = 40
+revision.model_index = 1
+revision.effort = "high"
+revision.max_turns = 50
+presupuesto.task-fix = 5
+FIN
+  check "--costos <Clave> marca con ! la fila que superó el presupuesto" 1 \
+    "$(ROLES_FILE="$costos_tmp/roles.toml" costos_tabla_card DEVKIT-77 | grep -c '8!')"
+  check "--costos <Clave> no marca las filas dentro del presupuesto" 0 \
+    "$(ROLES_FILE="$costos_tmp/roles.toml" costos_tabla_card DEVKIT-77 | grep -cE '\b(1|5)!')"
+
   # H3 de pr-review en DEVKIT-89: pr-review-31 y task-close-31 comparten el
   # PR 31; con CLAVE_DE_PR_CACHE, la segunda resolución sale del archivo y no
   # de un segundo `gh pr view`.
@@ -4833,6 +4978,31 @@ FIN
     "$(grep -c '^pr create' "$ts_dir/llamadas-gh")"
   check "task-submit (PR existente): el cuerpo editado trae el cambio nuevo" 1 \
     "$(grep -c 'Cambio nuevo sobre el PR existente' "$ts_dir/cuerpo-edit")"
+
+  # Diff grande (DEVKIT-94, H2 del informe sobre el PR #68): el aviso va
+  # después de "## Card", nunca dentro de "## Cambios requeridos" -esa
+  # sección la copia tal cual `task-document.sh` (`seccion`) a la entrada de
+  # Documentación y, de ahí, a la card de release.
+  rm -f "$ts_dir/set-llamadas" "$ts_dir/comentar-llamadas" "$ts_dir/cuerpo-edit"
+  seq 1 400 >"$ts_dir/ws/archivo-grande.txt"
+  cat >"$ts_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+Un archivo grande.
+
+## Cómo probarlo
+N/A
+
+## Cambios requeridos
+Ninguno.
+FIN
+  env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9301): diff grande" >/dev/null 2>&1
+  check "task-submit (diff grande): avisa en el cuerpo" 1 \
+    "$(grep -cE '^Diff grande: [0-9]+ líneas$' "$ts_dir/cuerpo-edit")"
+  check "task-submit (diff grande): el aviso queda después de \"## Card\", no antes" 1 \
+    "$([ "$(grep -n '^Diff grande:' "$ts_dir/cuerpo-edit" | head -1 | cut -d: -f1)" -gt \
+        "$(grep -n '^## Card' "$ts_dir/cuerpo-edit" | head -1 | cut -d: -f1)" ] 2>/dev/null && echo 1 || echo 0)"
+  check "task-submit (diff grande): \"Cambios requeridos\" no lo incluye" "Ninguno." \
+    "$(awk '/^## Cambios requeridos/{c=1;next} /^## /{c=0} c && NF' "$ts_dir/cuerpo-edit")"
 
   # Verificación que falla (bash -n sobre un .sh tocado): no comitea, no
   # sube, no toca el PR ni la card, y deja el error en stderr.
@@ -5121,7 +5291,17 @@ $card_md"
       "$(basename "$logf" .log)" "$resumen_txt")
     printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
     costos_log "$linea_fin"
-    if [ $rc -eq 0 ]; then
+    turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
+    if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
+       && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
+      # DEVKIT-94: antes esto solo quedaba como aviso en `resumen_txt`
+      # ("excede el presupuesto..."); la card seguía su curso. Ahora corta:
+      # sin límite real de la CLI (no expone `--max-turns`, ver roles.toml),
+      # el único punto donde se puede actuar es aquí, al terminar.
+      forzar_task_block "$prompt" "$logf" \
+        "cortó por exceder el presupuesto de $presupuesto turnos de roles.toml ($turnos_reales usados)" \
+        "ALARMA: corte: presupuesto ($turnos_reales turnos, presupuesto $presupuesto)"
+    elif [ $rc -eq 0 ]; then
       resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
       if pregunta_abierta "$resultado"; then
         forzar_task_block "$prompt" "$logf" \
@@ -5176,6 +5356,23 @@ $card_md"
     # llamadas usen la misma regla.
     pregunta_abierta "${2:-}"
     exit $?
+    ;;
+  --presupuesto-corte)
+    # --presupuesto-corte <prompt> <logf> <presupuesto> <turnos> [clave]:
+    # DEVKIT-94, H1 del informe sobre el PR #68. El corte por presupuesto
+    # (línea ~5010 de `--worker`, más abajo) solo corría ahí; `watch.sh`
+    # lanza pr-review, task-fix y task-document con `--sync`, un camino que
+    # se quedaba solo con el aviso de `resumen` sin bloquear nunca la card.
+    # Mismo `forzar_task_block` que usa `--worker`, para no duplicar la
+    # regla; `clave` viaja aparte porque `/pr-review <N>` no la trae en el
+    # prompt.
+    if [ -n "${4:-}" ] && [ "${4:-}" != - ] && [ -n "${5:-}" ] \
+       && [ "${5:-}" -gt "${4:-}" ] 2>/dev/null; then
+      forzar_task_block "${2:-}" "${3:-}" \
+        "cortó por exceder el presupuesto de ${4:-} turnos de roles.toml (${5:-} usados)" \
+        "ALARMA: corte: presupuesto (${5:-} turnos, presupuesto ${4:-})" "${6:-}"
+    fi
+    exit 0
     ;;
   --estado)
     if [ "${2:-}" = --seguir ]; then seguir_estado; fi
