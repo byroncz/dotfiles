@@ -3236,6 +3236,92 @@ FIN
   check "fix-publish.sh: respuesta a comentario humano, llama a pr comment" 1 \
     "$(grep -c '^pr comment' "$fp_dir/llamadas")"
 
+  # `review=` con un sha corto (prefijo de abc123): no cuela, aunque el id sea
+  # válido. La comparación es carácter a carácter, sin aceptar prefijos.
+  cat >"$fp_dir/respuesta-sha-corto.md" <<'FIN'
+<!-- devkit-fix sha=defaaa review=abc12 -->
+<!-- devkit-fixes -->
+H1 | atendido | defaaa
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-sha-corto.md" >"$fp_dir/salida-sha-corto.out" 2>"$fp_dir/salida-sha-corto.err"
+  check "fix-publish.sh: sha corto en review= aborta (rc)" 1 "$?"
+  check "fix-publish.sh: sha corto en review= no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # `review=` con el sha del head nuevo (el que declara `sha=`), no el del
+  # último informe: tampoco cuela.
+  cat >"$fp_dir/respuesta-head-nuevo.md" <<'FIN'
+<!-- devkit-fix sha=def456 review=def456 -->
+<!-- devkit-fixes -->
+H1 | atendido | def456
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-head-nuevo.md" >"$fp_dir/salida-head-nuevo.out" 2>"$fp_dir/salida-head-nuevo.err"
+  check "fix-publish.sh: review=head nuevo aborta (rc)" 1 "$?"
+  check "fix-publish.sh: review=head nuevo no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Sin bloque devkit-fixes: nada que publicar, aborta en vez de comentar un
+  # cuerpo vacío.
+  cat >"$fp_dir/respuesta-sin-bloque.md" <<'FIN'
+<!-- devkit-fix sha=defbbb review=abc123 -->
+Sin hallazgos que reportar.
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-sin-bloque.md" >"$fp_dir/salida-sin-bloque.out" 2>"$fp_dir/salida-sin-bloque.err"
+  check "fix-publish.sh: sin bloque devkit-fixes aborta (rc)" 1 "$?"
+  check "fix-publish.sh: sin bloque devkit-fixes no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Un informe CAMBIOS seguido de un OK sobre el mismo sha (respuesta sin
+  # push, DEVKIT-22): el último marcador es el OK, así que una respuesta a un
+  # comentario humano sobre ese mismo sha publica sin comparar contra el
+  # CAMBIOS viejo (antes era un falso positivo: DEVKIT-102, H3).
+  local fp_dir2
+  fp_dir2=$(mktemp -d "$tmp/fp2.XXXXXX")
+  cat >"$fp_dir2/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\n<!-- /devkit-findings -->"},{"submittedAt":"2026-01-01T00:05:00Z","body":"<!-- devkit-review sha=abc123 verdict=OK -->\\nRevisado tras una respuesta sin push."}]}'
+        ;;
+      comments) [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}' ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9306: probar fix-publish CAMBIOS+OK" || echo '{"title":"DEVKIT-9306: probar fix-publish CAMBIOS+OK"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir2/gh-doble"
+  local fp_env2=(DEVKIT_GH_BIN="$fp_dir2/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir2/run" DEVKIT_WATCH_LOG="$fp_dir2/run/watch.log")
+  mkdir -p "$fp_dir2/run"
+  cat >"$fp_dir2/respuesta-cambios-ok.md" <<'FIN'
+<!-- devkit-fix sha=def777 review=abc123 manual=1 -->
+<!-- devkit-fixes -->
+C1 | atendido | def777
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir2/llamadas"
+  env "${fp_env2[@]}" bash "$HERE/fix-publish.sh" 9306 "$fp_dir2/respuesta-cambios-ok.md" >"$fp_dir2/salida.out" 2>"$fp_dir2/salida.err"
+  check "fix-publish.sh: último informe OK tras un CAMBIOS en el mismo sha, publica (rc)" 0 "$?"
+  check "fix-publish.sh: último informe OK tras un CAMBIOS en el mismo sha, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir2/llamadas")"
+
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
   # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.
