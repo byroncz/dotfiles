@@ -6,13 +6,18 @@
 # hecho antes de llamar a este script; de acá para abajo es mecánico.
 #
 # Uso:
-#   review-publish.sh <número de PR> <archivo del informe>
+#   review-publish.sh [--conservar] <número de PR> <archivo del informe>
 #
 # <archivo> es el informe que escribió la skill en `.devkit/review-<N>.md`,
 # con el formato de la rúbrica: el marcador `<!-- devkit-review sha=<head>
 # verdict=<OK|CAMBIOS> -->` en la primera línea, la tabla de Criterios de
 # aceptación, la lectura adversarial, el Veredicto y, si hay hallazgos, el
 # bloque `<!-- devkit-findings -->`.
+#
+# Borra <archivo> al salir, publicación exitosa o no (DEVKIT-99): un residuo
+# de ese informe en el workspace deja el árbol sucio y bloquea la siguiente
+# card (`task-begin.sh` rechaza con árbol sucio antes de mirar Notion). Con
+# `--conservar` lo deja, para depurar un informe que falló al publicarse.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
@@ -22,13 +27,24 @@ WORKTREE_DIR="${DEVKIT_REVIEW_WORKTREE_DIR:-/tmp}"
 
 err() { printf 'review-publish: %s\n' "$*" >&2; }
 
+conservar=0
+if [ "${1:-}" = --conservar ]; then
+  conservar=1
+  shift
+fi
 numero="${1:-}"
 archivo="${2:-}"
 if [ -z "$numero" ] || [ -z "$archivo" ]; then
-  echo "uso: review-publish.sh <número de PR> <archivo del informe>" >&2
+  echo "uso: review-publish.sh [--conservar] <número de PR> <archivo del informe>" >&2
   exit 64
 fi
 [ -f "$archivo" ] || { err "no existe $archivo"; exit 1; }
+
+limpiar() {
+  [ "$conservar" = 1 ] && return
+  rm -f "$archivo"
+}
+trap limpiar EXIT
 
 marcador=$(grep -m1 -oE '<!-- devkit-review sha=[0-9a-f]+ verdict=(OK|CAMBIOS) -->' "$archivo")
 if [ -z "$marcador" ]; then

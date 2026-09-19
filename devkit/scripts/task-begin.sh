@@ -90,8 +90,12 @@ case "$estado" in
 esac
 
 # --- Workspace libre: solo hasta aquí importa, Lista o En progreso ----------
-if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
-  err "el workspace tiene cambios sin commit; no puedo iniciar $clave sin mezclar trabajo de otra card."
+# Lista los archivos sucios en el propio mensaje (DEVKIT-99): sin esto, el
+# humano tenía que entrar al contenedor y correr `git status` a mano para
+# saber qué borrar o commitear antes de relanzar.
+sucio=$(git -C "$WS" status --porcelain 2>/dev/null)
+if [ -n "$sucio" ]; then
+  err "el workspace tiene cambios sin commit; no puedo iniciar $clave sin mezclar trabajo de otra card: $(printf '%s' "$sucio" | tr '\n' ' ')"
   exit 1
 fi
 # Esta comprobación ya corrió antes de que el agente arrancara: si necesita
