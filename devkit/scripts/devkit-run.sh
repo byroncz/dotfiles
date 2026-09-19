@@ -3028,6 +3028,78 @@ FIN
   check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
     "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
 
+  # --- Ciclo limpio: review-publish.sh + task-submit.sh no dejan residuos
+  # (DEVKIT-99, H3) -----------------------------------------------------------
+  # Un informe de pr-review sin publicar (o publicado y sin borrar) y un
+  # `.devkit/pr-body.md` a medio consumir son justo los dos residuos que
+  # bloquean la siguiente card en `task-begin.sh`. Reproduce ambos scripts,
+  # de verdad y en el mismo workspace, para comprobar que el árbol queda
+  # limpio al final del ciclo.
+  local ciclo_dir
+  ciclo_dir=$(mktemp -d "$tmp/ciclo.XXXXXX")
+  git init -q --bare "$ciclo_dir/origin.git"
+  git init -q "$ciclo_dir/ws"
+  git -C "$ciclo_dir/ws" config user.email test@example.com
+  git -C "$ciclo_dir/ws" config user.name test
+  git -C "$ciclo_dir/ws" remote add origin "$ciclo_dir/origin.git"
+  git -C "$ciclo_dir/ws" commit -q --allow-empty -m init --no-gpg-sign
+  git -C "$ciclo_dir/ws" branch -q -m main
+  git -C "$ciclo_dir/ws" push -q -u origin main
+  git -C "$ciclo_dir/ws" switch -q -c feat/DEVKIT-9304-probar-ciclo-limpio
+  git -C "$ciclo_dir/ws" push -q -u origin feat/DEVKIT-9304-probar-ciclo-limpio
+  mkdir -p "$ciclo_dir/run" "$ciclo_dir/ws/.devkit"
+  cat >"$ciclo_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9304","url":"https://notion.so/card9304","estado":"En progreso","titulo":"Probar ciclo limpio"}' ;;
+  set) shift; printf '%s\n' "$*" >>"$FAKE_DIR/set-llamadas" ;;
+  comentar) shift; printf '%s\n' "$*" >>"$FAKE_DIR/comentar-llamadas" ;;
+esac
+FIN
+  chmod +x "$ciclo_dir/notion-doble"
+  cat >"$ciclo_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") exit 1 ;;
+  "pr create")
+    cat >/dev/null
+    echo "https://github.com/o/r/pull/9304"
+    exit 0 ;;
+  "pr edit") cat >/dev/null; exit 0 ;;
+  "pr merge") exit 0 ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$ciclo_dir/gh-doble"
+  cat >"$ciclo_dir/ws/.devkit/review-9304.md" <<'FIN'
+<!-- devkit-review sha=abc999 verdict=CAMBIOS -->
+Informe de prueba, sin hallazgos reales.
+FIN
+  env DEVKIT_WS="$ciclo_dir/ws" DEVKIT_GH_BIN="$ciclo_dir/gh-doble" \
+    DEVKIT_REVIEW_WORKTREE_DIR="$ciclo_dir/worktrees" \
+    bash "$HERE/review-publish.sh" 9304 "$ciclo_dir/ws/.devkit/review-9304.md" >/dev/null 2>&1
+  check "ciclo limpio: review-publish.sh borra el informe" 1 \
+    "$([ -e "$ciclo_dir/ws/.devkit/review-9304.md" ] && echo 0 || echo 1)"
+
+  cat >"$ciclo_dir/ws/.devkit/pr-body.md" <<'FIN'
+## Qué cambia
+Probar que el ciclo no deja residuos.
+
+## Cómo probarlo
+N/A
+
+## Cambios requeridos
+Ninguno.
+FIN
+  echo "cambio de prueba" >"$ciclo_dir/ws/archivo.txt"
+  env FAKE_DIR="$ciclo_dir" DEVKIT_WS="$ciclo_dir/ws" DEVKIT_RUN_DIR="$ciclo_dir/run" \
+    DEVKIT_NOTION_BIN="$ciclo_dir/notion-doble" DEVKIT_GH_BIN="$ciclo_dir/gh-doble" \
+    bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9304): probar ciclo limpio" >/dev/null 2>&1
+  check "ciclo limpio: task-submit.sh sale con 0" 0 "$?"
+  check "ciclo limpio: git status --porcelain queda vacío tras el ciclo completo" "" \
+    "$(git -C "$ciclo_dir/ws" status --porcelain)"
+
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
   # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.
