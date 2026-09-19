@@ -561,9 +561,12 @@ run_skill() {
   fi
   # DEVKIT-94, H1 del informe sobre el PR #68: antes esto solo quedaba como
   # aviso dentro de `summary` ("excede el presupuesto..."); pr-review,
-  # task-fix y task-document del ciclo automático corren por acá (`--sync`),
-  # así que el presupuesto de `presupuesto.<skill>` nunca bloqueaba nada aquí,
-  # solo en `--worker` (task-start manual, task-close, epic-plan).
+  # task-fix y task-document del ciclo automático corren por acá (`--sync`).
+  # DEVKIT-105: el presupuesto de `presupuesto.<skill>` es una meta de
+  # optimización, no un límite -exceder el presupuesto nunca bloquea la
+  # card, en ningún camino (`--sync` ni `--worker`)-, así que
+  # `--presupuesto-corte` solo avisa: ALARMA en watch.log y un comentario en
+  # la card.
   turnos_reales=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != - ] && [ -n "$turnos_reales" ] \
      && [ "$turnos_reales" -gt "$presupuesto" ] 2>/dev/null; then
@@ -841,9 +844,9 @@ caso_revisar() {  # caso_revisar <num> <Clave> <head> <ref> <informe>
 # Caso `fix-humano`: misma guarda que `caso_fix`/`caso_revisar` (DEVKIT-101
 # H1). Antes marcaba `fix-humano:$num:$ref` directo y salía mudo si ya estaba
 # lanzada: un task-fix que termina sin publicar nada para ese comentario
-# (error, cuota, corte de presupuesto) dejaba el comentario atascado para
-# siempre, porque $ref no cambia hasta el próximo comentario humano. Con
-# `avisar_si_lanzada`, al menos avisa una vez en vez de quedar en silencio.
+# (error, cuota) dejaba el comentario atascado para siempre, porque $ref no
+# cambia hasta el próximo comentario humano. Con `avisar_si_lanzada`, al
+# menos avisa una vez en vez de quedar en silencio.
 caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
   local num=$1 key=$2 ref=$3 extra=$4 lkey text
   lkey="fix-humano:$num:$ref"
@@ -957,7 +960,8 @@ check_merged_prs() {
 #   --run-skill <n> <p> [clave de launched] [Clave]
 #                           una ejecución de run_skill, esperando su
 #                           relanzamiento; <Clave> es la de Notion, para el
-#                           corte por presupuesto (DEVKIT-94)
+#                           aviso por presupuesto excedido (DEVKIT-94,
+#                           DEVKIT-105)
 #   --cycle-cost <n> <log>  el costo total del ciclo de un PR, desde un log dado
 #   --merged-once           una pasada del bucle de PRs mergeados
 #   --block-pr <num> <Clave> <url> <head> <ciclos>
