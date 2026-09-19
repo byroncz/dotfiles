@@ -94,7 +94,7 @@ implementacion.rondas = ["sonnet:high", "sonnet:high", "opus:high"]
 # su rol (`implementacion` o `revision`, arriba); `task-submit` y
 # `task-document` no tienen entrada propia a propósito, todavía con el valor
 # de `implementacion.max_turns`.
-presupuesto.task-start = 60
-presupuesto.pr-review = 30
-presupuesto.task-fix = 40
-presupuesto.epic-plan = 40
+presupuesto.task-start = 120
+presupuesto.pr-review = 40
+presupuesto.task-fix = 60
+presupuesto.epic-plan = 60
