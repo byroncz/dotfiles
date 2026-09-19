@@ -424,6 +424,51 @@ check_log "la línea de resumen trae el modelo del rol de revisión" \
 check_log "run_skill deja la línea lanzando con origen, modelo y esfuerzo" \
   'pr-review-9-abc1234 lanzando \(origen=bucle\) modelo=opus esfuerzo=high ronda=-: "/pr-review 9" log=[^ ]+/pr-review-9-abc1234\.log$'
 
+# --- Transcripción del claude -p real, junto al log (DEVKIT-102) -----------
+# `guardar_transcripcion` (dentro de `run_skill`) copia el primer turno de
+# usuario y el resultado del `.jsonl` de sesión real -el mismo que hubo que
+# rastrear a mano para diagnosticar el PR 68- a
+# `$RUN_DIR/<nombre>-transcript.jsonl`. `DEVKIT_CLAUDE_PROJECTS_DIR` apunta a
+# un directorio de prueba en vez de `~/.claude/projects`.
+trans_dir=$(mktemp -d -p "$TMP")
+trans_slug=$(printf '%s' "$trans_dir" | tr '/' '-')
+mkdir -p "$trans_dir/proyectos/$trans_slug" "$trans_dir/run"
+cat >"$trans_dir/proyectos/$trans_slug/11111111-1111-1111-1111-111111111111.jsonl" <<'FIN'
+{"type":"user","message":{"role":"user","content":"<command-message>task-fix</command-message>\n<command-args>DEVKIT-94\n67\thttps://github.com/o/r/pull/67\tDEVKIT-93 otro PR</command-args>"}}
+{"type":"assistant","message":{"role":"assistant","content":"trabajando"}}
+FIN
+TRANS_DOBLE="$TMP/claude-transcripcion"
+cat >"$TRANS_DOBLE" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":4,"session_id":"11111111-1111-1111-1111-111111111111"}\n'
+FIN
+chmod +x "$TRANS_DOBLE"
+DEVKIT_CLAUDE_BIN="$TRANS_DOBLE" DEVKIT_RUN_DIR="$trans_dir/run" DEVKIT_WS="$trans_dir" \
+  DEVKIT_CLAUDE_PROJECTS_DIR="$trans_dir/proyectos" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+  bash "$WATCH" --run-skill "task-fix-68-abc1234" "/task-fix DEVKIT-94" "fix:68:abc1234" >/dev/null 2>&1
+check_igual "transcripción: el archivo aparece junto al log" 1 \
+  "$([ -f "$trans_dir/run/task-fix-68-abc1234-transcript.jsonl" ] && echo 1 || echo 0)"
+check_igual "transcripción: trae el primer mensaje de usuario, argumento incluido" 1 \
+  "$(grep -c 'DEVKIT-94.*67.*pull/67.*DEVKIT-93' "$trans_dir/run/task-fix-68-abc1234-transcript.jsonl" 2>/dev/null)"
+check_igual "transcripción: trae el resultado (num_turns)" 1 \
+  "$(grep -c '"num_turns":4' "$trans_dir/run/task-fix-68-abc1234-transcript.jsonl" 2>/dev/null)"
+check_igual "transcripción: dos líneas, no la sesión entera" 2 \
+  "$(wc -l <"$trans_dir/run/task-fix-68-abc1234-transcript.jsonl" 2>/dev/null | tr -d ' ')"
+
+# Sin session_id en el resultado -un `claude -p` viejo, o uno que murió antes
+# de terminar la respuesta-: no hay nada que copiar, y no debe fallar por eso.
+TRANS_DOBLE_SIN_SESION="$TMP/claude-sin-sesion"
+cat >"$TRANS_DOBLE_SIN_SESION" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":4}\n'
+FIN
+chmod +x "$TRANS_DOBLE_SIN_SESION"
+DEVKIT_CLAUDE_BIN="$TRANS_DOBLE_SIN_SESION" DEVKIT_RUN_DIR="$trans_dir/run" DEVKIT_WS="$trans_dir" \
+  DEVKIT_CLAUDE_PROJECTS_DIR="$trans_dir/proyectos" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+  bash "$WATCH" --run-skill "task-fix-70-sinsesion" "/task-fix DEVKIT-70" "fix:70:sinsesion" >/dev/null 2>&1
+check_igual "transcripción: sin session_id no revienta ni deja archivo" 0 \
+  "$([ -e "$trans_dir/run/task-fix-70-sinsesion-transcript.jsonl" ] && echo 1 || echo 0)"
+
 # --- review-prep.sh sin nada que revisar (DEVKIT-93) -------------------------
 # `run_claude` corta con rc=3 antes de llamar a `claude -p`; `run_skill` debe
 # leerlo como un cierre normal (sin ALARMA, sin reintento de cuota) y no como
