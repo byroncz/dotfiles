@@ -922,10 +922,12 @@ close_pr() {  # close_pr <num> <Clave> <url> <mergedAt>
 check_merged_prs() {
   local code
   code=$(project_code)
-  gh pr list --state merged --limit 30 --json number,title,url,mergedAt \
-    --jq '[.[] | select(.mergedAt > (now - 172800 | todate))] | sort_by(.mergedAt)
-           | .[] | "\(.number)\t\(.url)\t\(.mergedAt)\t\(.title)"' 2>/dev/null \
-  | while IFS=$'\t' read -r num url merged_at title; do
+  # `-u 3`/`3< <(...)` (DEVKIT-102, H4), no `gh pr list | while ...`: con la
+  # tubería, el `while` toma la entrada estándar del bucle entero, así que
+  # cualquier hijo lanzado dentro del cuerpo (task-close.sh, y lo que este
+  # lance a su vez) la hereda y se come la siguiente fila en vez de leer la
+  # suya. Un descriptor propio dejo la entrada estándar real intacta.
+  while IFS=$'\t' read -r -u 3 num url merged_at title; do
       key=$(key_of "$title" "$code") || continue
       launched "cerrar:$num" && continue
       IFS=$'\t' read -r action ref < <(
@@ -944,7 +946,9 @@ check_merged_prs() {
       # `devkit-run task-close <Clave>`; task-close.sh es idempotente.
       mark "cerrar:$num"
       close_pr "$num" "$key" "$url" "$merged_at"
-    done
+  done 3< <(gh pr list --state merged --limit 30 --json number,title,url,mergedAt \
+    --jq '[.[] | select(.mergedAt > (now - 172800 | todate))] | sort_by(.mergedAt)
+           | .[] | "\(.number)\t\(.url)\t\(.mergedAt)\t\(.title)"' 2>/dev/null)
 }
 
 # Hooks de prueba, sin GitHub y sin gastar cuota:
@@ -1063,9 +1067,13 @@ while true; do
     check_orphan_branch
 
     # --- PRs abiertos: revisar, corregir, documentar o bloquear ------------
-    gh pr list --state open --limit 30 --json number,title,url \
-      --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null \
-    | while IFS=$'\t' read -r num url title; do
+    # `-u 3`/`3< <(...)` (DEVKIT-102, H4): mismo motivo que check_merged_prs.
+    # Este cuerpo lanza `run_skill` (`"$DEVKIT_RUN" --sync ... &`), que a su
+    # vez corre `claude -p` -el caso real del PR 68, donde ese `claude -p` se
+    # comió la fila de otro PR de esta misma tubería- y también task-next.sh,
+    # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
+    # la tubería como entrada estándar.
+    while IFS=$'\t' read -r -u 3 num url title; do
         key=$(key_of "$title" "$CODE") || continue
         [ -n "$BOT" ] || { log "PR #$num: sin login de la cuenta máquina; se omite"; continue; }
         # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92):
@@ -1120,7 +1128,8 @@ while true; do
           bloqueado) ;;
           *) log "PR #$num: decisión desconocida '$action'" ;;
         esac
-      done
+    done 3< <(gh pr list --state open --limit 30 --json number,title,url \
+      --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
   fi
   sleep_or_poke "$INTERVAL"
 done
