@@ -2097,8 +2097,17 @@ cuadro_sin_parpadeo() {  # cuadro_sin_parpadeo <cuadro>
   printf '\033[H%s\033[K\n\033[J' "${1//$'\n'/$'\033[K\n'}"
 }
 
+# Si un bucle sin nadie mirando puede seguir refrescando la cuota (H3,
+# pr-review DEVKIT-78): pasado CUOTA_DESATENDIDO desde que arrancó <desde>, ya
+# no. Compartida por seguir_estado y seguir_lanzamiento -- antes solo la
+# aplicaba el primero, y el segundo (`--seguir <skill> <Clave>`) podía correr
+# igual de desatendido durante un task-fix o pr-review largo.
+calcular_permitir_refresco_cuota() {  # calcular_permitir_refresco_cuota <desde> <ahora>
+  [ "$(( $2 - $1 ))" -lt "$CUOTA_DESATENDIDO" ] && printf 1 || printf 0
+}
+
 seguir_estado() {
-  local giros='|/-\' i=0 c frame ahora color_tty='' desde permitir_refresco_cuota
+  local giros='|/-\' i=0 c frame ahora color_tty='' desde
   desde=${DEVKIT_AHORA:-$(date +%s)}
   if [ -t 1 ]; then
     tput civis 2>/dev/null
@@ -2123,13 +2132,7 @@ seguir_estado() {
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
     frame+=$'\n\n'
-    # Pasado CUOTA_DESATENDIDO desde que arrancó este bucle, deja de refrescar
-    # la cuota sola (DEVKIT-78): sigue mostrando la última lectura buena, pero
-    # una `--estado --seguir` olvidada en una terminal no sigue golpeando el
-    # endpoint de cuota cada CUOTA_TTL para siempre.
-    permitir_refresco_cuota=1
-    [ "$((ahora - desde))" -lt "$CUOTA_DESATENDIDO" ] || permitir_refresco_cuota=0
-    frame+=$(mostrar_estado "$permitir_refresco_cuota")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -2152,8 +2155,13 @@ seguir_estado() {
 # fallando pasado `MARGEN_LANZAMIENTO_MUERTO`, el monitor no espera para
 # siempre -antes se quedaba corriendo hasta que algo externo lo cortara-, lo
 # dice y sale con un código distinto de cero.
+# Pasado CUOTA_DESATENDIDO desde que arrancó (H3, pr-review DEVKIT-78), deja
+# de refrescar la cuota sola -mismo tope que seguir_estado, vía
+# calcular_permitir_refresco_cuota-: un task-fix o pr-review largo también
+# corre desatendido.
 seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
-  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0
+  local id=$1 pid=$2 giros='|/-\' i=0 c frame ahora color_tty='' resumen_final muerto_desde=0 desde
+  desde=${DEVKIT_AHORA:-$(date +%s)}
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
@@ -2172,7 +2180,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado)
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")")
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
     else
@@ -5540,6 +5548,14 @@ FIN
   sleep 0.5
   check "permitir_refresco_cuota=0: no dispara un refresco de fondo con la caché vencida" ok \
     "$(cut -f2 "$cuota_desatendida/cuota.cache" 2>/dev/null)"
+
+  # H3 de pr-review DEVKIT-78: calcular_permitir_refresco_cuota es la función
+  # compartida por seguir_estado y seguir_lanzamiento -- antes solo el primero
+  # cortaba el refresco pasado CUOTA_DESATENDIDO.
+  check "calcular_permitir_refresco_cuota: recién arrancado, permite refrescar" 1 \
+    "$(CUOTA_DESATENDIDO=900 calcular_permitir_refresco_cuota 1000 1000)"
+  check "calcular_permitir_refresco_cuota: pasado CUOTA_DESATENDIDO, ya no permite" 0 \
+    "$(CUOTA_DESATENDIDO=900 calcular_permitir_refresco_cuota 1000 2000)"
 
   # H3 de pr-review: la subshell de refrescar_cuota_bg no debe heredar los
   # descriptores del llamador. Antes de cerrarlos, leer --estado por pipe (o
