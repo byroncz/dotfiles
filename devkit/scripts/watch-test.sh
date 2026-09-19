@@ -1276,4 +1276,151 @@ check_igual "limpieza: árbol limpio borra la rama local" "" \
 check_igual "limpieza: árbol limpio no deja línea de no-limpia" 0 \
   "$(limp_sin_linea "$R3/watch.log")"
 
+# --- Reacción inmediata (DEVKIT-108) ----------------------------------------
+# `sleep_or_poke` corta la espera apenas aparece /run/devkit/poke, sin
+# esperar el resto de los segundos pedidos: es lo que hace que tocar el
+# archivo desde review-publish.sh/task-submit.sh/devkit-run.sh --worker
+# despierte al bucle en vez de esperar el resto del intervalo.
+POKE_DIR=$(mktemp -d -p "$TMP")
+( sleep 0.3; touch "$POKE_DIR/poke" ) &
+POKE_MS=$(DEVKIT_RUN_DIR="$POKE_DIR" bash "$WATCH" --sleep-or-poke 20)
+if [ "$POKE_MS" -lt 15000 ]; then
+  printf 'ok   %-58s %sms\n' "poke: sleep_or_poke corta la espera antes de los 20s" "$POKE_MS"
+else
+  printf 'FAIL %-58s tardó %sms, no cortó\n' "poke: sleep_or_poke corta la espera antes de los 20s" "$POKE_MS"
+  fail=1
+fi
+check_igual "poke: sleep_or_poke borra el archivo al despertar" 0 \
+  "$([ -e "$POKE_DIR/poke" ] && echo 1 || echo 0)"
+
+# `procesar_pr` encadena decide+actúa sin dormir hasta un estado terminal: un
+# PR nuevo pasa por pr-review (CAMBIOS) -> task-fix -> pr-review (OK) ->
+# task-document.sh + chain_next -> nada, todo en una sola llamada. `gh` y
+# `devkit-run.sh` son dobles con estado propio en $PP_STATE: el segundo
+# simula lo que review-publish.sh/fix-publish.sh publicarían de verdad
+# (nuevo devkit-review o devkit-fix) para que la siguiente vuelta de `decide`
+# dentro de la misma llamada vea el cambio, igual que pasaría contra GitHub.
+PP=$(mktemp -d -p "$TMP")
+PP_STATE="$PP/state"
+mkdir -p "$PP_STATE" "$PP/bin" "$PP/run"
+echo a1b2c3d >"$PP_STATE/head"
+: >"$PP_STATE/reviews"
+: >"$PP_STATE/comments"
+: >"$PP_STATE/gh-calls"
+
+cat >"$PP/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+d="$PP_STATE"
+printf '%s %s\n' "$1" "$2" >>"$d/gh-calls"
+case "$1 $2" in
+  "pr view")
+    head=$(cat "$d/head")
+    revs=$(paste -sd',' "$d/reviews" 2>/dev/null)
+    coms=$(paste -sd',' "$d/comments" 2>/dev/null)
+    printf '{"headRefOid":"%s","reviews":[%s],"comments":[%s],"body":"## Qué cambia\\nalgo"}' \
+      "$head" "$revs" "$coms"
+    ;;
+  "pr comment") cat >/dev/null ;;
+  *) exit 1 ;;
+esac
+FIN
+chmod +x "$PP/bin/gh"
+
+cat >"$PP/devkit-run" <<'FIN'
+#!/usr/bin/env bash
+d="$PP_STATE"
+case "$1" in
+  --rol)
+    echo "sonnet medium - 1"
+    ;;
+  --sync)
+    head=$(cat "$d/head")
+    case "$2" in
+      "/pr-review "*)
+        n=$(( $(cat "$d/pr-calls" 2>/dev/null || echo 0) + 1 ))
+        echo "$n" >"$d/pr-calls"
+        if [ "$n" -eq 1 ]; then
+          printf '{"author":{"login":"humano"},"state":"COMMENTED","submittedAt":"T01","body":"<!-- devkit-review sha=%s verdict=CAMBIOS -->"}\n' \
+            "$head" >>"$d/reviews"
+        else
+          printf '{"author":{"login":"humano"},"state":"COMMENTED","submittedAt":"T03","body":"<!-- devkit-review sha=%s verdict=OK -->"}\n' \
+            "$head" >>"$d/reviews"
+        fi
+        ;;
+      "/task-fix "*)
+        printf '{"author":{"login":"bot"},"createdAt":"T02","body":"<!-- devkit-fix sha=%s review=%s -->"}\n' \
+          "$head" "$head" >>"$d/comments"
+        ;;
+    esac
+    printf '{"result":"listo","total_cost_usd":0.01,"num_turns":3}\n'
+    ;;
+  --resumen) echo "resumen" ;;
+  --guardar-transcripcion) exit 0 ;;
+  --pregunta-abierta) exit 1 ;;
+  --presupuesto-corte) exit 0 ;;
+  --siguiente-modelo) echo fable ;;
+  *) exit 0 ;;
+esac
+FIN
+chmod +x "$PP/devkit-run"
+
+cat >"$PP/task-document" <<'FIN'
+#!/usr/bin/env bash
+d="$PP_STATE"
+head=$(cat "$d/head")
+printf '%s %s\n' "$1" "$2" >>"$d/task-document-llamadas"
+printf '{"author":{"login":"bot"},"createdAt":"T04","body":"<!-- devkit-doc sha=%s -->"}\n' \
+  "$head" >>"$d/comments"
+echo "task-document: $1 documentado: https://notion.so/doc-x"
+FIN
+chmod +x "$PP/task-document"
+
+cat >"$PP/task-next" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$PP_STATE/task-next-llamadas"
+echo "task-next: nada que hacer"
+FIN
+chmod +x "$PP/task-next"
+
+PP_INICIO=$(date +%s%N)
+PP_STATE="$PP_STATE" PATH="$PP/bin:$PATH" DEVKIT_RUN_BIN="$PP/devkit-run" \
+DEVKIT_TASK_DOCUMENT_BIN="$PP/task-document" DEVKIT_TASK_NEXT_BIN="$PP/task-next" \
+DEVKIT_RUN_DIR="$PP/run" DEVKIT_WS="$PP" \
+  bash "$WATCH" --procesar-pr 77 https://github.com/o/r/pull/77 "DEVKIT-9 algo" "" \
+  >"$PP/watch.log" 2>&1
+PP_FIN=$(date +%s%N)
+PP_MS=$(( (PP_FIN - PP_INICIO) / 1000000 ))
+
+if [ "$PP_MS" -lt 10000 ]; then
+  printf 'ok   %-58s %sms\n' "procesar_pr: cadena completa en menos de 10s" "$PP_MS"
+else
+  printf 'FAIL %-58s tardó %sms\n' "procesar_pr: cadena completa en menos de 10s" "$PP_MS"
+  fail=1
+fi
+OUT="$PP/watch.log"
+check_log "procesar_pr: sin informe, lanza pr-review" \
+  'PR #77 \(DEVKIT-9\) head a1b2c3d sin informe: lanzando pr-review'
+check_log "procesar_pr: CAMBIOS lanza task-fix en el mismo tick" \
+  'PR #77 \(DEVKIT-9\) CAMBIOS en a1b2c3d: lanzando task-fix'
+check_log "procesar_pr: respuesta sin push lanza pr-review otra vez, en el mismo tick" \
+  'PR #77 \(DEVKIT-9\) head a1b2c3d con respuesta sin push: lanzando pr-review otra vez'
+check_log "procesar_pr: OK lanza task-document.sh en el mismo tick" \
+  'PR #77 \(DEVKIT-9\) OK en a1b2c3d: task-document\.sh'
+check_log "procesar_pr: OK encadena la siguiente hija (chain_next) en el mismo tick" \
+  'task-next-77 terminado: bash, DEVKIT-9 en Lista para merge'
+check_igual "procesar_pr: pr-review corrió dos veces (CAMBIOS y OK)" 2 \
+  "$(cat "$PP_STATE/pr-calls" 2>/dev/null || echo 0)"
+check_igual "procesar_pr: task-fix corrió una sola vez" 1 \
+  "$(grep -c 'devkit-fix' "$PP_STATE/comments" 2>/dev/null || echo 0)"
+check_igual "procesar_pr: task-document.sh corrió una sola vez" 1 \
+  "$(wc -l <"$PP_STATE/task-document-llamadas" 2>/dev/null | tr -d ' ')"
+check_igual "procesar_pr: chain_next corrió una sola vez" 1 \
+  "$(wc -l <"$PP_STATE/task-next-llamadas" 2>/dev/null | tr -d ' ')"
+# Cinco vueltas de la cadena (revisar, fix, revisar, documentar, nada), más
+# la consulta que hace `atender_fix` para saber si task-fix respondió vacío
+# (DEVKIT-57): seis en total, y ninguna más -la cadena para sola al llegar a
+# `nada`, sin seguir consultando GitHub.
+check_igual "procesar_pr: se detiene tras llegar a nada, sin de más" 6 \
+  "$(grep -c '^pr view$' "$PP_STATE/gh-calls" 2>/dev/null || echo 0)"
+
 exit $fail

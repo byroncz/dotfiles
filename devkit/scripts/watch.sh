@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bucle del contenedor. Cada 5 min mira los PRs cuyo título empieza por una
+# Bucle del contenedor. Cada 2 min mira los PRs cuyo título empieza por una
 # Clave del proyecto (CODIGO-n) y lanza la skill que toca, en modo headless:
 #
 #   PR abierto, head sin marcador devkit-review            -> pr-review
@@ -22,7 +22,20 @@
 # mergeados los atiende un segundo bucle, cada DEVKIT_WATCH_MERGED_INTERVAL
 # segundos (30 por defecto), para que una card quede cerrada y la siguiente
 # hija lanzada en menos de un minuto desde el merge, en vez de esperar el
-# intervalo de 5 min y la skill que esté corriendo.
+# intervalo del bucle principal y la skill que esté corriendo.
+#
+# Decisión inmediata (DEVKIT-108): `procesar_pr` no lanza una sola skill por
+# vuelta, encadena. Apenas `run_skill` termina una skill lanzada por el
+# bucle sobre un PR (pr-review, task-fix, el task-document agente), vuelve a
+# consultar `decide` sobre ese mismo PR ahí mismo, sin dormir: un CAMBIOS
+# lanza task-fix, una respuesta sin push lanza pr-review otra vez, un OK
+# dispara task-document.sh y chain_next, todo en la misma pasada. La cadena
+# solo para cuando `decide` repite la misma tupla que la vuelta anterior (ya
+# no hay nada nuevo que lanzar, `launched` lo confirma) o llega a un estado
+# terminal (nada, bloqueado). Antes, cada transición del ciclo esperaba el
+# resto del intervalo completo aunque la skill hubiera terminado en
+# segundos (evidencia del PR 75/DEVKIT-78: informe CAMBIOS a las 11:40:05,
+# task-fix lanzado a las 11:45:14, con `DEVKIT_WATCH_INTERVAL` en 300).
 #
 # El estado del ciclo vive en GitHub, en los marcadores de reviews y
 # comentarios del PR (<!-- devkit-review -->, <!-- devkit-fix -->,
@@ -36,11 +49,16 @@
 # lo anota, espera a que la ventana se reinicie y relanza la misma skill con el
 # mismo prompt, en segundo plano. Ver "Cuota agotada" más abajo.
 #
-# /run/devkit/poke: `task-submit` y `task-fix` lo tocan (`touch`) como último
-# paso, para no dejar el ciclo revisar → corregir → revisar esperando el
-# intervalo completo sin que nadie trabaje. El bucle duerme en tramos de 5 s y
-# sale antes si el archivo aparece; al despertar lo borra y sigue con la
-# consulta a GitHub. Quien lo toca no decide nada, solo adelanta el reloj.
+# /run/devkit/poke: `task-submit.sh`, `review-publish.sh` y `devkit-run.sh
+# --worker` lo tocan (`touch`) como último paso de cualquier lanzamiento
+# humano (task-fix ya lo hacía a mano, en el paso final de su SKILL.md). Con
+# la decisión inmediata de arriba, un pr-review o task-fix que lanza el
+# propio bucle (`--sync`) ya no necesita poke: `procesar_pr` reacciona sin
+# dormir. Poke sigue haciendo falta para lo que el bucle no ve venir: un
+# `pr-review`/`task-fix` que corre el humano a mano con `devkit-run`, fuera
+# del ciclo automático. El bucle duerme en tramos de 5 s y sale antes si el
+# archivo aparece; al despertar lo borra y sigue con la consulta a GitHub.
+# Quien lo toca no decide nada, solo adelanta el reloj.
 #
 # Uso de prueba: `bash watch.sh --decide < pr.json` imprime la decisión para
 # el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
@@ -78,7 +96,14 @@ WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 # devkit-run.sh no se importa de este archivo: repite la misma variable y las
 # mismas funciones (mismo patrón que INTERVALO_BUCLE en ese script).
 COSTOS_LOG_FILE="${DEVKIT_COSTOS_LOG:-$WS/.devkit/costos.log}"
-INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
+# 120 s por defecto (DEVKIT-108, bajado de 300): con la decisión inmediata de
+# `procesar_pr`, este intervalo ya no gobierna las transiciones internas del
+# ciclo (revisar -> fix -> revisar -> documentar), solo cuánto tarda en
+# notarse algo que llega de fuera -un comentario humano en el PR- cuando
+# nadie tocó /run/devkit/poke. Costo: una `gh pr list` más una `gh pr view`
+# por PR abierto cada 2 min, muy por debajo del límite de 5000 peticiones por
+# hora del token (con 30 PRs abiertos, 31 llamadas cada 120 s son ~930/h).
+INTERVAL="${DEVKIT_WATCH_INTERVAL:-120}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
 # `devkit-run.sh` es el único punto de lanzamiento (DEVKIT-45): resuelve
 # modelo y esfuerzo por rol desde `devkit/agents/roles.toml` y corre
@@ -904,6 +929,85 @@ documentar_pr() {  # documentar_pr <num> <Clave> <head> <cuerpo del PR>
   [ "$rc" -eq 0 ] || log "ALARMA: $name terminó con error (rc=$rc); ver $RUN_DIR/$name.log"
 }
 
+# Reacción inmediata (DEVKIT-108): decide y actúa sobre un PR, y en cuanto
+# termina vuelve a decidir sobre el mismo PR ahí mismo, sin esperar al
+# siguiente tick de sleep_or_poke. `caso_revisar`/`caso_fix`/`caso_fix_humano`
+# corren `run_skill` de forma síncrona (esperan a que el `claude -p` termine),
+# así que apenas vuelven, el estado en GitHub ya cambió (nuevo informe,
+# nuevo devkit-fix) y una nueva vuelta de `decide` lo ve. La cadena para
+# sola en un estado terminal (nada, bloqueado, una acción sin reconocer) o
+# cuando `decide` repite la misma tupla (acción, head, ref, informe) que la
+# vuelta anterior: eso significa que `launched` ya la tenía marcada -el aviso
+# de `avisar_si_lanzada` ya lo dijo una vez- y no hay nada nuevo que lanzar.
+# `MAX_CHAIN_ITER` es solo una cota de seguridad, no la guarda real: esa
+# sigue siendo `launched` y la guarda de tres ciclos, ya dentro de `decide` y
+# de cada `caso_*`.
+MAX_CHAIN_ITER=10
+
+procesar_pr() {  # procesar_pr <num> <url> <title>
+  local num=$1 url=$2 title=$3 key pr_full action head ref extra informe short cur prev="" intentos=0
+  key=$(key_of "$title" "$CODE") || return 0
+  if [ -z "$BOT" ]; then
+    log "PR #$num: sin login de la cuenta máquina; se omite"
+    return 0
+  fi
+  while [ "$intentos" -lt "$MAX_CHAIN_ITER" ]; do
+    intentos=$((intentos + 1))
+    # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92): es
+    # lo único que necesita el caso `documentar` para saber si el PR trae la
+    # marca "Tipo: decisión"; decide() la ignora, sin cambios.
+    pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body 2>/dev/null)
+    IFS=$'\t' read -r action head ref extra informe < <(printf '%s' "$pr_full" | decide "$BOT")
+    [ -n "${action:-}" ] || return 0
+    short=${head:0:7}
+    cur="$action|$head|$ref|$informe"
+    case "$action" in
+      revisar)
+        # La clave incluye $ref y $informe (DEVKIT-101): ver el comentario
+        # junto a caso_revisar.
+        caso_revisar "$num" "$key" "$head" "$ref" "$informe"
+        ;;
+      fix)
+        caso_fix "$num" "$key" "$url" "$head" "$ref" "$informe"
+        ;;
+      fix-humano)
+        caso_fix_humano "$num" "$key" "$ref" "$extra"
+        ;;
+      documentar)
+        if ! launched "documentar:$num:$head"; then
+          mark "documentar:$num:$head"
+          documentar_pr "$num" "$key" "$head" "$(jq -r '.body // ""' <<<"$pr_full")"
+        fi
+        # Después de documentar: la hija nueva hace `git switch` y espera el
+        # candado, así que no le quita el turno a la entrada.
+        if ! launched "encadenar:$num:$head"; then
+          mark "encadenar:$num:$head"
+          chain_next "$num" "$key"
+        fi
+        ;;
+      nada)
+        # OK ya documentado (por ejemplo, en una vida anterior del
+        # contenedor): el encadenamiento se intenta igual una vez.
+        if [ "$ref" = OK ] && ! launched "encadenar:$num:$head"; then
+          mark "encadenar:$num:$head"
+          chain_next "$num" "$key"
+        fi
+        return 0
+        ;;
+      bloquear)
+        launched "bloquear:$num:$head" && return 0
+        mark "bloquear:$num:$head"
+        block_pr "$num" "$key" "$url" "$head" "$ref"
+        return 0
+        ;;
+      bloqueado) return 0 ;;
+      *) log "PR #$num: decisión desconocida '$action'"; return 0 ;;
+    esac
+    [ "$cur" != "$prev" ] || return 0
+    prev="$cur"
+  done
+}
+
 # Cierre de un PR mergeado, en bash (DEVKIT-55). La línea de resumen dice
 # cuántos segundos pasaron desde el merge hasta que la card quedó cerrada:
 # es la medida del criterio "menos de un minuto".
@@ -957,6 +1061,8 @@ check_merged_prs() {
 # Hooks de prueba, sin GitHub y sin gastar cuota:
 #   --quota-hit             rc 0 si el texto por stdin es un aviso de límite
 #   --quota-reset           imprime el epoch de reinicio que lee de ese texto
+#   --sleep-or-poke <s>     milisegundos que duró sleep_or_poke <s>; prueba
+#                           que tocar /run/devkit/poke la corta antes
 #   --run-skill <n> <p> [clave de launched] [Clave]
 #                           una ejecución de run_skill, esperando su
 #                           relanzamiento; <Clave> es la de Notion, para el
@@ -979,11 +1085,18 @@ check_merged_prs() {
 #                           la guarda de `launched` con el informe incluido
 #                           (DEVKIT-101): si la clave ya está lanzada, avisa
 #                           una sola vez y sale; si no, marca y lanza
+#   --procesar-pr <num> <url> <título> [código]
+#                           la cadena de reacción inmediata completa
+#                           (DEVKIT-108): decide, actúa y vuelve a decidir
+#                           sobre el mismo PR hasta un estado terminal o sin
+#                           progreso; es lo que el bucle principal llama por
+#                           cada fila de `gh pr list`
 # Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los
 # siguientes, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
 # DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh; `--fix`, en
-# ambos; `--caso-fix`/`--caso-revisar`, en los mismos que `--fix`/`--run-skill`
-# y en DEVKIT_RUN_DIR para `launched`. Ver watch-test.sh.
+# ambos; `--caso-fix`/`--caso-revisar`/`--procesar-pr`, en los mismos que
+# `--fix`/`--run-skill` y en DEVKIT_RUN_DIR para `launched`. Ver
+# watch-test.sh.
 case "${1:-}" in
   --quota-hit)
     QHIT_TMP=$(mktemp) && cat >"$QHIT_TMP"
@@ -993,6 +1106,17 @@ case "${1:-}" in
     ;;
   --quota-reset)
     quota_reset_epoch
+    exit 0
+    ;;
+  --sleep-or-poke)
+    # --sleep-or-poke <segundos>: mide en milisegundos cuánto duró
+    # sleep_or_poke (DEVKIT-108); la usa watch-test.sh para probar que tocar
+    # /run/devkit/poke durante la espera la corta antes de los <segundos>
+    # pedidos.
+    ini=$(date +%s%N)
+    sleep_or_poke "${2:-5}"
+    fin=$(date +%s%N)
+    echo $(( (fin - ini) / 1000000 ))
     exit 0
     ;;
   --run-skill)
@@ -1048,6 +1172,12 @@ case "${1:-}" in
     caso_fix_humano "${2:-}" "${3:-}" "${4:-}" "${5:-}"
     exit 0
     ;;
+  --procesar-pr)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    CODE="${5:-}"
+    procesar_pr "${2:-}" "${3:-}" "${4:-}"
+    exit 0
+    ;;
 esac
 
 log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos; PRs mergeados cada ${MERGED_INTERVAL}s)"
@@ -1072,66 +1202,13 @@ while true; do
 
     # --- PRs abiertos: revisar, corregir, documentar o bloquear ------------
     # `-u 3`/`3< <(...)` (DEVKIT-102, H4): mismo motivo que check_merged_prs.
-    # Este cuerpo lanza `run_skill` (`"$DEVKIT_RUN" --sync ... &`), que a su
-    # vez corre `claude -p` -el caso real del PR 68, donde ese `claude -p` se
-    # comió la fila de otro PR de esta misma tubería- y también task-next.sh,
+    # `procesar_pr` corre `run_skill` de forma síncrona, que a su vez corre
+    # `claude -p` -el caso real del PR 68, donde ese `claude -p` se comió la
+    # fila de otro PR de esta misma tubería- y también task-next.sh,
     # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
     # la tubería como entrada estándar.
     while IFS=$'\t' read -r -u 3 num url title; do
-        key=$(key_of "$title" "$CODE") || continue
-        [ -n "$BOT" ] || { log "PR #$num: sin login de la cuenta máquina; se omite"; continue; }
-        # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92):
-        # es lo único que necesita el caso `documentar` para saber si el PR
-        # trae la marca "Tipo: decisión"; decide() la ignora, sin cambios.
-        pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body 2>/dev/null)
-        IFS=$'\t' read -r action head ref extra informe < <(printf '%s' "$pr_full" | decide "$BOT")
-        [ -n "${action:-}" ] || continue
-        short=${head:0:7}
-        case "$action" in
-          revisar)
-            # La clave incluye $ref y $informe (DEVKIT-101): cuando el head no
-            # cambia pero el corrector ya respondió sin empujar commits
-            # (DEVKIT-22), $ref es igual al head y $head:$ref difiere de la
-            # marca que dejó el primer "revisar" de ese mismo head (donde $ref
-            # era el sha anterior o "-"); $informe distingue, además, una
-            # ronda de otra cuando el head vuelve a repetirse sin cambiar
-            # ni $ref (dos CAMBIOS seguidos, ambos respondidos sin push).
-            caso_revisar "$num" "$key" "$head" "$ref" "$informe"
-            ;;
-          fix)
-            caso_fix "$num" "$key" "$url" "$head" "$ref" "$informe"
-            ;;
-          fix-humano)
-            caso_fix_humano "$num" "$key" "$ref" "$extra"
-            ;;
-          documentar)
-            if ! launched "documentar:$num:$head"; then
-              mark "documentar:$num:$head"
-              documentar_pr "$num" "$key" "$head" "$(jq -r '.body // ""' <<<"$pr_full")"
-            fi
-            # Después de documentar: la hija nueva hace `git switch` y
-            # espera el candado, así que no le quita el turno a la entrada.
-            if ! launched "encadenar:$num:$head"; then
-              mark "encadenar:$num:$head"
-              chain_next "$num" "$key"
-            fi
-            ;;
-          nada)
-            # OK ya documentado (por ejemplo, en una vida anterior del
-            # contenedor): el encadenamiento se intenta igual una vez.
-            if [ "$ref" = OK ] && ! launched "encadenar:$num:$head"; then
-              mark "encadenar:$num:$head"
-              chain_next "$num" "$key"
-            fi
-            ;;
-          bloquear)
-            launched "bloquear:$num:$head" && continue
-            mark "bloquear:$num:$head"
-            block_pr "$num" "$key" "$url" "$head" "$ref"
-            ;;
-          bloqueado) ;;
-          *) log "PR #$num: decisión desconocida '$action'" ;;
-        esac
+        procesar_pr "$num" "$url" "$title"
     done 3< <(gh pr list --state open --limit 30 --json number,title,url \
       --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
   fi

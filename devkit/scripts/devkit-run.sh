@@ -227,7 +227,7 @@ RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-9}"
 # GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
 # valor por defecto y misma variable que INTERVAL en watch.sh: los dos
 # scripts no se importan entre sí, así que el valor se repite a propósito.
-INTERVALO_BUCLE="${DEVKIT_WATCH_INTERVAL:-300}"
+INTERVALO_BUCLE="${DEVKIT_WATCH_INTERVAL:-120}"
 # Refresco de `--tablero --seguir` (DEVKIT-82): 30 s, no los 3 s de `--estado
 # --seguir`, para no gastar el límite de peticiones por minuto de la API de
 # Notion -cada vuelta hace al menos una consulta real, a diferencia de
@@ -3261,6 +3261,7 @@ FIN
 #!/usr/bin/env bash
 case "$1 $2" in
   "pr view") exit 1 ;;
+  "pr review") exit 0 ;;
   "pr create")
     cat >/dev/null
     echo "https://github.com/o/r/pull/9304"
@@ -3277,10 +3278,14 @@ FIN
 Informe de prueba, sin hallazgos reales.
 FIN
   env DEVKIT_WS="$ciclo_dir/ws" DEVKIT_GH_BIN="$ciclo_dir/gh-doble" \
-    DEVKIT_REVIEW_WORKTREE_DIR="$ciclo_dir/worktrees" \
+    DEVKIT_REVIEW_WORKTREE_DIR="$ciclo_dir/worktrees" DEVKIT_RUN_DIR="$ciclo_dir/run" \
     bash "$HERE/review-publish.sh" 9304 "$ciclo_dir/ws/.devkit/review-9304.md" >/dev/null 2>&1
   check "ciclo limpio: review-publish.sh borra el informe" 1 \
     "$([ -e "$ciclo_dir/ws/.devkit/review-9304.md" ] && echo 0 || echo 1)"
+  # DEVKIT-108: último paso, como en task-submit.sh, para que watch.sh no
+  # espere el resto del intervalo cuando un humano corre pr-review a mano.
+  check "ciclo limpio: review-publish.sh toca /run/devkit/poke" 1 \
+    "$([ -e "$ciclo_dir/run/poke" ] && echo 1 || echo 0)"
 
   cat >"$ciclo_dir/ws/.devkit/pr-body.md" <<'FIN'
 ## Qué cambia
@@ -5120,7 +5125,7 @@ FIN
     $'\033[31mbucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía\033[0m' \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$sin_tick_log" "$ahora" 1)"
   check "senal_bucle: SIN SEÑAL con un tick viejo, en rojo si se pide" \
-    $'\033[31mbucle: SIN SEÑAL hace 11m\033[0m' \
+    $'\033[31mbucle: SIN SEÑAL hace 5m\033[0m' \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" 1)"
   check "senal_bucle: vivo no se pinta aunque se pida color" "bucle: vivo, último tick hace 1m" \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_log" "$ahora" 1)"
@@ -6506,6 +6511,12 @@ $card_md"
       printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
         "$(date +%FT%T%:z)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
     fi
+    # Poke (DEVKIT-108): `--worker` es el camino de cualquier lanzamiento
+    # humano (task-start.sh, task-close.sh, epic-plan y un `devkit-run
+    # <skill> <Clave>` manual), aparte de `--sync`, que es solo del bucle. Sin
+    # esto, un pr-review o task-fix que corre el humano a mano dejaba a
+    # watch.sh esperando el resto de INTERVAL antes de notar que ya terminó.
+    touch "$RUN_DIR/poke" 2>/dev/null || true
     exit $rc
     ;;
   --otros-agentes)

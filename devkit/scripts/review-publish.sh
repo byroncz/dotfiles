@@ -18,9 +18,16 @@
 # de ese informe en el workspace deja el árbol sucio y bloquea la siguiente
 # card (`task-begin.sh` rechaza con árbol sucio antes de mirar Notion). Con
 # `--conservar` lo deja, para depurar un informe que falló al publicarse.
+#
+# Último paso, siempre: `touch /run/devkit/poke` (DEVKIT-108), para que
+# watch.sh no espere el resto del intervalo antes de decidir sobre este PR
+# otra vez (CAMBIOS -> task-fix, OK -> documentar). Con el bucle mismo
+# (`--sync`) esto ya no hace falta -reacciona sin poke-, pero un pr-review
+# que corre el humano a mano con `devkit-run` sí lo necesita.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
+RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 WORKTREE_DIR="${DEVKIT_REVIEW_WORKTREE_DIR:-/tmp}"
@@ -80,6 +87,7 @@ git -C "$WS" worktree remove --force "$WORKTREE_DIR/devkit-review-$numero" 2>/de
 if [ "$verdict" != OK ]; then
   # CAMBIOS: la card se queda en Revisión automática, task-fix lee los
   # hallazgos directamente del PR. Nada más que hacer.
+  touch "$RUN_DIR/poke" 2>/dev/null || true
   echo "review-publish: PR $numero, veredicto CAMBIOS, informe publicado"
   exit 0
 fi
@@ -157,4 +165,5 @@ hallazgos_baja=$(sed -n '/<!-- devkit-findings -->/,/<!-- \/devkit-findings -->/
 } | "$GH" pr comment --body-file - "$numero" >/dev/null \
   || err "no pude comentar en el PR $numero para el humano"
 
+touch "$RUN_DIR/poke" 2>/dev/null || true
 echo "review-publish: PR $numero, veredicto OK, $clave en Lista para merge"
