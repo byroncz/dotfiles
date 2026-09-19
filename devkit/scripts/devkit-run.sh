@@ -1576,7 +1576,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       # Clave, el bloqueo es de esta fila.
       if [ -z "$bloqueo" ] && [ -n "${fin_ln:-}" ]; then
         bloqueo=$(printf '%s\n' "$resto" | tail -n "+$((fin_ln + 1))" | awk -v c="$clave" '
-          / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { marcado=0; next }
+          / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
           /: bloqueando con task-block\.sh$/ && index($0, "(" c ")") { marcado=1; next }
           marcado && index($0, " task-block.sh " c " Bloqueada") { print; exit }')
       fi
@@ -4177,6 +4177,32 @@ FIN
     "Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61" \
     "$(PS_BIN="$pslist_bloqueo_pr" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-95" {print $6}')"
+
+  # DEVKIT-97 H6: atender_fix reintenta task-fix sobre la misma Clave antes de
+  # que block_pr corte al tercer ciclo. Un lanzamiento nuevo de la Clave debe
+  # cortar la lectura del awk de arriba (como ya hace el primer awk), no solo
+  # resetear su marca: si sigue leyendo, el bloqueo del último task-fix
+  # también se le atribuye a la fila del primero.
+  local log_bloqueo_pr_doble pslist_bloqueo_pr_doble
+  log_bloqueo_pr_doble="$tmp/bloqueo-pr-doble-watch.log"
+  cat >"$log_bloqueo_pr_doble" <<FIN
+2026-09-16T11:20:00Z task-fix-61-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-95" log=$est/task-fix-61-abc.log
+2026-09-16T11:25:00Z task-fix-61-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:26:00Z task-fix-62-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=2: "/task-fix DEVKIT-95" log=$est/task-fix-62-abc.log
+2026-09-16T11:30:00Z task-fix-62-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:30:05Z PR #61 (DEVKIT-95) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:30:10Z task-block.sh DEVKIT-95 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61
+2026-09-16T11:30:11Z task-block-61 terminado: bash :: task-block: DEVKIT-95 Bloqueada desde Revisión automática
+FIN
+  pslist_bloqueo_pr_doble="$tmp/ps-bloqueo-pr-doble"
+  printf '#!/usr/bin/env bash\n' >"$pslist_bloqueo_pr_doble"
+  chmod +x "$pslist_bloqueo_pr_doble"
+  check "block_pr con reintento: el lanzamiento anterior de la Clave no hereda el bloqueo" "terminó" \
+    "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '1p' | cut -f5)"
+  check "block_pr con reintento: el último lanzamiento sí sale bloqueada" "bloqueada" \
+    "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '2p' | cut -f5)"
 
   # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
   # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
