@@ -205,13 +205,16 @@ ARRANQUE_ESPERA="${DEVKIT_ARRANQUE_ESPERA:-5}"
 ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
-# Líneas reservadas al calcular cuánta tabla entra en la terminal (DEVKIT-97):
-# el banner + `bucle: ...` + línea en blanco de `--seguir` (3), la fila de
-# títulos de la tabla (1) y la línea de consumo que sigue a la tabla (1), con
-# un margen de uno más. `--estado` sin `--seguir` no imprime las primeras
-# tres, pero reservarlas de más solo achica un poco la tabla, nunca la
-# desborda -al revés de no reservar nada.
-RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-6}"
+# Líneas reservadas al calcular cuánta tabla entra en la terminal (DEVKIT-97,
+# corregido en H4): el banner + `bucle: ...` + línea en blanco de `--seguir`
+# (3), la fila de títulos de la tabla (1), la línea "… N filas más antiguas"
+# cuando la tabla se recorta (1) y el bloque `Consumo` que sigue a la tabla
+# -en blanco, título, sesión y semana (`mostrar_consumo`): 4, no 1, con la
+# cuota oficial legible; menos si falla o no hay lectura todavía, pero contar
+# de menos desborda y de más solo achica un poco la tabla. `--estado` sin
+# `--seguir` no imprime las primeras tres, pero reservarlas de más solo achica
+# un poco la tabla, nunca la desborda -al revés de no reservar nada.
+RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-9}"
 # Intervalo del bucle de watch.sh, para juzgar si su último tick "consultando
 # GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
 # valor por defecto y misma variable que INTERVAL en watch.sh: los dos
@@ -4440,11 +4443,39 @@ FIN
   check "imprimir_tabla: se queda con las más recientes" 1 \
     "$(printf '%s\n' "$salida_40" | grep -c '^fila-40$')"
   check "imprimir_tabla: línea de resumen con cuántas quedaron afuera" 1 \
-    "$(printf '%s\n' "$salida_40" | grep -c '… 26 filas más antiguas (devkit-run --estado --todo para verlas)')"
+    "$(printf '%s\n' "$salida_40" | grep -c '… 29 filas más antiguas (devkit-run --estado --todo para verlas)')"
   local salida_40_todo
   salida_40_todo=$(LINES=20 DEVKIT_ESTADO_TODO=1 imprimir_tabla "${filas_40[@]}")
   check "imprimir_tabla: --todo desactiva el recorte, aparecen todas" "1|1|0" \
     "$(printf '%s\n' "$salida_40_todo" | grep -c '^fila-1$')|$(printf '%s\n' "$salida_40_todo" | grep -c '^fila-40$')|$(printf '%s\n' "$salida_40_todo" | grep -c 'filas más antiguas')"
+
+  # DEVKIT-97 H4: RESERVA_LINEAS_TABLA solo contaba 1 línea para el bloque
+  # Consumo, que en realidad imprime 4 (en blanco, título, sesión, semana), y
+  # ninguna para la línea de resumen "… N filas más antiguas": con LINES=20 el
+  # cuadro completo de `--seguir` (3 líneas de cabecera, afuera de
+  # mostrar_estado) desbordaba. Cuenta las líneas reales de `mostrar_estado`
+  # -títulos, filas, resumen y Consumo con cuota oficial (el caso de 4 líneas,
+  # el peor)- y verifica que, sumadas a esas 3 de cabecera, no pasan de LINES.
+  local muchas_log pslist_muchas cuota_h4 salida_muchas total_muchas i
+  muchas_log="$tmp/muchas-filas-watch.log"
+  : >"$muchas_log"
+  for i in $(seq 1 20); do
+    printf '2026-09-16T11:00:00Z task-fix-%s lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-1%02d" log=%s/task-fix-%s.log\n' \
+      "$i" "$i" "$est" "$i" >>"$muchas_log"
+    printf '2026-09-16T11:01:00Z task-fix-%s terminado: modelo=opus esfuerzo=high costo=1.0 turnos=1 :: OK\n' "$i" >>"$muchas_log"
+  done
+  pslist_muchas="$tmp/ps-muchas-filas"
+  printf '#!/usr/bin/env bash\n' >"$pslist_muchas"
+  chmod +x "$pslist_muchas"
+  cuota_h4="$tmp/cuota-h4"
+  mkdir -p "$cuota_h4"
+  printf '%s\tok\t42\tSep 17, 5:10pm (UTC)\t7\tSep 22, 11pm (UTC)\n' "$(date +%s)" >"$cuota_h4/cuota.cache"
+  salida_muchas=$(PS_BIN="$pslist_muchas" LOCK="$est/skill.lock" LINES=20 \
+    CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_h4/cuota.cache" CUOTA_LOCK="$cuota_h4/cuota.lock" \
+    WATCH_LOG="$muchas_log" DEVKIT_AHORA="$ahora" mostrar_estado)
+  total_muchas=$(printf '%s\n' "$salida_muchas" | wc -l | tr -d ' ')
+  check "H4: mostrar_estado con muchas filas y LINES=20 no desborda el cuadro de --seguir" 1 \
+    "$([ "$total_muchas" -le $((20 - 3)) ] && echo 1 || echo 0)"
 
   # DEVKIT-81: señal de vida del bucle en la cabecera de `--estado --seguir`.
   local pslist_bucle_vivo pslist_sin_bucle tick_log tick_viejo_log
