@@ -139,13 +139,21 @@ trabajo de `pr-review`.
    Publícala con
    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/fix-publish.sh" <N> .devkit/fix-<N>.md`
    (mismo patrón que `review-publish.sh`: arma el archivo con el número de PR
-   en el nombre y el script lo borra al terminar, publique o no). Compara
-   cada id contra los `H<n>` del informe que declaras atender en `review=` y
-   aborta antes de comentar en el PR si alguno no está -la guarda mecánica de
-   DEVKIT-102, para que una lectura equivocada de un paso anterior no cierre
-   un informe con hallazgos reales sin atender-, y deja el motivo en
-   watch.log y en la card. Si aborta, no insistas ni reescribas la respuesta
-   para forzarla: ya quedó el motivo; termina sin repetir el paso 9.
+   en el nombre y el script lo borra al terminar, publique o no). El script
+   toma el último marcador `devkit-review` del PR, no el que tu respuesta
+   declara en `review=`: si ese último informe es CAMBIOS y tu respuesta trae
+   algún id `H<n>`, o no trae ni `manual=1` ni responde a un comentario
+   humano posterior al último `devkit-fix`/`devkit-block` (o, sin ellos, al
+   último `devkit-review`), compara cada id contra los `H<n>` de ese informe
+   y aborta antes de comentar en el PR si alguno no está -la guarda mecánica
+   de DEVKIT-102, para que una lectura equivocada de un paso anterior no
+   cierre un informe con hallazgos reales sin atender-. Si el último informe
+   es OK, o tu respuesta solo trae `C<n>` y lleva `manual=1` o responde a ese
+   comentario humano, publica sin comparar (DEVKIT-102, H5: cubre el
+   `fix-humano` que lanza el bucle sobre un informe CAMBIOS vigente, sin
+   `manual=1`). Si aborta, deja el motivo en watch.log y en la card. Si
+   aborta, no insistas ni reescribas la respuesta para forzarla: ya quedó el
+   motivo; termina sin repetir el paso 9.
 9. `Estado` de la card = `Revisión automática`, venga de ahí o de
    `Lista para merge`. No comentes en la card: el ciclo vive en el PR.
 10. Limpia la copia de trabajo si la creaste (paso 4).

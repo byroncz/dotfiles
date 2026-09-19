@@ -3361,6 +3361,81 @@ FIN
   check "fix-publish.sh: último informe OK tras un CAMBIOS en el mismo sha, llama a pr comment" 1 \
     "$(grep -c '^pr comment' "$fp_dir2/llamadas")"
 
+  # `fix-humano` (watch.sh) lanza task-fix sin `manual=1` cuando el último
+  # informe sigue en CAMBIOS: una respuesta que solo trae `C<n>` no tiene
+  # `devkit-findings` que cumplir si responde a un comentario humano genuino
+  # posterior al corte (mismo criterio que `$human` en `decide`), aunque no
+  # lleve `manual=1` (DEVKIT-102, H5). Sin ese comentario -el caso del PR
+  # 68- sigue abortando.
+  local fp_dir3
+  fp_dir3=$(mktemp -d "$tmp/fp3.XXXXXX")
+  cat >"$fp_dir3/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "api user") [ "$con_jq" = 1 ] && echo "bot-ci" || echo '{"login":"bot-ci"}' ;;
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","state":"COMMENTED","author":{"login":"bot-ci"},"body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\n<!-- /devkit-findings -->"}]}'
+        ;;
+      comments)
+        if [ -e "$(dirname "$0")/con-humano" ]; then
+          if [ "$con_jq" = 1 ]; then
+            echo ""
+          else
+            printf '{"comments":[{"createdAt":"2026-01-01T01:00:00Z","author":{"login":"humano-x"},"body":"Por favor revisen esto de nuevo."}]}'
+          fi
+        else
+          [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}'
+        fi
+        ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9307: probar fix-publish comentario humano" || echo '{"title":"DEVKIT-9307: probar fix-publish comentario humano"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir3/gh-doble"
+  local fp_env3=(DEVKIT_GH_BIN="$fp_dir3/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir3/run" DEVKIT_WATCH_LOG="$fp_dir3/run/watch.log")
+  mkdir -p "$fp_dir3/run"
+
+  cat >"$fp_dir3/respuesta-humano-sin-manual.md" <<'FIN'
+<!-- devkit-fix sha=defccc review=abc123 -->
+<!-- devkit-fixes -->
+C1 | atendido | defccc
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir3/llamadas"
+  env "${fp_env3[@]}" bash "$HERE/fix-publish.sh" 9307 "$fp_dir3/respuesta-humano-sin-manual.md" \
+    >"$fp_dir3/salida-sin-humano.out" 2>"$fp_dir3/salida-sin-humano.err"
+  check "fix-publish.sh: C1 sin manual=1 y sin comentario humano, aborta (rc)" 1 "$?"
+  check "fix-publish.sh: C1 sin manual=1 y sin comentario humano, no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir3/llamadas")"
+
+  touch "$fp_dir3/con-humano"
+  cat >"$fp_dir3/respuesta-humano-sin-manual.md" <<'FIN'
+<!-- devkit-fix sha=defccc review=abc123 -->
+<!-- devkit-fixes -->
+C1 | atendido | defccc
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir3/llamadas"
+  env "${fp_env3[@]}" bash "$HERE/fix-publish.sh" 9307 "$fp_dir3/respuesta-humano-sin-manual.md" \
+    >"$fp_dir3/salida-con-humano.out" 2>"$fp_dir3/salida-con-humano.err"
+  check "fix-publish.sh: C1 sin manual=1 pero con comentario humano posterior, publica (rc)" 0 "$?"
+  check "fix-publish.sh: C1 sin manual=1 pero con comentario humano posterior, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir3/llamadas")"
+
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en
   # la salida. La ronda de task-fix es 1 más los comentarios devkit-fix del PR.

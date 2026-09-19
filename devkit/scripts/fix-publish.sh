@@ -10,13 +10,16 @@
 # un id: un `C<n>` inventado, por ejemplo, colado porque `claude -p` se comió
 # una fila ajena de una tubería (DEVKIT-102), aborta antes de publicar así
 # una lectura equivocada del modelo no puede cerrar un informe con hallazgos
-# reales sin atender. Si el último informe es OK, o si la respuesta lleva
-# `manual=1` y solo trae ids `C<n>` -un comentario humano, que no tiene
-# `devkit-findings` que cumplir (paso 3, tercera viñeta de
-# task-fix/SKILL.md)-, no hay nada que comparar y se publica igual: cubre el
-# caso de un informe CAMBIOS seguido de un OK sobre el mismo sha (respuesta
-# sin push, DEVKIT-22), que comparar contra el CAMBIOS viejo marcaba como
-# falso positivo.
+# reales sin atender. Si el último informe es OK, o si la respuesta solo trae
+# ids `C<n>` -un comentario humano, que no tiene `devkit-findings` que cumplir
+# (paso 3, primera viñeta de task-fix/SKILL.md)- y además lleva `manual=1` o
+# responde a un comentario humano genuino posterior al corte (mismo criterio
+# que `$human` en `decide` de watch.sh: login distinto de la cuenta máquina,
+# sin marcador `<!-- devkit-`, no vacío), no hay nada que comparar y se
+# publica igual: cubre el caso de un informe CAMBIOS seguido de un OK sobre
+# el mismo sha (respuesta sin push, DEVKIT-22) y el de `fix-humano` lanzado
+# por el bucle sobre un informe CAMBIOS vigente (DEVKIT-102, H5), que
+# comparar contra el CAMBIOS marcaba como falso positivo.
 #
 # Uso:
 #   fix-publish.sh [--conservar] <número de PR> <archivo de la respuesta>
@@ -112,7 +115,43 @@ while IFS= read -r id; do
   [[ "$id" =~ ^H[0-9]+$ ]] && solo_c=0
 done <<<"$ids_respuesta"
 
-if [ "$marcador_verdict" = "CAMBIOS" ] && { [ "$manual" != 1 ] || [ "$solo_c" != 1 ]; }; then
+# --- Comentario humano genuino posterior al corte, mismo criterio que
+# `$human` en `decide` de watch.sh (DEVKIT-102, H5): una respuesta que solo
+# trae `C<n>` y responde a ese comentario no tiene `devkit-findings` que
+# cumplir, aunque no lleve `manual=1` (la lanzó el bucle vía `fix-humano`).
+bot_login=$("$GH" api user --jq .login 2>/dev/null)
+comentarios_json=$("$GH" pr view "$numero" --json comments 2>/dev/null)
+[ -n "$comentarios_json" ] || comentarios_json='{"comments":[]}'
+HUMANO='
+def markers($re; $ts):
+  [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
+
+(.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
+   | sort_by(.at)) as $reviews
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
+| (([$fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | max)
+   // "") as $human_cutoff
+| ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
+       | {body, at: .submittedAt, login: .author.login}),
+     (.comments[] | {body, at: .createdAt, login: .author.login}) ]
+   | map(select(.login != $bot
+                and ((.body // "") | test("<!-- devkit-") | not)
+                and ((.body // "") | gsub("\\s"; "") != "")
+                and .at > $human_cutoff))
+   | length) as $n
+| if $n > 0 then "si" else "no" end
+'
+comentario_humano=$(jq -nr --argjson a "$pr_json" --argjson b "$comentarios_json" --arg bot "$bot_login" \
+  "\$a + \$b | $HUMANO")
+
+saltar_validacion=0
+if [ "$solo_c" = 1 ] && { [ "$manual" = 1 ] || [ "$comentario_humano" = si ]; }; then
+  saltar_validacion=1
+fi
+
+if [ "$marcador_verdict" = "CAMBIOS" ] && [ "$saltar_validacion" != 1 ]; then
   if [ "$review_sha" != "$marcador_sha" ]; then
     abortar "review=$review_sha no coincide con el sha del último informe del PR ($marcador_sha)"
   fi
