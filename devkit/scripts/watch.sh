@@ -839,9 +839,9 @@ caso_revisar() {  # caso_revisar <num> <Clave> <head> <ref> <informe>
 # Caso `fix-humano`: misma guarda que `caso_fix`/`caso_revisar` (DEVKIT-101
 # H1). Antes marcaba `fix-humano:$num:$ref` directo y salía mudo si ya estaba
 # lanzada: un task-fix que termina sin publicar nada para ese comentario
-# (error, cuota, corte de presupuesto) dejaba el comentario atascado para
-# siempre, porque $ref no cambia hasta el próximo comentario humano. Con
-# `avisar_si_lanzada`, al menos avisa una vez en vez de quedar en silencio.
+# (error, cuota) dejaba el comentario atascado para siempre, porque $ref no
+# cambia hasta el próximo comentario humano. Con `avisar_si_lanzada`, al
+# menos avisa una vez en vez de quedar en silencio.
 caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
   local num=$1 key=$2 ref=$3 extra=$4 lkey text
   lkey="fix-humano:$num:$ref"
@@ -951,7 +951,8 @@ check_merged_prs() {
 #   --run-skill <n> <p> [clave de launched] [Clave]
 #                           una ejecución de run_skill, esperando su
 #                           relanzamiento; <Clave> es la de Notion, para el
-#                           corte por presupuesto (DEVKIT-94)
+#                           aviso por presupuesto excedido (DEVKIT-94,
+#                           DEVKIT-105)
 #   --cycle-cost <n> <log>  el costo total del ciclo de un PR, desde un log dado
 #   --merged-once           una pasada del bucle de PRs mergeados
 #   --block-pr <num> <Clave> <url> <head> <ciclos>

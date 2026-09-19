@@ -1578,10 +1578,10 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       # El bloqueo solo puede ser de ESTE lanzamiento si ocurrió antes de su
       # propia línea de resolución ($fin, DEVKIT-97 ampliación del 19:07):
       # ESTADO describe solo el lanzamiento, y un bloqueo posterior a su
-      # cierre es de otra corrida de la misma card (un task-fix que corta por
-      # presupuesto mucho después de que un pr-review ya había terminado
-      # bien, por ejemplo), no de esta fila -aunque nada más vuelva a
-      # mencionar la Clave entre medio para activar el corte de más abajo.
+      # cierre es de otra corrida de la misma card (un task-fix bloqueado por
+      # una pregunta abierta mucho después de que un pr-review ya había
+      # terminado bien, por ejemplo), no de esta fila -aunque nada más vuelva
+      # a mencionar la Clave entre medio para activar el corte de más abajo.
       resto_bloqueo=$resto
       fin_ln=""
       if [ -n "$fin" ]; then
