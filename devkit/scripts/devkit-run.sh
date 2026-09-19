@@ -27,13 +27,19 @@
 #     lanzamiento (`terminado [...]: modelo=... costo=...`).
 #
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
-#   devkit-run --estado [--seguir]
+#   devkit-run --estado [--seguir] [--todo]
 #     Tabla de los últimos lanzamientos: skill, card, quién lanzó, hace
 #     cuánto y estado (en curso, terminó, error, bloqueada, no arrancó).
-#     Debajo, un bloque `Consumo` con el porcentaje de cuota del plan en vivo
-#     (sesión y semana), leído con `claude -p "/usage"` (DEVKIT-62): es la
-#     misma cifra oficial de una sesión interactiva, no una estimación desde
-#     watch.log. `--seguir` refresca todo cada 3 s hasta Ctrl-C.
+#     DETALLE se recorta al ancho de la terminal, y la tabla a su alto -las
+#     filas más recientes, con un resumen de cuántas quedaron afuera-; `--todo`
+#     desactiva ese recorte de alto (DEVKIT-97). Debajo, un bloque `Consumo`
+#     con el porcentaje de cuota del plan en vivo (sesión y semana), leído con
+#     `claude -p "/usage"` (DEVKIT-62): es la misma cifra oficial de una
+#     sesión interactiva, no una estimación desde watch.log. `--seguir`
+#     refresca todo cada 3 s hasta Ctrl-C, con `bucle: ...` en la cabecera:
+#     `vivo` (tick reciente), `esperando <skill>-<n>` (una skill de origen
+#     bucle en curso explica la falta de tick, sin alarma), `SIN SEÑAL` (ni lo
+#     uno ni lo otro) o `MUERTO` (watch.sh no está en `ps`).
 #   devkit-run --tablero [--seguir]
 #     Cards activas del proyecto (Lista, En progreso, Revisión automática,
 #     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
@@ -199,6 +205,16 @@ ARRANQUE_ESPERA="${DEVKIT_ARRANQUE_ESPERA:-5}"
 ESTADO_GRACIA="${DEVKIT_ESTADO_GRACIA:-120}"
 ESTADO_FILAS="${DEVKIT_ESTADO_FILAS:-20}"
 ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
+# Líneas reservadas al calcular cuánta tabla entra en la terminal (DEVKIT-97,
+# corregido en H4): el banner + `bucle: ...` + línea en blanco de `--seguir`
+# (3), la fila de títulos de la tabla (1), la línea "… N filas más antiguas"
+# cuando la tabla se recorta (1) y el bloque `Consumo` que sigue a la tabla
+# -en blanco, título, sesión y semana (`mostrar_consumo`): 4, no 1, con la
+# cuota oficial legible; menos si falla o no hay lectura todavía, pero contar
+# de menos desborda y de más solo achica un poco la tabla. `--estado` sin
+# `--seguir` no imprime las primeras tres, pero reservarlas de más solo achica
+# un poco la tabla, nunca la desborda -al revés de no reservar nada.
+RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-9}"
 # Intervalo del bucle de watch.sh, para juzgar si su último tick "consultando
 # GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
 # valor por defecto y misma variable que INTERVAL en watch.sh: los dos
@@ -1245,6 +1261,24 @@ prompt_en_linea() {  # prompt_en_linea <prompt>
   printf '%s' "${p:0:120}"
 }
 
+# Identidad de un lanzamiento: la skill y su primer argumento (Clave o número
+# de PR), sin el resto (DEVKIT-97). Desde DEVKIT-90, `--worker` arma
+# `prompt_pleno` para task-start con el volcado de la card bajo "## Card" y
+# eso -no el prompt corto- es lo que llega al `claude -p` real, así que
+# aparece entero en `ps`; la línea "lanzando" en cambio solo guarda el
+# prompt corto. Comparar por el texto completo (incluso recortado a 120
+# caracteres por `prompt_en_linea`, que en un prompt de miles de caracteres
+# solo alcanza a cubrir el volcado de la card, nunca el prompt corto que
+# quedó al principio) daba una fila `sin registro` falsa para el propio
+# `task-start` y un DETALLE con la card entera. `ps` aplana los saltos de
+# línea de un argumento a espacios (confirmado: dos saltos seguidos quedan
+# como dos espacios seguidos), así que ni siquiera hay un salto de línea real
+# del que cortar; comparar por skill+primer argumento es la única forma
+# estable de identificar el mismo lanzamiento en la línea del log y en `ps`.
+identidad_prompt() {  # identidad_prompt <prompt>
+  printf '%s' "$1" | awk '{print $1, $2}' | sed -E 's/[[:space:]]+$//'
+}
+
 linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log> <modelo> <esfuerzo> <ronda>
   printf '%s %s lanzando (origen=%s) modelo=%s esfuerzo=%s ronda=%s: "%s" log=%s\n' \
     "$(date +%FT%T%:z)" "$1" "$2" "${5:--}" "${6:--}" "${7:--}" "$(prompt_en_linea "$3")" "$4"
@@ -1451,7 +1485,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     flock -n 7 || candado=ocupado
     exec 7<&-
   fi
-  local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col
+  local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col resto_bloqueo fin_ln
   # Todos los prompts lanzados alguna vez, no solo los ESTADO_FILAS visibles
   # en la tabla: un `claude -p` lanzado antes de esa cola, y todavía vivo, no
   # debe salir como `sin registro` (DEVKIT-81 H2). Una sola lectura de
@@ -1515,9 +1549,37 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     # espacio o de la comilla final del prompt: así DEVKIT-57 no pasa por
     # DEVKIT-5.
     if [ -n "$clave" ] && [ "$estado" != "en curso" ]; then
-      bloqueo=$(printf '%s\n' "$resto" | awk -v c="$clave" '
+      # El bloqueo solo puede ser de ESTE lanzamiento si ocurrió antes de su
+      # propia línea de resolución ($fin, DEVKIT-97 ampliación del 19:07):
+      # ESTADO describe solo el lanzamiento, y un bloqueo posterior a su
+      # cierre es de otra corrida de la misma card (un task-fix que corta por
+      # presupuesto mucho después de que un pr-review ya había terminado
+      # bien, por ejemplo), no de esta fila -aunque nada más vuelva a
+      # mencionar la Clave entre medio para activar el corte de más abajo.
+      resto_bloqueo=$resto
+      fin_ln=""
+      if [ -n "$fin" ]; then
+        fin_ln=$(printf '%s\n' "$resto" | grep -nF -m1 -- "$fin" | cut -d: -f1)
+        [ -n "$fin_ln" ] && resto_bloqueo=$(printf '%s\n' "$resto" | head -n "$((fin_ln - 1))")
+      fi
+      bloqueo=$(printf '%s\n' "$resto_bloqueo" | awk -v c="$clave" '
         / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
         index($0, " task-block.sh " c " Bloqueada") { print; exit }')
+      # DEVKIT-97 H3: block_pr en watch.sh (tres ciclos sin OK, task-fix vacío
+      # dos veces) siempre bloquea DESPUÉS del `terminado` del lanzamiento que
+      # cortó -el corte de arriba, pensado para un task-block.sh corrido a
+      # mano mucho más tarde sobre la misma card, también se comía este caso
+      # legítimo. Se distingue por su propia línea "PR #N (Clave) ...:
+      # bloqueando con task-block.sh", que precede a la de "Bloqueada" sin
+      # nada más entre medio (un `gh pr comment` no escribe en watch.log): si
+      # aparece después de $fin y antes de cualquier lanzamiento nuevo de esta
+      # Clave, el bloqueo es de esta fila.
+      if [ -z "$bloqueo" ] && [ -n "${fin_ln:-}" ]; then
+        bloqueo=$(printf '%s\n' "$resto" | tail -n "+$((fin_ln + 1))" | awk -v c="$clave" '
+          / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
+          /: bloqueando con task-block\.sh$/ && index($0, "(" c ")") { marcado=1; next }
+          marcado && index($0, " task-block.sh " c " Bloqueada") { print; exit }')
+      fi
       if [ -n "$bloqueo" ]; then
         estado=bloqueada
         detalle=$(printf '%s' "$bloqueo" | sed -E 's/^.* task-block\.sh [^ ]+ Bloqueada desde [^:]*: //')
@@ -1561,7 +1623,11 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
   local procesos=$1
   shift
   local -a activos=("$@")
-  local pid resto prompt prompt_norm encontrado a
+  local -a activos_id=()
+  local pid resto prompt prompt_id encontrado a
+  for a in "${activos[@]}"; do
+    activos_id+=("$(identidad_prompt "$a")")
+  done
   while read -r pid resto; do
     [ -n "$pid" ] || continue
     case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
@@ -1576,18 +1642,19 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
       *) prompt=${prompt%% --*} ;;
     esac
     case "$prompt" in ok|/usage) continue ;; esac
-    # Comparar contra la misma forma que quedó en la línea "lanzando"
-    # (DEVKIT-81 H2): sin comillas ni saltos de línea y cortada a 120
-    # caracteres. Comparar el `ps` crudo contra esa forma normalizada da
-    # falsos "sin registro" con un prompt largo o con saltos de línea, el
-    # caso de un `task-fix` con un comentario humano.
-    prompt_norm=$(prompt_en_linea "$prompt")
+    # Comparar por identidad (skill + primer argumento, DEVKIT-97), no por el
+    # texto completo: la línea "lanzando" solo guarda el prompt corto, pero
+    # `ps` trae el volcado de la card que `--worker` le agrega a task-start
+    # (ver `identidad_prompt`). Un `prompt_norm` recortado a 120 caracteres
+    # del texto completo no comparte prefijo útil con el prompt corto cuando
+    # ese volcado es más largo que eso.
+    prompt_id=$(identidad_prompt "$prompt")
     encontrado=0
-    for a in "${activos[@]}"; do
-      [ "$prompt_norm" = "$a" ] && { encontrado=1; break; }
+    for a in "${activos_id[@]}"; do
+      [ "$prompt_id" = "$a" ] && { encontrado=1; break; }
     done
     [ "$encontrado" = 1 ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $prompt" -
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $(prompt_en_linea "$prompt")" -
   done <<<"$procesos"
 }
 
@@ -1642,6 +1709,45 @@ rellenar() {  # rellenar <texto> <ancho>
   printf '%s%*s' "$s" "$(( n > ${#s} ? n - ${#s} : 0 ))" ''
 }
 
+# Tamaño de la terminal para recortar la tabla (DEVKIT-97, H1): solo
+# `$COLUMNS`/`$LINES` -así la autoprueba fija un tamaño sin una tty real, y
+# `seguir_estado`/`seguir_lanzamiento`/`seguir_tablero`/la rama `--estado` sin
+# `--seguir` los exportan con `tput` (y solo con tty real, `[ -t 1 ]`) antes de
+# armar el cuadro, porque adentro de un `$(...)` -que es como arman ese
+# cuadro- `tput` ya no ve la tty real (mismo problema que `color` en
+# `senal_bucle`). Sin ninguna de las dos (una tubería, `cron`, un lanzamiento
+# de watch.sh, esta autoprueba, todos sin tty pero a veces con `$TERM`
+# heredado): un tamaño grande a propósito, no uno chico. Un `tput` de respaldo
+# acá adentro devolvía 80/24 con `$TERM` definido pero sin tty -el caso más
+# común fuera de una terminal interactiva-, y esta tabla ya usa 77 columnas
+# fijas antes de DETALLE: quedaban 3 caracteres para DETALLE, mucho peor que
+# no recortar nada cuando no hay certeza real del tamaño.
+ancho_terminal() {
+  local c=${COLUMNS:-}
+  [ "$c" -gt 0 ] 2>/dev/null || c=200
+  printf '%s' "$c"
+}
+
+alto_terminal() {
+  local l=${LINES:-}
+  [ "$l" -gt 0 ] 2>/dev/null || l=1000
+  printf '%s' "$l"
+}
+
+# Ancho fijo de las columnas antes de DETALLE (15+12+12+8+14+16, DEVKIT-97):
+# lo que sobra del ancho de la terminal es lo único que le toca a DETALLE.
+ANCHO_COLUMNAS_FIJAS=77
+
+# Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
+# menor a 1 corta a 1 -nunca a 0 ni negativo, `${s:0:n}` con `n` negativo
+# cuenta desde el final y mostraría lo último, no lo primero.
+recortar() {  # recortar <texto> <ancho>
+  local s=$1 n=$2
+  [ "$n" -ge 1 ] 2>/dev/null || n=1
+  [ "${#s}" -gt "$n" ] || { printf '%s' "$s"; return 0; }
+  printf '%s…' "${s:0:$((n - 1))}"
+}
+
 encabezado_tabla() {
   # ESTADO mide 14, no 12 (DEVKIT-81 H7): "sin registro" ya mide 12, y sin
   # margen queda pegado a la columna MODELO.
@@ -1651,15 +1757,44 @@ encabezado_tabla() {
 
 # Una fila formateada de `--estado`, con "bloquea a: ..." sumado al detalle
 # si corresponde. Aparte de `mostrar_estado` para que agrupar por Épica
-# (DEVKIT-80) no duplique el formato de columnas.
+# (DEVKIT-80) no duplique el formato de columnas. DETALLE se recorta al
+# ancho disponible de la terminal (DEVKIT-97): sin esto, una card completa
+# colgada de un `sin registro` (o cualquier motivo largo) desbordaba una
+# sola fila a veinte líneas de pantalla, y el redibujo en el sitio de
+# `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <estado> <detalle> <modelo>
   local skill=$1 clave=$2 origen=$3 edad=$4 estado=$5 detalle=$6 modelo=$7 frena=""
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
   fi
+  detalle=$(recortar "$detalle" "$(( $(ancho_terminal) - ANCHO_COLUMNAS_FIJAS ))")
   printf '%s%s%s%s%s%s%s\n' "$(rellenar "$skill" 15)" "$(rellenar "$clave" 12)" "$(rellenar "$origen" 12)" \
     "$(rellenar "$edad" 8)" "$(rellenar "$estado" 14)" "$(rellenar "$modelo" 16)" "$detalle"
+}
+
+# Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
+# con las más recientes -las últimas del arreglo, porque `estado_filas` las
+# entrega en el orden del log, más viejas primero- y un resumen de cuántas
+# quedaron afuera. Sin esto, muchos lanzamientos desbordan `--seguir` y el
+# redibujo en el sitio (`\033[H` en `cuadro_sin_parpadeo`) apila cuadros en
+# vez de refrescar uno solo. `devkit-run --estado --todo` (`DEVKIT_ESTADO_TODO`)
+# lo desactiva para verlas todas.
+imprimir_tabla() {  # imprimir_tabla <fila formateada>...
+  local total=$# max inicio
+  if [ -n "${DEVKIT_ESTADO_TODO:-}" ] || [ "$total" -eq 0 ]; then
+    [ "$total" -eq 0 ] || printf '%s\n' "$@"
+    return 0
+  fi
+  max=$(( $(alto_terminal) - RESERVA_LINEAS_TABLA ))
+  [ "$max" -ge 1 ] 2>/dev/null || max=1
+  if [ "$total" -le "$max" ]; then
+    printf '%s\n' "$@"
+    return 0
+  fi
+  inicio=$(( total - max + 1 ))
+  printf '%s\n' "${@:inicio}"
+  printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
 mostrar_estado() {
@@ -1687,6 +1822,15 @@ mostrar_estado() {
       fi
     done <<<"$filas"
 
+    # DEVKIT-97 H5: la tabla agrupada por Épica (dos o más Épicas `En
+    # progreso` entre las filas) no pasa por `imprimir_tabla` y no se recorta
+    # al alto de la terminal -a diferencia de la tabla plana, más abajo.
+    # Excepción a propósito, no un olvido: `ESTADO_FILAS` (20 por defecto) ya
+    # acota cuántos lanzamientos del log llegan hasta acá, agrupar por Épica
+    # es el caso menos frecuente (una sola card `En progreso` por Épica a la
+    # vez, AGENTS.md), y recortar por grupo sin perder la cabecera de cada
+    # Épica es harina de otro costal. Si esto empieza a desbordar `--seguir`
+    # en la práctica, se resuelve aparte.
     if [ "${#orden_epicas[@]}" -ge 2 ]; then
       local primero=1
       for e in "${orden_epicas[@]}"; do
@@ -1713,9 +1857,11 @@ mostrar_estado() {
       done <<<"$filas"
     else
       encabezado_tabla
+      local -a filas_fmt=()
       while IFS=$'\t' read -r skill clave origen edad estado detalle modelo; do
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo"
+        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$estado" "$detalle" "$modelo")")
       done <<<"$filas"
+      imprimir_tabla "${filas_fmt[@]}"
     fi
   fi
   mostrar_consumo
@@ -1724,25 +1870,58 @@ mostrar_estado() {
     || echo 0 >"$ALARMAS_VISTAS"
 }
 
-# Señal de vida del bucle para la cabecera de `--estado --seguir` (DEVKIT-81):
-# una pantalla quieta (nada que lanzar en este ciclo) no debe verse igual que
-# una pantalla muerta (watch.sh se cayó). "vivo" exige las dos cosas: que
-# `watch.sh` siga en `ps` y que su último tick "consultando GitHub" en
-# watch.log no pase del doble de INTERVALO_BUCLE. Por `ps` de PS_BIN, como el
-# resto de este archivo, para poder fijarlo en la autoprueba.
-# <color> no vacío pinta las tres ramas de SIN SEÑAL en rojo (DEVKIT-81 H4,
+# Señal de vida del bucle para la cabecera de `--estado --seguir` (DEVKIT-81,
+# reordenada por DEVKIT-97 con un caso nuevo). El indicador antiguo medía un
+# solo tick con un umbral fijo (el doble de INTERVALO_BUCLE) sin importar qué
+# corría en ese momento: `watch.sh` lanza pr-review/task-fix de forma
+# síncrona -`run_skill` espera a que termine antes de seguir con el próximo
+# PR- así que el tick "consultando GitHub" no puede llegar mientras esa skill
+# sigue corriendo, y una corrección larga (13 min con DEVKIT-87) disparaba
+# `SIN SEÑAL` con el bucle vivo. Orden de las cuatro ramas, cada una excluye
+# a las de abajo:
+#   1. `watch.sh` no está en `ps`: `MUERTO`, no hay bucle que espere nada.
+#   2. Una fila `en curso` de origen `bucle`, salvo `task-start` (DEVKIT-97
+#      H2), explica la falta de tick: el bucle está esperando a esa skill, no
+#      muerto. Sin alarma -si esa fila ya superó SKILL_TIMEOUT, la marca
+#      "lento" vive en su propia fila de la tabla (`estado_filas`); esta línea
+#      no la duplica ni la reemplaza. `task-start` con origen `bucle` viene de
+#      `chain_next` -> `task-next.sh` -> `devkit-run.sh task-start`, que lanza
+#      un worker con `nohup setsid` y vuelve enseguida (ver la cabecera de
+#      este archivo): no bloquea a `watch.sh` como sí lo hace `run_skill` con
+#      pr-review/task-fix/task-close/task-document (`--sync`, con `wait`).
+#      Contarlo aquí taparía un SIN SEÑAL real de `watch.sh` mientras ese
+#      worker, ajeno al tick, sigue corriendo.
+#   3. Sin skill que lo explique, el último tick (o su ausencia total) más
+#      viejo que el doble de INTERVALO_BUCLE: `SIN SEÑAL` de verdad.
+#   4. Cualquier otro caso: vivo, con la edad del último tick.
+# Por `ps` de PS_BIN y `estado_filas` sobre el mismo `wlog`, como el resto de
+# este archivo, para poder fijarlo en la autoprueba.
+# <color> no vacío pinta la rama `SIN SEÑAL`/`MUERTO` en rojo (DEVKIT-81 H4,
 # mismo patrón que ROJO/RESET en prompt-status.sh). senal_bucle no puede
 # decidirlo por su cuenta con `[ -t 1 ]`: seguir_estado la llama siempre
 # dentro de `$(...)`, donde el descriptor 1 nunca es una terminal aunque la
-# de verdad sí lo sea.
+# de verdad sí lo sea. El caso 2 nunca lleva color: no es una alarma del
+# bucle.
 senal_bucle() {  # senal_bucle <watch.log> <ahora epoch> [color]
   local wlog=$1 ahora=$2 color=${3:-} procesos tick t0 edad rojo='' reset=''
+  local skill clave origen edad_fila estado detalle modelo n
   if [ -n "$color" ]; then rojo=$'\033[31m'; reset=$'\033[0m'; fi
   procesos=$("$PS_BIN" -eo args= -ww 2>/dev/null)
   if ! grep -qF 'watch.sh' <<<"$procesos"; then
-    printf '%sbucle: SIN SEÑAL, no encuentro watch.sh en ps%s\n' "$rojo" "$reset"
+    printf '%sbucle: MUERTO, no encuentro watch.sh en ps%s\n' "$rojo" "$reset"
     return 0
   fi
+  while IFS=$'\t' read -r skill clave origen edad_fila estado detalle modelo; do
+    if [ "$origen" = bucle ] && [ "$estado" = "en curso" ] && [ "$skill" != task-start ]; then
+      if [ "$clave" = - ]; then
+        printf 'bucle: esperando %s hace %s\n' "$skill" "$edad_fila"
+      else
+        n=${clave##*-}
+        printf 'bucle: esperando %s-%s hace %s\n' "$skill" "$n" "$edad_fila"
+      fi
+      return 0
+    fi
+  done < <(estado_filas "$wlog" "$ahora")
   tick=$(grep -E '^[^ ]+ consultando GitHub$' "$wlog" 2>/dev/null | tail -1 | awk '{print $1}')
   if [ -z "$tick" ]; then
     printf '%sbucle: SIN SEÑAL, watch.sh vive pero sin ningún tick "consultando GitHub" todavía%s\n' "$rojo" "$reset"
@@ -1783,8 +1962,19 @@ seguir_estado() {
     c=${giros:$((i % ${#giros})):1}
     i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
-    frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s\n\n' \
+    # `COLUMNS`/`LINES` de verdad, tomados acá afuera (DEVKIT-97): adentro del
+    # `$(...)` de más abajo `tput` ya no ve la tty real -mismo problema que
+    # `color` en `senal_bucle`-, y se toman de nuevo en cada vuelta por si el
+    # humano cambió el tamaño de la ventana mientras `--seguir` corría.
+    if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
+    # `frame=$(...)` recorta *todos* los saltos de línea finales de lo que
+    # captura, no uno solo (DEVKIT-97/DEVKIT-85): con "...\n\n" al final del
+    # `printf`, la sustitución se comía las dos líneas en blanco antes de que
+    # `frame+=` pegara la tabla, y la fila de títulos quedaba pegada a la
+    # cabecera. El separador se agrega aparte, después de la sustitución.
+    frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+    frame+=$'\n\n'
     frame+=$(mostrar_estado)
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -1820,8 +2010,14 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     c=${giros:$((i % ${#giros})):1}
     i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
-    frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s\n\n' \
+    # COLUMNS/LINES de verdad, tomados acá afuera: mismo motivo que en
+    # seguir_estado (DEVKIT-97).
+    if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
+    # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
+    # el separador va aparte de la sustitución que trae senal_bucle.
+    frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$c" "$ESTADO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+    frame+=$'\n\n'
     frame+=$(mostrar_estado)
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -1949,8 +2145,11 @@ seguir_tablero() {
     c=${giros:$((i % ${#giros})):1}
     i=$((i + 1))
     ahora=${DEVKIT_AHORA:-$(date +%s)}
-    frame=$(printf 'devkit-run --tablero  %s %s  (cada %ss; Ctrl-C para salir)\n%s\n\n' \
+    # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
+    # el separador va aparte de la sustitución que trae senal_bucle.
+    frame=$(printf 'devkit-run --tablero  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$c" "$TABLERO_INTERVALO" "$(senal_bucle "$WATCH_LOG" "$ahora" "$color_tty")")
+    frame+=$'\n\n'
     frame+=$(mostrar_tablero)
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -2221,6 +2420,14 @@ run_tests() {
   # prueban la comprobación la reactivan a mano con DEVKIT_NOTION_CHECK=1.
   export DEVKIT_NOTION_CHECK=0
 
+  # Ancho/alto amplios por defecto (DEVKIT-97 H1): sin esto, un COLUMNS/LINES
+  # heredado de quien corre `--test` (una terminal angosta, un `COLUMNS=80` de
+  # otra invocación) angostaba los checks que no fijan su propio tamaño. Los
+  # que sí necesitan un tamaño puntual lo fijan aparte con
+  # `COLUMNS=... LINES=... <comando>`, que pisa esta exportación solo para esa
+  # invocación.
+  export COLUMNS=200 LINES=1000
+
   check "rol de pr-review" revision "$(role_of '/pr-review 31')"
   check "rol de epic-plan" revision "$(role_of '/epic-plan DEVKIT-1')"
   # DEVKIT-55: task-close y task-block son bash; el rol que los agrupaba ya no
@@ -2284,6 +2491,15 @@ run_tests() {
   tabla_dup3='50004 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
   check "lanzamiento_duplicado: Clave prefijo de otra no da falso positivo" "" \
     "$(printf '%s\n' "$tabla_dup3" | lanzamiento_duplicado '/task-start DEVKIT-7')"
+  # DEVKIT-97: el rechazo de lanzamiento duplicado sigue viendo el `claude -p`
+  # vivo aunque su prompt real lleve el volcado de la card entera detrás
+  # (DEVKIT-90) -el prompt que se compara (`/task-start DEVKIT-94`) es un
+  # prefijo del que trae `ps`, con un espacio del "\n\n" aplanado justo
+  # después, así que el patrón de siempre ya lo encuentra.
+  local tabla_dup4
+  tabla_dup4="50005 claude -p /task-start DEVKIT-94  ## Card - Clave: DEVKIT-94 $(printf 'relleno %.0s' $(seq 1 100)) --model opus --effort high --output-format json"
+  check "lanzamiento_duplicado: encuentra el claude -p vivo aunque el prompt real lleve la card entera" 50005 \
+    "$(printf '%s\n' "$tabla_dup4" | lanzamiento_duplicado '/task-start DEVKIT-94')"
 
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' RETURN
@@ -3917,6 +4133,77 @@ FIN
   check "agentes_en_curso_rapido coincide con las filas en curso de estado_filas" 2 \
     "$(PS_BIN="$pslist" LOCK="$est/skill.lock" agentes_en_curso_rapido "$est/watch.log" "$ahora")"
 
+  # DEVKIT-97 (ampliación del 19:07): ESTADO describe solo el lanzamiento; un
+  # bloqueo posterior a que este ya terminó es de otra corrida, no de esta
+  # fila -acá, de un `task-block.sh` corrido a mano bastante después, sin
+  # ningún lanzamiento entre medio que "reclame" la Clave para sí mismo y
+  # corte la búsqueda antes de tiempo.
+  local log_bloqueo_tardio pslist_bloqueo_tardio
+  log_bloqueo_tardio="$tmp/bloqueo-tardio-watch.log"
+  cat >"$log_bloqueo_tardio" <<FIN
+2026-09-16T08:00:00Z task-start-94 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-start DEVKIT-94" log=$est/task-start-94b.log
+2026-09-16T08:06:00Z devkit-run "/task-start DEVKIT-94" terminado [task-start-94]: modelo=opus esfuerzo=high ronda=1 :: OK
+2026-09-16T09:00:00Z task-block.sh DEVKIT-94 Bloqueada desde Lista para merge: motivo ajeno a este lanzamiento.
+FIN
+  pslist_bloqueo_tardio="$tmp/ps-bloqueo-tardio"
+  printf '#!/usr/bin/env bash\n' >"$pslist_bloqueo_tardio"
+  chmod +x "$pslist_bloqueo_tardio"
+  check "ESTADO no hereda un bloqueo posterior a su propio cierre" "terminó" \
+    "$(PS_BIN="$pslist_bloqueo_tardio" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_tardio" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-94" {print $5}')"
+
+  # DEVKIT-97 H3: block_pr en watch.sh (tres ciclos sin OK, task-fix vacío dos
+  # veces) siempre bloquea DESPUÉS del "terminado" del lanzamiento que cortó,
+  # a diferencia de un task-block.sh corrido a mano (el caso de arriba): su
+  # propia línea "PR #N (Clave) ...: bloqueando con task-block.sh" precede a
+  # la de "Bloqueada" sin ningún lanzamiento nuevo entre medio, y sí debe
+  # atribuirse a esta fila.
+  local log_bloqueo_pr pslist_bloqueo_pr
+  log_bloqueo_pr="$tmp/bloqueo-pr-watch.log"
+  cat >"$log_bloqueo_pr" <<FIN
+2026-09-16T11:20:00Z task-fix-61-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-95" log=$est/task-fix-61-abc.log
+2026-09-16T11:25:00Z task-fix-61-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:25:05Z PR #61 (DEVKIT-95) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:25:10Z task-block.sh DEVKIT-95 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61
+2026-09-16T11:25:11Z task-block-61 terminado: bash :: task-block: DEVKIT-95 Bloqueada desde Revisión automática
+FIN
+  pslist_bloqueo_pr="$tmp/ps-bloqueo-pr"
+  printf '#!/usr/bin/env bash\n' >"$pslist_bloqueo_pr"
+  chmod +x "$pslist_bloqueo_pr"
+  check "block_pr: el bloqueo tras el cierre de la fila que cortó sí se le atribuye" "bloqueada" \
+    "$(PS_BIN="$pslist_bloqueo_pr" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95" {print $5}')"
+  check "block_pr: el detalle trae el motivo de Bloqueada, no el de la línea bloqueando" \
+    "Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61" \
+    "$(PS_BIN="$pslist_bloqueo_pr" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95" {print $6}')"
+
+  # DEVKIT-97 H6: atender_fix reintenta task-fix sobre la misma Clave antes de
+  # que block_pr corte al tercer ciclo. Un lanzamiento nuevo de la Clave debe
+  # cortar la lectura del awk de arriba (como ya hace el primer awk), no solo
+  # resetear su marca: si sigue leyendo, el bloqueo del último task-fix
+  # también se le atribuye a la fila del primero.
+  local log_bloqueo_pr_doble pslist_bloqueo_pr_doble
+  log_bloqueo_pr_doble="$tmp/bloqueo-pr-doble-watch.log"
+  cat >"$log_bloqueo_pr_doble" <<FIN
+2026-09-16T11:20:00Z task-fix-61-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-95" log=$est/task-fix-61-abc.log
+2026-09-16T11:25:00Z task-fix-61-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:26:00Z task-fix-62-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=2: "/task-fix DEVKIT-95" log=$est/task-fix-62-abc.log
+2026-09-16T11:30:00Z task-fix-62-abc terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: nada que corregir
+2026-09-16T11:30:05Z PR #61 (DEVKIT-95) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:30:10Z task-block.sh DEVKIT-95 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/61
+2026-09-16T11:30:11Z task-block-61 terminado: bash :: task-block: DEVKIT-95 Bloqueada desde Revisión automática
+FIN
+  pslist_bloqueo_pr_doble="$tmp/ps-bloqueo-pr-doble"
+  printf '#!/usr/bin/env bash\n' >"$pslist_bloqueo_pr_doble"
+  chmod +x "$pslist_bloqueo_pr_doble"
+  check "block_pr con reintento: el lanzamiento anterior de la Clave no hereda el bloqueo" "terminó" \
+    "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '1p' | cut -f5)"
+  check "block_pr con reintento: el último lanzamiento sí sale bloqueada" "bloqueada" \
+    "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '2p' | cut -f5)"
+
   # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
   # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
   local modelo_log
@@ -4054,6 +4341,40 @@ FIN
     "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
+  # DEVKIT-97 (ampliación del 17:11 sobre DEVKIT-94): desde DEVKIT-90,
+  # `--worker` arma `prompt_pleno` para task-start con el volcado de la card
+  # bajo "## Card", y eso es lo que llega al `claude -p` real -no el prompt
+  # corto que quedó en la línea "lanzando"-. Comparar por identidad
+  # (skill+primer argumento) evita el falso "sin registro" con un prompt de
+  # miles de caracteres, y evita el propio motivo largo en su DETALLE
+  # -que antes ocupaba muchas líneas de pantalla- porque directamente no
+  # aparece esa fila.
+  local card_larga prompt_card log_card pslist_card
+  card_larga="- Clave: DEVKIT-94
+- Objetivo: $(printf 'texto de relleno de la card real %.0s' $(seq 1 100))"
+  prompt_card=$(printf '/task-start DEVKIT-94  ## Card %s' "$(printf '%s' "$card_larga" | tr '\n' ' ')")
+  check "el prompt de la card de prueba supera los 3000 caracteres" si \
+    "$([ "${#prompt_card}" -gt 3000 ] && echo si || echo no)"
+  log_card="$tmp/card-watch.log"
+  : >"$est/task-start-94.log"
+  printf '%s task-start-94 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-start DEVKIT-94" log=%s/task-start-94.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$est" >"$log_card"
+  pslist_card="$tmp/ps-card"
+  cat >"$pslist_card" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+701 bash devkit-run.sh --worker /task-start DEVKIT-94 $est/task-start-94.log opus high 40
+801 claude -p $prompt_card --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_card"
+  local filas_card
+  filas_card=$(PS_BIN="$pslist_card" LOCK="$est/skill.lock" estado_filas "$log_card" "$ahora")
+  check "task-start con la card completa en ps: una sola fila, sin sin registro" "1|0" \
+    "$(printf '%s\n' "$filas_card" | awk -F'\t' '$2 == "DEVKIT-94" {c++} $5 == "sin registro" {s++} END{print (c+0)"|"(s+0)}')"
+  check "task-start con la card completa en ps: la fila queda en curso" "en curso" \
+    "$(printf '%s\n' "$filas_card" | awk -F'\t' '$2 == "DEVKIT-94" {print $5}')"
+
   # DEVKIT-81 H11: un lanzamiento que ya terminó no debe seguir "cubriendo"
   # a un `claude -p` vivo que repite su mismo prompt -por ejemplo, la misma
   # revisión relanzada a mano después de que la primera terminó.
@@ -4107,6 +4428,90 @@ FIN
     "$(PS_BIN="$pslist_lento" LOCK="$est/skill.lock" estado_filas "$lento_log" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-90" {print $5"|"$6}')"
 
+  # DEVKIT-97: DETALLE se recorta al ancho disponible de la terminal -sin
+  # esto, un motivo largo (una card completa, un "murió sin resumen; ver
+  # <log>") desbordaba una sola fila a varias líneas de pantalla, y el
+  # redibujo en el sitio de `--seguir` apilaba cuadros en vez de refrescar
+  # uno solo.
+  check "recortar: entra entero, sin cambios" "hola" "$(recortar hola 10)"
+  check "recortar: exacto al ancho, sin cambios" "hola" "$(recortar hola 4)"
+  check "recortar: más largo que el ancho, con puntos suspensivos" "hol…" "$(recortar holaa 4)"
+  check "recortar: ancho 0 o negativo nunca revienta" '…' "$(recortar hola 0)"
+  local motivo_largo fila_ancha
+  motivo_largo=$(printf 'motivo bien largo %.0s' $(seq 1 20))
+  fila_ancha=$(COLUMNS=100 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high)
+  check "formatear_fila: la fila entera no pasa del ancho de la terminal" 1 \
+    "$([ "${#fila_ancha}" -le 100 ] && echo 1 || echo 0)"
+  check "formatear_fila: DETALLE recortado termina en puntos suspensivos" '…' \
+    "${fila_ancha: -1}"
+  check "formatear_fila: sin recorte, un DETALLE corto queda entero" "$motivo_largo" \
+    "$(COLUMNS=1000 formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_largo" opus/high \
+        | sed -E 's/^.{77}//')"
+
+  # DEVKIT-97 H1: sin COLUMNS/LINES pero con TERM definido (el contenedor,
+  # watch.sh, cron con TERM heredado, `--estado | grep`) no hay tty real, y
+  # antes de este hallazgo `ancho_terminal`/`alto_terminal` caían a `tput`, que
+  # sin tty pero con TERM devuelve 80/24 en vez del respaldo ancho: DETALLE
+  # quedaba en 3 caracteres.
+  local motivo_medio="bloquea a: DEVKIT-61, DEVKIT-99"
+  check "ancho_terminal: sin COLUMNS, con TERM definido, no cae a tput (respaldo ancho)" 200 \
+    "$(unset COLUMNS; TERM=xterm ancho_terminal)"
+  check "alto_terminal: sin LINES, con TERM definido, no cae a tput (respaldo alto)" 1000 \
+    "$(unset LINES; TERM=xterm alto_terminal)"
+  check "formatear_fila: TERM definido sin COLUMNS no trunca DETALLE a 3 caracteres" \
+    "$motivo_medio" \
+    "$(unset COLUMNS; TERM=xterm formatear_fila task-fix DEVKIT-1 humano 5m "no arrancó" "$motivo_medio" opus/high \
+        | sed -E 's/^.{77}//')"
+
+  # DEVKIT-97: la tabla se recorta al alto de la terminal -las filas más
+  # recientes, con un resumen de cuántas quedaron afuera- y `--todo`
+  # (`DEVKIT_ESTADO_TODO`) lo desactiva para verlas todas. `imprimir_tabla`
+  # directo, no `mostrar_estado`: así 40 lanzamientos de prueba no chocan con
+  # `ESTADO_FILAS` (20 por defecto), que ya recorta cuántos lanzamientos del
+  # log entran a la tabla, antes y aparte de este recorte por alto.
+  local -a filas_40=()
+  for i in $(seq 1 40); do filas_40+=("fila-$i"); done
+  local salida_40
+  salida_40=$(LINES=20 imprimir_tabla "${filas_40[@]}")
+  check "imprimir_tabla: con 40 filas en una terminal de 20 líneas, la más vieja no aparece" 0 \
+    "$(printf '%s\n' "$salida_40" | grep -c '^fila-1$')"
+  check "imprimir_tabla: se queda con las más recientes" 1 \
+    "$(printf '%s\n' "$salida_40" | grep -c '^fila-40$')"
+  check "imprimir_tabla: línea de resumen con cuántas quedaron afuera" 1 \
+    "$(printf '%s\n' "$salida_40" | grep -c '… 29 filas más antiguas (devkit-run --estado --todo para verlas)')"
+  local salida_40_todo
+  salida_40_todo=$(LINES=20 DEVKIT_ESTADO_TODO=1 imprimir_tabla "${filas_40[@]}")
+  check "imprimir_tabla: --todo desactiva el recorte, aparecen todas" "1|1|0" \
+    "$(printf '%s\n' "$salida_40_todo" | grep -c '^fila-1$')|$(printf '%s\n' "$salida_40_todo" | grep -c '^fila-40$')|$(printf '%s\n' "$salida_40_todo" | grep -c 'filas más antiguas')"
+
+  # DEVKIT-97 H4: RESERVA_LINEAS_TABLA solo contaba 1 línea para el bloque
+  # Consumo, que en realidad imprime 4 (en blanco, título, sesión, semana), y
+  # ninguna para la línea de resumen "… N filas más antiguas": con LINES=20 el
+  # cuadro completo de `--seguir` (3 líneas de cabecera, afuera de
+  # mostrar_estado) desbordaba. Cuenta las líneas reales de `mostrar_estado`
+  # -títulos, filas, resumen y Consumo con cuota oficial (el caso de 4 líneas,
+  # el peor)- y verifica que, sumadas a esas 3 de cabecera, no pasan de LINES.
+  local muchas_log pslist_muchas cuota_h4 salida_muchas total_muchas i
+  muchas_log="$tmp/muchas-filas-watch.log"
+  : >"$muchas_log"
+  for i in $(seq 1 20); do
+    printf '2026-09-16T11:00:00Z task-fix-%s lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-1%02d" log=%s/task-fix-%s.log\n' \
+      "$i" "$i" "$est" "$i" >>"$muchas_log"
+    printf '2026-09-16T11:01:00Z task-fix-%s terminado: modelo=opus esfuerzo=high costo=1.0 turnos=1 :: OK\n' "$i" >>"$muchas_log"
+  done
+  pslist_muchas="$tmp/ps-muchas-filas"
+  printf '#!/usr/bin/env bash\n' >"$pslist_muchas"
+  chmod +x "$pslist_muchas"
+  cuota_h4="$tmp/cuota-h4"
+  mkdir -p "$cuota_h4"
+  printf '%s\tok\t42\tSep 17, 5:10pm (UTC)\t7\tSep 22, 11pm (UTC)\n' "$(date +%s)" >"$cuota_h4/cuota.cache"
+  salida_muchas=$(PS_BIN="$pslist_muchas" LOCK="$est/skill.lock" LINES=20 \
+    CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_h4/cuota.cache" CUOTA_LOCK="$cuota_h4/cuota.lock" \
+    WATCH_LOG="$muchas_log" DEVKIT_AHORA="$ahora" mostrar_estado)
+  total_muchas=$(printf '%s\n' "$salida_muchas" | wc -l | tr -d ' ')
+  check "H4: mostrar_estado con muchas filas y LINES=20 no desborda el cuadro de --seguir" 1 \
+    "$([ "$total_muchas" -le $((20 - 3)) ] && echo 1 || echo 0)"
+
   # DEVKIT-81: señal de vida del bucle en la cabecera de `--estado --seguir`.
   local pslist_bucle_vivo pslist_sin_bucle tick_log tick_viejo_log
   pslist_bucle_vivo="$tmp/ps-bucle-vivo"
@@ -4123,13 +4528,15 @@ FIN
   printf '%s consultando GitHub\n' "$(date -u -d "@$((ahora - 2 * INTERVALO_BUCLE - 60))" +%FT%TZ)" >"$tick_viejo_log"
   check "senal_bucle: SIN SEÑAL con un tick viejo (más del doble del intervalo)" 1 \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" | grep -c 'SIN SEÑAL hace')"
-  check "senal_bucle: SIN SEÑAL si watch.sh no está en ps" 1 \
-    "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" | grep -c 'no encuentro watch.sh en ps')"
-  # DEVKIT-81 H4: con color pedido (terminal), las tres ramas SIN SEÑAL van en
-  # rojo; sin él (autoprueba, sin terminal), sin códigos de color -ya cubierto
-  # por los tres checks de arriba, que no piden color.
-  check "senal_bucle: SIN SEÑAL sin watch.sh en ps, en rojo si se pide" \
-    $'\033[31mbucle: SIN SEÑAL, no encuentro watch.sh en ps\033[0m' \
+  # DEVKIT-97: caso 1, `pgrep -f watch.sh` vacío es `MUERTO`, no `SIN SEÑAL`
+  # -son cosas distintas: acá no hay bucle del que esperar nada.
+  check "senal_bucle: MUERTO si watch.sh no está en ps" 1 \
+    "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" | grep -c 'MUERTO, no encuentro watch.sh en ps')"
+  # DEVKIT-81 H4: con color pedido (terminal), MUERTO y las dos ramas SIN
+  # SEÑAL van en rojo; sin él (autoprueba, sin terminal), sin códigos de color
+  # -ya cubierto por los checks de arriba, que no piden color.
+  check "senal_bucle: MUERTO en rojo si se pide" \
+    $'\033[31mbucle: MUERTO, no encuentro watch.sh en ps\033[0m' \
     "$(PS_BIN="$pslist_sin_bucle" senal_bucle "$tick_log" "$ahora" 1)"
   local sin_tick_log
   sin_tick_log="$tmp/sin-tick-watch.log"
@@ -4142,6 +4549,58 @@ FIN
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_viejo_log" "$ahora" 1)"
   check "senal_bucle: vivo no se pinta aunque se pida color" "bucle: vivo, último tick hace 1m" \
     "$(PS_BIN="$pslist_bucle_vivo" senal_bucle "$tick_log" "$ahora" 1)"
+
+  # DEVKIT-97: caso 2, una fila en curso de origen bucle explica por qué el
+  # tick no llegó -`run_skill` en watch.sh espera de forma síncrona a que la
+  # skill termine antes de seguir con el próximo PR, así que una corrección
+  # larga (13 min con DEVKIT-87) no puede dejar un tick nuevo mientras corre.
+  # Sin tick alguno en el log: igual gana "esperando" sobre "sin ningún tick".
+  local esperando_log pslist_esperando
+  esperando_log="$tmp/esperando-watch.log"
+  printf '%s task-fix-50 lanzando (origen=bucle) modelo=x esfuerzo=high ronda=1: "/task-fix DEVKIT-87" log=%s/task-fix-50.log\n' \
+    "$(date -u -d "@$((ahora - 300))" +%FT%TZ)" "$est" >"$esperando_log"
+  pslist_esperando="$tmp/ps-esperando"
+  printf '#!/usr/bin/env bash\ncat <<TABLA\n1 bash /workspace/devkit/scripts/watch.sh\n999 bash devkit-run.sh --sync /task-fix DEVKIT-87\nTABLA\n' >"$pslist_esperando"
+  chmod +x "$pslist_esperando"
+  check "senal_bucle: esperando una skill de origen bucle, sin alarma" \
+    "bucle: esperando task-fix-87 hace 5m" \
+    "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" senal_bucle "$esperando_log" "$ahora")"
+  check "senal_bucle: esperando no se pinta aunque se pida color" \
+    "bucle: esperando task-fix-87 hace 5m" \
+    "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" senal_bucle "$esperando_log" "$ahora" 1)"
+  # El caso 2 no oculta la marca "lento" de la fila: sigue siendo la alarma de
+  # la skill, no del bucle (criterio de aceptación de DEVKIT-97).
+  local esperando_lento_log
+  esperando_lento_log="$tmp/esperando-lento-watch.log"
+  printf '%s task-fix-51 lanzando (origen=bucle) modelo=x esfuerzo=high ronda=1: "/task-fix DEVKIT-87" log=%s/task-fix-51.log\n' \
+    "$(date -u -d "@$((ahora - SKILL_TIMEOUT - 100))" +%FT%TZ)" "$est" >"$esperando_lento_log"
+  check "senal_bucle: esperando, sin alarma, aunque la fila esté lenta" \
+    "bucle: esperando task-fix-87 hace $(hace $((SKILL_TIMEOUT + 100)))" \
+    "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" senal_bucle "$esperando_lento_log" "$ahora")"
+  check "senal_bucle: esperando lento: la fila conserva su propia marca lento" \
+    "en curso|lento" \
+    "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" estado_filas "$esperando_lento_log" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-87" {print $5"|"$6}')"
+
+  # DEVKIT-97 H2: task-start con origen bucle viene de `chain_next` ->
+  # `task-next.sh` -> `devkit-run.sh task-start`, un worker `nohup setsid` que
+  # no bloquea a `watch.sh` -a diferencia de `run_skill` (pr-review/task-fix/
+  # task-close/task-document), que corre con `--sync` y `wait`. Con el worker
+  # todavía en `ps` (fila `en curso`) pero sin `--sync /task-start` y un tick
+  # viejo, el caso 2 no debe tapar el SIN SEÑAL real.
+  local ts_esperando_log pslist_ts_esperando
+  ts_esperando_log="$tmp/task-start-esperando-watch.log"
+  printf '%s task-start-90 lanzando (origen=bucle) modelo=x esfuerzo=high ronda=-: "/task-start DEVKIT-90" log=%s/task-start-90.log\n' \
+    "$(date -u -d "@$((ahora - 300))" +%FT%TZ)" "$est" >"$ts_esperando_log"
+  printf '%s consultando GitHub\n' "$(date -u -d "@$((ahora - 2 * INTERVALO_BUCLE - 60))" +%FT%TZ)" \
+    >>"$ts_esperando_log"
+  pslist_ts_esperando="$tmp/ps-task-start-esperando"
+  printf '#!/usr/bin/env bash\ncat <<TABLA\n1 bash /workspace/devkit/scripts/watch.sh\n999 bash devkit-run.sh --worker /task-start DEVKIT-90 %s/task-start-90.log opus high 40\nTABLA\n' \
+    "$est" >"$pslist_ts_esperando"
+  chmod +x "$pslist_ts_esperando"
+  check "senal_bucle: task-start en curso con origen bucle, sin --sync en ps y tick viejo, no tapa SIN SEÑAL" 1 \
+    "$(PS_BIN="$pslist_ts_esperando" LOCK="$est/skill.lock" senal_bucle "$ts_esperando_log" "$ahora" \
+        | grep -c 'SIN SEÑAL hace')"
 
   # DEVKIT-81 H5, regla sin excepción: un `claude -p` vivo de cada origen real
   # -humano (terminal), bucle (run_skill lanza pr-review/task-fix/
@@ -5375,7 +5834,14 @@ $card_md"
     exit 0
     ;;
   --estado)
-    if [ "${2:-}" = --seguir ]; then seguir_estado; fi
+    # --todo (DEVKIT-97) desactiva el recorte de la tabla al alto de la
+    # terminal, en cualquier posición junto a --seguir.
+    case " ${2:-} ${3:-} " in *" --todo "*) export DEVKIT_ESTADO_TODO=1 ;; esac
+    if [ "${2:-}" = --seguir ] || [ "${3:-}" = --seguir ]; then seguir_estado; fi
+    # COLUMNS/LINES de verdad, tomados con tty real (DEVKIT-97 H1): mismo
+    # motivo que en seguir_estado, para que un `--estado` interactivo (sin
+    # `--seguir`) también recorte al tamaño real en vez del respaldo ancho.
+    if [ -t 1 ]; then export COLUMNS=$(tput cols 2>/dev/null) LINES=$(tput lines 2>/dev/null); fi
     mostrar_estado
     exit 0
     ;;
@@ -5442,7 +5908,7 @@ falta_valor() {  # falta_valor <valor>
 
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
-  echo "     devkit-run --estado [--seguir] | --tablero [--seguir] | --costos [<Clave>] | --test" >&2
+  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --costos [<Clave>] | --test" >&2
 }
 
 modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
