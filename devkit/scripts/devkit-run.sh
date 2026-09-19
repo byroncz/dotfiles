@@ -118,6 +118,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
+# Transcripción de cada `claude -p` real, junto a su log (DEVKIT-102): sin
+# ella, diagnosticar un caso como el del PR 68 -task-fix leyó una fila ajena
+# colada en su propio prompt- exige rastrear a mano los .jsonl de sesión bajo
+# `~/.claude/projects/`, que no llevan el nombre del lanzamiento y viven fuera
+# de /run/devkit. Configurable para que la autoprueba no toque el directorio
+# real.
+CLAUDE_PROJECTS_DIR="${DEVKIT_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 ROLES_FILE="${DEVKIT_ROLES_FILE:-}"
 if [ -z "$ROLES_FILE" ]; then
   if [ -f "$WS/.devkit/roles.toml" ]; then
@@ -731,6 +738,38 @@ $material"
     --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
       "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion" \
     </dev/null
+}
+
+# Copia recortada de la transcripción de un `claude -p` real, junto a su log
+# (DEVKIT-102). `<logf>` ya trae el JSON de resultado en su última línea, con
+# `session_id`: de ahí sale el nombre del `.jsonl` de sesión, bajo
+# `$CLAUDE_PROJECTS_DIR/<cwd con / por ->/`, la misma regla que usa Claude
+# Code para nombrar esa carpeta. Sin `session_id` (un log vacío o sin JSON,
+# por ejemplo un rc=3 de "nada que revisar") no hay nada que copiar.
+#
+# Se queda solo con el primer turno de usuario -trae el argumento tal como
+# llegó, `<command-args>` incluido: es lo que habría mostrado de inmediato que
+# el PR 68 recibió una fila ajena de PR 67 en vez de su propio argumento- y el
+# resultado ya presente en `<logf>`, no la sesión entera: una skill de quince
+# turnos deja un archivo de un puñado de líneas, no un volcado completo.
+#
+# Vive aquí y no en watch.sh (mudanza de DEVKIT-102, H2): así también cubre
+# `--worker` (task-start, task-close, epic-plan y `devkit-run <skill>
+# <Clave>` manual), no solo el bucle. Watch.sh la llama con `--guardar-
+# transcripcion` en vez de repetirla.
+guardar_transcripcion() {  # guardar_transcripcion <logf> <destino>
+  local logf=$1 destino=$2 session_id slug transcript primera
+  session_id=$(tail -1 "$logf" 2>/dev/null | jq -r '.session_id // empty' 2>/dev/null)
+  [ -n "$session_id" ] || return 0
+  slug=$(printf '%s' "$WS" | tr '/' '-')
+  transcript="$CLAUDE_PROJECTS_DIR/$slug/$session_id.jsonl"
+  [ -f "$transcript" ] || return 0
+  primera=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null | head -1)
+  [ -n "$primera" ] || return 0
+  {
+    printf '%s\n' "$primera"
+    tail -1 "$logf"
+  } > "$destino" 2>/dev/null
 }
 
 # Línea de costo/tokens/turnos/modelo/esfuerzo de un log ya terminado. La
@@ -4146,6 +4185,33 @@ FIN
   check "Notion conectada: el lanzamiento sigue normal" 'listo' \
     "$(jq -r .result "$tmp/run/notion-ok.log" 2>/dev/null)"
 
+  # --worker deja transcripción del claude -p real, igual que el bucle
+  # (DEVKIT-102, H2): antes solo watch.sh la guardaba (dentro de run_skill),
+  # así que un lanzamiento manual (`devkit-run task-fix 68`) o uno hecho por
+  # task-start/task-close/epic-plan (que también usan --worker) no dejaba
+  # nada que diagnosticar.
+  local trans2_dir trans2_slug trans2_doble
+  trans2_dir=$(mktemp -d "$tmp/trans2.XXXXXX")
+  trans2_slug=$(printf '%s' "$trans2_dir" | tr '/' '-')
+  mkdir -p "$trans2_dir/proyectos/$trans2_slug" "$trans2_dir/run"
+  cat >"$trans2_dir/proyectos/$trans2_slug/22222222-2222-2222-2222-222222222222.jsonl" <<'FIN'
+{"type":"user","message":{"role":"user","content":"/task-fix DEVKIT-94"}}
+{"type":"assistant","message":{"role":"assistant","content":"trabajando"}}
+FIN
+  trans2_doble="$tmp/claude-worker-transcripcion"
+  cat >"$trans2_doble" <<'FIN'
+#!/usr/bin/env bash
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3,"session_id":"22222222-2222-2222-2222-222222222222"}\n'
+FIN
+  chmod +x "$trans2_doble"
+  DEVKIT_CLAUDE_BIN="$trans2_doble" DEVKIT_RUN_DIR="$trans2_dir/run" DEVKIT_WS="$trans2_dir" \
+    DEVKIT_CLAUDE_PROJECTS_DIR="$trans2_dir/proyectos" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1.log" modelo-x high 40 >/dev/null 2>&1
+  check "--worker deja transcripción, sin pasar por watch.sh (rc)" 1 \
+    "$([ -f "$trans2_dir/run/task-fix-1-transcript.jsonl" ] && echo 1 || echo 0)"
+  check "--worker: la transcripción trae el primer mensaje de usuario" 1 \
+    "$(grep -c 'task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1-transcript.jsonl" 2>/dev/null)"
+
   # Sin Notion conectada (un doble que no entiende `mcp list` se ve igual que
   # un servidor caído), no corre el `claude -p` real y queda la alarma en vez
   # de gastar turnos pidiendo autorizar el conector.
@@ -5956,6 +6022,14 @@ case "${1:-}" in
     resumen "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
+  --guardar-transcripcion)
+    # --guardar-transcripcion <logf> <destino>: lo llama watch.sh tras su
+    # propio `--sync` (DEVKIT-102, H2), que redirige la salida de `claude -p`
+    # a un log que solo watch.sh conoce; `--worker` (más abajo) llama a
+    # `guardar_transcripcion` directo, porque ya tiene `$logf` a mano.
+    guardar_transcripcion "${2:-}" "${3:-}"
+    exit 0
+    ;;
   --worker)
     # --worker <prompt> <log> <modelo> <esfuerzo> <presupuesto> [manual] [ronda]: ya
     # corre dentro de un proceso desacoplado (nohup); toma el mismo candado
@@ -6026,6 +6100,11 @@ $card_md"
     kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
     flock -u 9
     exec 9>&-
+    # rc=3 (DEVKIT-93, "nada que revisar") corta antes de cualquier `claude
+    # -p` real: no hay session_id que buscar. Cubre task-start, task-close,
+    # epic-plan y `devkit-run <skill> <Clave>` manual (DEVKIT-102, H2): antes
+    # solo watch.sh dejaba transcripción.
+    [ "$rc" -eq 3 ] || guardar_transcripcion "$logf" "$RUN_DIR/$(basename "$logf" .log)-transcript.jsonl"
     estado=terminado
     if [ "$rc" -eq 3 ]; then
       # DEVKIT-93: review-prep.sh dijo que no había nada que revisar; el

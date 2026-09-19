@@ -78,13 +78,6 @@ WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 # devkit-run.sh no se importa de este archivo: repite la misma variable y las
 # mismas funciones (mismo patrón que INTERVALO_BUCLE en ese script).
 COSTOS_LOG_FILE="${DEVKIT_COSTOS_LOG:-$WS/.devkit/costos.log}"
-# Transcripción de cada `claude -p` real, junto a su log (DEVKIT-102): sin
-# ella, diagnosticar un caso como el del PR 68 -task-fix leyó una fila ajena
-# colada en su propio prompt- exige rastrear a mano los .jsonl de sesión bajo
-# `~/.claude/projects/`, que no llevan el nombre del lanzamiento y viven fuera
-# de /run/devkit. Configurable para que la autoprueba no toque el directorio
-# real.
-CLAUDE_PROJECTS_DIR="${DEVKIT_CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
 INTERVAL="${DEVKIT_WATCH_INTERVAL:-300}"
 MAX_CYCLES="${DEVKIT_WATCH_MAX_CYCLES:-3}"
 # `devkit-run.sh` es el único punto de lanzamiento (DEVKIT-45): resuelve
@@ -304,33 +297,6 @@ log() {
   linea="$(date +%FT%T%:z) $*"
   printf '%s\n' "$linea"
   costos_log "$linea"
-}
-
-# Copia recortada de la transcripción de un `claude -p` real, junto a su log
-# (DEVKIT-102). `<logf>` ya trae el JSON de resultado en su última línea, con
-# `session_id`: de ahí sale el nombre del `.jsonl` de sesión, bajo
-# `$CLAUDE_PROJECTS_DIR/<cwd con / por ->/`, la misma regla que usa Claude
-# Code para nombrar esa carpeta. Sin `session_id` (un log vacío o sin JSON,
-# por ejemplo un rc=3 de "nada que revisar") no hay nada que copiar.
-#
-# Se queda solo con el primer turno de usuario -trae el argumento tal como
-# llegó, `<command-args>` incluido: es lo que habría mostrado de inmediato que
-# el PR 68 recibió una fila ajena de PR 67 en vez de su propio argumento- y el
-# resultado ya presente en `<logf>`, no la sesión entera: una skill de quince
-# turnos deja un archivo de un puñado de líneas, no un volcado completo.
-guardar_transcripcion() {  # guardar_transcripcion <logf> <destino>
-  local logf=$1 destino=$2 session_id slug transcript primera
-  session_id=$(tail -1 "$logf" 2>/dev/null | jq -r '.session_id // empty' 2>/dev/null)
-  [ -n "$session_id" ] || return 0
-  slug=$(printf '%s' "$WS" | tr '/' '-')
-  transcript="$CLAUDE_PROJECTS_DIR/$slug/$session_id.jsonl"
-  [ -f "$transcript" ] || return 0
-  primera=$(jq -c 'select(.type == "user")' "$transcript" 2>/dev/null | head -1)
-  [ -n "$primera" ] || return 0
-  {
-    printf '%s\n' "$primera"
-    tail -1 "$logf"
-  } > "$destino" 2>/dev/null
 }
 
 # `cuota:<clave>` es la misma entrada, reescrita mientras la skill espera a que
@@ -572,8 +538,10 @@ run_skill() {
   exec 9>&-
   summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "${ronda:--}")
   # rc=3 (DEVKIT-93, "nada que revisar") corta antes de cualquier `claude -p`
-  # real: no hay session_id que buscar.
-  [ "$rc" -eq 3 ] || guardar_transcripcion "$logf" "$RUN_DIR/$name-transcript.jsonl"
+  # real: no hay session_id que buscar. `guardar_transcripcion` vive en
+  # devkit-run.sh (DEVKIT-102): así también cubre `--worker` (task-start,
+  # task-close, epic-plan y los lanzamientos manuales), no solo el bucle.
+  [ "$rc" -eq 3 ] || "$DEVKIT_RUN" --guardar-transcripcion "$logf" "$RUN_DIR/$name-transcript.jsonl"
   if [ $rc -eq 0 ]; then
     log "$name terminado: $summary"
     # Alarma 2 de 4: un `result` que termina en pregunta es la card en curso
