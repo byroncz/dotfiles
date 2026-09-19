@@ -709,15 +709,28 @@ $material"
   # entorno de quien llama (con marcas de sesión anidada de sobra) daría un
   # falso "no conectado" justo en el caso que la lista blanca de arriba
   # arregla.
+  #
+  # `</dev/null` en las dos llamadas de acá abajo no es decorativo, mismo
+  # motivo que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin
+  # esto, un lanzamiento hecho desde dentro de un `while read` sobre una
+  # tubería (watch.sh:1061, `gh pr list | while read -r num url title; do ...
+  # run_skill ...; done`) hereda esa tubería como su entrada estándar y se
+  # come la fila que le tocaba a la siguiente vuelta del bucle, que termina
+  # pegada al final del prompt real. Pasó con task-fix sobre el PR 68
+  # (DEVKIT-94): se tragó la fila de PR #67/DEVKIT-93 de `gh pr list` y la
+  # leyó como si fuera "texto recibido como argumento" (paso 3 de la skill),
+  # así que respondió un hallazgo `C1` inventado y nunca llegó a los cinco
+  # hallazgos reales del informe (DEVKIT-102).
   if [ "$NOTION_CHECK" != 0 ] \
-     && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
+     && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list </dev/null 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
     alarma_sin_notion "$1"
     return 67
   fi
   "${lanzador[@]}" "$CLAUDE_BIN" -p "$prompt" --model "$2" --effort "$3" --output-format json \
     --permission-mode acceptEdits \
     --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
-      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion"
+      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion" \
+    </dev/null
 }
 
 # Línea de costo/tokens/turnos/modelo/esfuerzo de un log ya terminado. La
@@ -2908,6 +2921,36 @@ FIN
   check "nada que revisar: no llama a claude -p (cero turnos de Opus)" 0 \
     "$(wc -l <"$tmp/claude-llamadas" | tr -d ' ')"
 
+  # --- run_claude no hereda la tubería de quien lo lanza (DEVKIT-102) --------
+  # `watch.sh:1061` recorre los PRs abiertos con `gh pr list | while read -r
+  # num url title; do ... done`; dentro de ese `while`, `run_skill` lanza
+  # `devkit-run.sh --sync` en segundo plano sin tocar su entrada estándar
+  # (watch.sh:530). Sin `</dev/null` en el `claude -p` real de `run_claude`,
+  # ese lanzamiento hereda la tubería y se come la fila que le tocaba a la
+  # siguiente vuelta del bucle -pasó con la fila de PR #67/DEVKIT-93 mientras
+  # se corregía el PR 68/DEVKIT-94-, y esa fila termina pegada al final del
+  # prompt real. El doble de abajo copia a un archivo lo que de verdad llega
+  # a su entrada estándar: con la tubería reproducida tal cual, ese archivo
+  # debe quedar vacío.
+  local traga_stdin
+  traga_stdin="$tmp/claude-traga-stdin"
+  cat >"$traga_stdin" <<FIN
+#!/usr/bin/env bash
+cat >"$tmp/stdin-recibido" 2>/dev/null
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$traga_stdin"
+  : >"$tmp/stdin-recibido"
+  printf 'fila-actual\tsim\tsim\nfila-de-otro-pr\thttps://example.com/pull/67\tDEVKIT-93 otro PR\n' | {
+    IFS=$'\t' read -r _sim_num _sim_url _sim_title
+    DEVKIT_CLAUDE_BIN="$traga_stdin" DEVKIT_ROLES_FILE="$tmp/roles.toml" \
+      DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-102" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+      bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' >/dev/null 2>&1 &
+    wait
+  }
+  check "el claude -p real no se come la fila que le tocaba al bucle (DEVKIT-102)" "" \
+    "$(cat "$tmp/stdin-recibido" 2>/dev/null)"
+
   # --- review-prep.sh de verdad: worktree y entorno heredado (DEVKIT-93, H1 y
   # H2 de la revisión del PR 67) ---------------------------------------------
   # Los dobles de más arriba nunca tocan gh, Notion ni crean un worktree de
@@ -3099,6 +3142,99 @@ FIN
   check "ciclo limpio: task-submit.sh sale con 0" 0 "$?"
   check "ciclo limpio: git status --porcelain queda vacío tras el ciclo completo" "" \
     "$(git -C "$ciclo_dir/ws" status --porcelain)"
+
+  # --- fix-publish.sh: guarda mecánica del paso 8 de task-fix (DEVKIT-102) ---
+  # Compara cada id de la respuesta contra los `H<n>` del informe CAMBIOS que
+  # declara atender (`review=` del propio marcador). El caso real del PR 68
+  # (DEVKIT-94): la respuesta solo traía "C1", que no está entre los
+  # hallazgos del informe -debía abortar en vez de publicarse.
+  local fp_dir
+  fp_dir=$(mktemp -d "$tmp/fp.XXXXXX")
+  cat >"$fp_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$(dirname "$0")/llamadas"
+campo="" prev="" con_jq=0
+for a in "$@"; do
+  [ "$a" = --jq ] && con_jq=1
+  [ "$prev" = --json ] && campo=$a
+  prev=$a
+done
+case "$1 $2" in
+  "pr view")
+    case "$campo" in
+      reviews)
+        printf '{"reviews":[{"submittedAt":"2026-01-01T00:00:00Z","body":"<!-- devkit-review sha=abc123 verdict=CAMBIOS -->\\nInforme.\\n<!-- devkit-findings -->\\nH1 | alta | a.sh:1 | falla algo | arreglarlo\\nH2 | media | b.sh:2 | falla otra cosa | arreglarla\\n<!-- /devkit-findings -->"}]}'
+        ;;
+      comments) [ "$con_jq" = 1 ] && echo "" || echo '{"comments":[]}' ;;
+      title) [ "$con_jq" = 1 ] && echo "DEVKIT-9305: probar fix-publish" || echo '{"title":"DEVKIT-9305: probar fix-publish"}' ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$fp_dir/gh-doble"
+  cat >"$fp_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9305"}' ;;
+  comentar) shift 2; printf '%s\n' "$*" >>"$(dirname "$0")/comentario" ;;
+esac
+FIN
+  chmod +x "$fp_dir/notion-doble"
+  local fp_env=(DEVKIT_GH_BIN="$fp_dir/gh-doble" DEVKIT_NOTION_BIN="$fp_dir/notion-doble" \
+    DEVKIT_RUN_DIR="$fp_dir/run" DEVKIT_WATCH_LOG="$fp_dir/run/watch.log")
+  mkdir -p "$fp_dir/run"
+
+  cat >"$fp_dir/respuesta-c1.md" <<'FIN'
+<!-- devkit-fix sha=def456 review=abc123 -->
+<!-- devkit-fixes -->
+C1 | descartado | hace referencia al PR #67, no a este PR
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-c1.md" >"$fp_dir/salida-c1.out" 2>"$fp_dir/salida-c1.err"
+  check "fix-publish.sh: un id ausente del informe aborta (rc)" 1 "$?"
+  check "fix-publish.sh: un id ausente no llega a comentar en el PR" 0 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+  check "fix-publish.sh: el motivo nombra el id y el sha del informe" 1 \
+    "$(cat "$fp_dir/salida-c1.out" "$fp_dir/salida-c1.err" | grep -c 'C1.*no está entre los hallazgos.*abc123')"
+  check "fix-publish.sh: el motivo queda en watch.log como ALARMA" 1 \
+    "$(grep -c 'ALARMA: fix-publish PR #9305 aborta' "$fp_dir/run/watch.log")"
+  check "fix-publish.sh: el motivo queda comentado en la card" 1 \
+    "$(grep -c 'fix-publish: la respuesta trae' "$fp_dir/comentario" 2>/dev/null)"
+  check "fix-publish.sh: borra el archivo de respuesta aunque aborte (mismo criterio que DEVKIT-99)" 1 \
+    "$([ -e "$fp_dir/respuesta-c1.md" ] && echo 0 || echo 1)"
+
+  cat >"$fp_dir/respuesta-h.md" <<'FIN'
+<!-- devkit-fix sha=def789 review=abc123 -->
+<!-- devkit-fixes -->
+H1 | atendido | def789
+H2 | descartado | fuera de alcance
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-h.md" >"$fp_dir/salida-h.out" 2>"$fp_dir/salida-h.err"
+  check "fix-publish.sh: todos los ids en el informe, publica (rc)" 0 "$?"
+  check "fix-publish.sh: todos los ids en el informe, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
+
+  # Respuesta a un comentario humano: `review=` es el headRefOid leído en el
+  # paso 2, no el sha de un informe CAMBIOS. Sin informe que coincida, no hay
+  # `devkit-findings` que cumplir y un C<n> se publica sin más (paso 3,
+  # tercera viñeta de task-fix/SKILL.md).
+  cat >"$fp_dir/respuesta-humano.md" <<'FIN'
+<!-- devkit-fix sha=def999 review=cafe00 manual=1 -->
+<!-- devkit-fixes -->
+C1 | atendido | def999
+<!-- /devkit-fixes -->
+FIN
+  : >"$fp_dir/llamadas"
+  env "${fp_env[@]}" bash "$HERE/fix-publish.sh" 9305 "$fp_dir/respuesta-humano.md" >"$fp_dir/salida-humano.out" 2>"$fp_dir/salida-humano.err"
+  check "fix-publish.sh: respuesta a comentario humano, sin informe que comparar, publica (rc)" 0 "$?"
+  check "fix-publish.sh: respuesta a comentario humano, llama a pr comment" 1 \
+    "$(grep -c '^pr comment' "$fp_dir/llamadas")"
 
   # --- Escalera de modelos por ronda (DEVKIT-61) ----------------------------
   # Tres rondas con modelo y esfuerzo distintos, para que cada ronda se vea en

@@ -29,3 +29,8 @@
 # (DEVKIT-99). Por si el script no llega a correr, o corre con
 # `--conservar` para depurar, no queda sin seguimiento en el workspace.
 /.devkit/review-*.md
+
+# Respuesta que redacta la skill task-fix, en tránsito hacia fix-publish.sh
+# (DEVKIT-102), mismo motivo y mismo patrón que /.devkit/review-*.md de
+# arriba: lo publica y lo borra al terminar, publique o no.
+/.devkit/fix-*.md
