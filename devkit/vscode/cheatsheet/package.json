@@ -9,7 +9,8 @@
   },
   "main": "./extension.js",
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onWebviewPanel:devkit.cheatsheet"
   ],
   "contributes": {
     "commands": [
