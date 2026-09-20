@@ -200,13 +200,23 @@ else
   # estado; y no es fatal para esta card si falla.
   padre_id=$(jq -r '.padre[0] // ""' <<<"$card")
   if [ -n "$padre_id" ]; then
-    if epica=$("$NOTION" pagina "$padre_id" 2>/dev/null) \
-        && [ "$(jq -r '.estado // ""' <<<"$epica")" = "Lista" ]; then
-      if "$NOTION" set "$padre_id" Estado="En progreso" >/dev/null; then
-        "$NOTION" comentar "$padre_id" "Arrancó su primera hija ($clave); pasa a En progreso." >/dev/null 2>&1
-      else
-        err "la Épica padre de $clave estaba en Lista, pero no pude pasarla a En progreso."
+    # Este bloque no es fatal para la card: si falla, el aviso por stderr se
+    # pierde solo (devkit-run.sh lo lee solo cuando el script sale con
+    # código distinto de 0). Un comentario en la card hija -que a esta
+    # altura ya existe y es lo que el humano mira- deja el rastro donde sí
+    # se ve (H2 de pr-review sobre el PR #80).
+    if epica=$("$NOTION" pagina "$padre_id" 2>/dev/null); then
+      if [ "$(jq -r '.estado // ""' <<<"$epica")" = "Lista" ]; then
+        if "$NOTION" set "$padre_id" Estado="En progreso" >/dev/null; then
+          "$NOTION" comentar "$padre_id" "Arrancó su primera hija ($clave); pasa a En progreso." >/dev/null 2>&1
+        else
+          err "la Épica padre de $clave estaba en Lista, pero no pude pasarla a En progreso."
+          "$NOTION" comentar "$id" "No pude pasar la Épica padre ($padre_id) de Lista a En progreso; revisar a mano." >/dev/null 2>&1
+        fi
       fi
+    else
+      err "la Épica padre de $clave no respondió; no pude comprobar su Estado."
+      "$NOTION" comentar "$id" "No pude leer la Épica padre ($padre_id) para comprobar si pasa a En progreso; revisar a mano." >/dev/null 2>&1
     fi
   fi
 fi
