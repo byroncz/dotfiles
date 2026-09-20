@@ -54,7 +54,10 @@ escapar() {
 # Convierte pares de comillas invertidas de markdown ("`texto`") en
 # <code>texto</code>, para que comandos.txt siga sirviendo tal cual al
 # README (que sí entiende markdown) y a la chuleta (que no). Se llama
-# después de escapar(), así que "texto" ya trae entidades HTML.
+# después de escapar(), así que "texto" ya trae entidades HTML. Si al
+# terminar quedó una comilla sin cerrar, imprime igual lo que armó hasta ahí
+# pero devuelve 1: el resto del documento no debe convertirse en código en
+# silencio por un typo (mismo criterio que cargar_filas).
 codigo_en_linea() {
   local s=$1 out="" tramo abierto=0
   while [[ $s == *'`'* ]]; do
@@ -70,6 +73,7 @@ codigo_en_linea() {
   done
   out+="$s"
   printf '%s' "$out"
+  return "$abierto"
 }
 
 cargar_filas() {  # cargar_filas <comandos.txt>: llena FILAS[comando]="ejemplo<TAB>descripcion"
@@ -170,8 +174,12 @@ HTML_HEAD
       fila="${FILAS[$comando]}"
       ejemplo="${fila%%$'\t'*}"
       descripcion="${fila#*$'\t'}"
+      descripcion_html="$(codigo_en_linea "$(escapar "$descripcion")")" || {
+        echo "gen-cheatsheet.sh: comillas invertidas sin cerrar en la descripción de \"$comando\": $descripcion" >&2
+        exit 2
+      }
       printf '<div class="tarjeta">\n  <div class="comando">%s</div>\n  <div class="ejemplo">$ %s</div>\n  <p class="descripcion">%s</p>\n</div>\n' \
-        "$(escapar "$comando")" "$(escapar "$ejemplo")" "$(codigo_en_linea "$(escapar "$descripcion")")"
+        "$(escapar "$comando")" "$(escapar "$ejemplo")" "$descripcion_html"
     done <<< "${BLOQUES[$bloque]}"
   done
 
@@ -210,6 +218,9 @@ if [ "${1:-}" = "--test" ]; then
   check "codigo_en_linea convierte varios pares" \
     "<code>a</code> y <code>b</code>" "$(codigo_en_linea '`a` y `b`')"
 
+  codigo_en_linea 'usa `pyproject.toml para todo' >/dev/null
+  check "codigo_en_linea con comilla sin cerrar devuelve 1" 1 "$?"
+
   BLOQUES_ORDEN="uno"
   declare -A BLOQUES=( [uno]="foo <x>
 bar" )
@@ -230,6 +241,12 @@ bar" )
       check "arma HTML con bloque, comando escapado y ejemplo" si si ;;
     *) check "arma HTML con bloque, comando escapado y ejemplo" si no ;;
   esac
+
+  BLOQUES_ORDEN="uno"
+  declare -A BLOQUES=( [uno]="foo <x>" )
+  declare -A FILAS=( ["foo <x>"]="foo 1"$'\t'"usa \`pyproject.toml para todo" )
+  ( armar ) >/dev/null 2>&1
+  check "descripción con comilla sin cerrar corta armar (código 2)" 2 "$?"
 
   # De aquí en más, contra el comandos.txt real: BLOQUES no se puede anular
   # por variable de entorno (a diferencia de SKILLS_ORDEN en gen-readme.sh),
