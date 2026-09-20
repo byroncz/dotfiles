@@ -28,6 +28,18 @@ function activate(context) {
     vscode.commands.registerCommand('devkit.cheatsheet.show', mostrarChuleta)
   );
 
+  // Sin esto, recargar la ventana (la forma normal de volver en
+  // openvscode-server) restaura la pestaña "devkit: comandos" y el workbench
+  // falla con "No serializer found for 'devkit.cheatsheet'", dejándola en
+  // blanco.
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('devkit.cheatsheet', {
+      deserializeWebviewPanel: async (panel) => {
+        panel.webview.html = leerHtml();
+      },
+    })
+  );
+
   const hayEditorAbierto = vscode.window.tabGroups.all.some((grupo) => grupo.tabs.length > 0);
   if (!hayEditorAbierto) {
     mostrarChuleta();
