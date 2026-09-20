@@ -53,85 +53,85 @@
 <div class="tarjeta">
   <div class="comando">devkit code &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit code ventas</div>
-  <p class="descripcion">Abre el editor VS Code del proyecto en el navegador.</p>
+  <p class="descripcion">Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit shell &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit shell ventas</div>
-  <p class="descripcion">Abre una shell dentro del contenedor.</p>
+  <p class="descripcion">Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit recreate &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit recreate ventas</div>
-  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron.</p>
+  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar <code>.devkit/devkit.toml</code> o, en modo dev, el propio <code>devkit/</code>.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit rebuild &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit rebuild ventas</div>
-  <p class="descripcion">Reconstruye las imágenes desde cero y recrea.</p>
+  <p class="descripcion">Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; <code>recreate</code> no alcanza.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit awake &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit awake ventas</div>
-  <p class="descripcion">Impide que el Mac se suspenda mientras el contenedor esté vivo.</p>
+  <p class="descripcion">Impide que el Mac se suspenda mientras el contenedor esté vivo. Úsalo antes de un lanzamiento largo sin supervisión, para que el Mac no lo corte al dormirse.</p>
 </div>
 <h2>agentes</h2>
 <div class="tarjeta">
-  <div class="comando">devkit-run --estado --seguir</div>
+  <div class="comando">devkit-run --estado [--seguir]</div>
   <div class="ejemplo">$ devkit-run --estado --seguir</div>
   <p class="descripcion">Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run --tablero --seguir</div>
+  <div class="comando">devkit-run --tablero [--seguir]</div>
   <div class="ejemplo">$ devkit-run --tablero --seguir</div>
-  <p class="descripcion">Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s.</p>
+  <p class="descripcion">Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run --seguir &lt;skill&gt; &lt;Clave&gt;</div>
+  <div class="comando">devkit-run &lt;skill&gt; &lt;Clave&gt;</div>
   <div class="ejemplo">$ devkit-run --seguir task-start DEVKIT-42</div>
-  <p class="descripcion">Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina.</p>
+  <p class="descripcion">Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit-run pr-review &lt;N&gt;</div>
   <div class="ejemplo">$ devkit-run pr-review 42</div>
-  <p class="descripcion">Revisa el PR número `&lt;N&gt;` como revisor independiente y publica el veredicto.</p>
+  <p class="descripcion">Revisa el PR número <code>&lt;N&gt;</code> como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit-run task-fix &lt;N&gt;</div>
   <div class="ejemplo">$ devkit-run task-fix 42</div>
-  <p class="descripcion">Corrige el PR número `&lt;N&gt;` según los hallazgos de la última revisión.</p>
+  <p class="descripcion">Corrige el PR número <code>&lt;N&gt;</code> según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.</p>
 </div>
 <h2>cards</h2>
 <div class="tarjeta">
   <div class="comando">task-close.sh &lt;Clave&gt; [PR]</div>
   <div class="ejemplo">$ task-close.sh DEVKIT-42 118</div>
-  <p class="descripcion">Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR.</p>
+  <p class="descripcion">Cierra una card mergeada: <code>Estado</code> a <code>Hecha</code> y marcador en el PR. Úsalo tras mergear a mano, cuando el bucle no la alcanzó a cerrar solo.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">task-block.sh &lt;Clave&gt; &lt;motivo&gt;</div>
   <div class="ejemplo">$ task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..."</div>
-  <p class="descripcion">Bloquea una card y anota el motivo.</p>
+  <p class="descripcion">Bloquea una card y anota el motivo. Úsalo cuando falte algo del humano y no puedas seguir sin preguntar.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit-net-denied</div>
   <div class="ejemplo">$ devkit-net-denied</div>
-  <p class="descripcion">Lista los dominios que el proxy rechazó recientemente.</p>
+  <p class="descripcion">Lista los dominios que el proxy rechazó recientemente. Úsalo cuando una conexión falle con "connection refused", para saber qué dominio falta en la lista blanca.</p>
 </div>
 <h2>Python</h2>
 <div class="tarjeta">
   <div class="comando">uv add &lt;paquete&gt;</div>
   <div class="ejemplo">$ uv add polars</div>
-  <p class="descripcion">Agrega una dependencia al proyecto y la fija en `pyproject.toml`.</p>
+  <p class="descripcion">Agrega una dependencia al proyecto y la fija en <code>pyproject.toml</code>. Úsalo para instalar una librería nueva.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">uv sync</div>
   <div class="ejemplo">$ uv sync</div>
-  <p class="descripcion">Instala en el entorno del proyecto exactamente las dependencias de `pyproject.toml`.</p>
+  <p class="descripcion">Instala en el entorno del proyecto exactamente las dependencias de <code>pyproject.toml</code>. Úsalo tras cambiar de rama o editar <code>pyproject.toml</code> a mano.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">uv run &lt;comando&gt;</div>
   <div class="ejemplo">$ uv run python etl.py</div>
-  <p class="descripcion">Corre un comando dentro del entorno del proyecto, sin activarlo a mano.</p>
+  <p class="descripcion">Corre un comando dentro del entorno del proyecto, sin activarlo a mano. Úsalo para ejecutar un script o una prueba puntual.</p>
 </div>
 </body>
 </html>
