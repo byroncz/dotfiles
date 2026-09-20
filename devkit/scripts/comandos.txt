@@ -1,51 +1,60 @@
-# devkit: fuente de la sección Comandos del README, generada por
-# gen-readme.sh. Una línea por comando: `nombre | qué hace`. Una línea que
-# empieza por `## ` abre un grupo nuevo (se vuelve un `###` en el README).
-# Los comentarios (`#` sin `|`) y las líneas vacías se ignoran.
+# devkit: fuente de la sección Comandos del README, de la entrada "Stack y
+# comandos del devkit" (Notion) y de la chuleta del editor (gen-cheatsheet.sh).
+# Una línea por comando: `comando | ejemplo | qué hace`. Una línea que empieza
+# por `## ` abre un grupo nuevo (se vuelve un `###` en el README). Los
+# comentarios (`#` sin `|`) y las líneas vacías se ignoran.
 
 ## En el Mac: `devkit`
-devkit up <proyecto> | Levanta los contenedores (construye la imagen si falta).
-devkit shell <proyecto> | Abre una shell dentro del contenedor.
-devkit code <proyecto> | Abre el editor VS Code del proyecto en el navegador.
-devkit stop <proyecto> | Detiene sin perder nada.
-devkit down <proyecto> | Destruye el contenedor; lo no commiteado se pierde.
-devkit recreate <proyecto> | Recrea los contenedores, reconstruyendo solo las capas que cambiaron.
-devkit rebuild <proyecto> | Reconstruye las imágenes desde cero y recrea.
-devkit update <proyecto> | Sube a la versión de template que pide `.devkit/devkit.toml`.
-devkit logs <proyecto> | Arranque y bucles del contenedor.
-devkit net-open <proyecto> | Red abierta en esta sesión, solo para depurar.
-devkit awake <proyecto> | Impide que el Mac se suspenda mientras el contenedor esté vivo.
-devkit ls | Lista los proyectos instanciados.
+devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta).
+devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del contenedor.
+devkit code <proyecto> | devkit code ventas | Abre el editor VS Code del proyecto en el navegador.
+devkit stop <proyecto> | devkit stop ventas | Detiene sin perder nada.
+devkit down <proyecto> | devkit down ventas | Destruye el contenedor; lo no commiteado se pierde.
+devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron.
+devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes desde cero y recrea.
+devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`.
+devkit logs <proyecto> | devkit logs ventas | Arranque y bucles del contenedor.
+devkit net-open <proyecto> | devkit net-open ventas | Red abierta en esta sesión, solo para depurar.
+devkit awake <proyecto> | devkit awake ventas | Impide que el Mac se suspenda mientras el contenedor esté vivo.
+devkit ls | devkit ls | Lista los proyectos instanciados.
 
 ## Dentro del contenedor
-claude | Abre Claude Code en el workspace.
-devkit-net-denied | Lista los dominios que el proxy rechazó recientemente.
-g | Alias de `git`.
-gs | Alias de `git status -sb`.
-gl | Alias de `git log` gráfico.
-ll | Alias de `ls -lah`.
-c | Alias de `clear`.
-devkit-run <skill> <Clave> | Lanza una skill en segundo plano, con el modelo y el esfuerzo que le tocan por rol.
-devkit-run --estado [--seguir] | Tabla de los últimos lanzamientos y el consumo de cuota, sin lanzar ningún agente.
-devkit-run --tablero [--seguir] | Cards activas del proyecto en una tabla de consola.
-devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
-devkit-run task-close <Clave> [PR] | Cierra una card con el PR mergeado, en bash.
-devkit-run task-block <Clave> <motivo> | Bloquea una card con un motivo, en bash.
+claude | claude | Abre Claude Code en el workspace.
+devkit-net-denied | devkit-net-denied | Lista los dominios que el proxy rechazó recientemente.
+g | g log --oneline | Alias de `git`.
+gs | gs | Alias de `git status -sb`.
+gl | gl | Alias de `git log` gráfico.
+ll | ll | Alias de `ls -lah`.
+c | c | Alias de `clear`.
+devkit-run --seguir <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina.
+devkit-run --estado --seguir | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
+devkit-run --tablero --seguir | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s.
+devkit-run pr-review <N> | devkit-run pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto.
+devkit-run task-fix <N> | devkit-run task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión.
+devkit-run --otros-agentes | devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
+devkit-run task-close <Clave> [PR] | devkit-run task-close DEVKIT-42 118 | Cierra una card con el PR mergeado, en bash.
+devkit-run task-block <Clave> <motivo> | devkit-run task-block DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card con un motivo, en bash.
+
+## Python
+uv add <paquete> | uv add polars | Agrega una dependencia al proyecto y la fija en `pyproject.toml`.
+uv sync | uv sync | Instala en el entorno del proyecto exactamente las dependencias de `pyproject.toml`.
+uv run <comando> | uv run python etl.py | Corre un comando dentro del entorno del proyecto, sin activarlo a mano.
 
 ## Scripts de `devkit/scripts/`
-gen-stack.sh | Genera la tabla Stack y la línea de extensiones del README.
-gen-readme.sh | Genera y verifica `README.md` completo desde la plantilla.
-devkit-run.sh | Único punto de lanzamiento de una skill (ver `devkit-run` más arriba).
-watch.sh | Bucle que revisa PRs abiertos y cierra los mergeados, lanzando la skill que toca.
-watch-test.sh | Prueba `watch.sh` sin GitHub y sin gastar cuota.
-notion.sh | Cliente de la API de Notion para bash: leer y escribir cards y Documentación.
-task-close.sh <Clave> [PR] | Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR.
-task-block.sh <Clave> <motivo> | Bloquea una card y anota el motivo.
-task-next.sh <Clave> | Lanza la siguiente hija libre de la Épica de la card.
-prompt-status.sh | Arma la línea dinámica del prompt de starship.
-dropbox-setup.sh | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`.
-sync-sandbox.sh | Respalda `sandbox.local/` en Dropbox cada minuto.
-slugify.sh | Convierte un texto libre en el slug de una rama.
-image-drift.sh | Lista qué del template solo entra por imagen y ya no coincide con ella.
-agents-sync.sh | Funde el `AGENTS.md` de un proyecto con la plantilla destino.
-pr-guard.sh | Hook que bloquea aprobar o mergear un PR, o exponer un token, desde `claude -p`.
+gen-stack.sh | gen-stack.sh | Genera la tabla Stack y la línea de extensiones del README.
+gen-readme.sh | gen-readme.sh | Genera y verifica `README.md` completo desde la plantilla.
+gen-cheatsheet.sh | gen-cheatsheet.sh | Genera y verifica `cheatsheet.html`, la chuleta de comandos del editor.
+devkit-run.sh | devkit-run.sh --estado | Único punto de lanzamiento de una skill (ver `devkit-run` más arriba).
+watch.sh | watch.sh | Bucle que revisa PRs abiertos y cierra los mergeados, lanzando la skill que toca.
+watch-test.sh | watch-test.sh | Prueba `watch.sh` sin GitHub y sin gastar cuota.
+notion.sh | notion.sh <endpoint> | Cliente de la API de Notion para bash: leer y escribir cards y Documentación.
+task-close.sh <Clave> [PR] | task-close.sh DEVKIT-42 118 | Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR.
+task-block.sh <Clave> <motivo> | task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card y anota el motivo.
+task-next.sh <Clave> | task-next.sh DEVKIT-1 | Lanza la siguiente hija libre de la Épica de la card.
+prompt-status.sh | prompt-status.sh | Arma la línea dinámica del prompt de starship.
+dropbox-setup.sh | dropbox-setup.sh | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`.
+sync-sandbox.sh | sync-sandbox.sh | Respalda `sandbox.local/` en Dropbox cada minuto.
+slugify.sh | slugify.sh "Chuleta de comandos" | Convierte un texto libre en el slug de una rama.
+image-drift.sh | image-drift.sh | Lista qué del template solo entra por imagen y ya no coincide con ella.
+agents-sync.sh | agents-sync.sh | Funde el `AGENTS.md` de un proyecto con la plantilla destino.
+pr-guard.sh | pr-guard.sh | Hook que bloquea aprobar o mergear un PR, o exponer un token, desde `claude -p`.

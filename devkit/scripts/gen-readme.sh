@@ -35,7 +35,9 @@ stack() {
 }
 
 # Agrupa devkit/scripts/comandos.txt (línea `## título` abre grupo, línea
-# `comando | descripción` es una fila) en tablas markdown por grupo.
+# `comando | ejemplo | descripción` es una fila) en tablas markdown por
+# grupo. El ejemplo es para la chuleta del editor (gen-cheatsheet.sh); el
+# README solo muestra comando y descripción.
 comandos() {  # comandos <comandos.txt>
   awk '
     BEGIN { FS = " \\| "; first = 1 }
@@ -55,7 +57,8 @@ comandos() {  # comandos <comandos.txt>
     {
       nombre = $1
       desc = $0
-      sub(/^[^|]*\| */, "", desc)
+      sub(/^[^|]*\| */, "", desc)   # quita "comando | "
+      sub(/^[^|]*\| */, "", desc)   # quita "ejemplo | "
       print "| `" nombre "` | " desc " |"
     }
   ' "$1"
@@ -115,7 +118,7 @@ if [ "${1:-}" = "--test" ]; then
   }
 
   printf '# t\n{{COMANDOS}}\n' > "$tmp/tmpl.md"
-  printf '# comentario\n\n## Grupo uno\nfoo | hace foo\nbar baz | hace bar baz\n## Grupo dos\nqux | hace qux\n' > "$tmp/comandos.txt"
+  printf '# comentario\n\n## Grupo uno\nfoo | foo -x | hace foo\nbar baz | bar baz -x | hace bar baz\n## Grupo dos\nqux | qux -x | hace qux\n' > "$tmp/comandos.txt"
   esperado='# t
 ### Grupo uno
 
