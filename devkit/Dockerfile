@@ -181,8 +181,14 @@ COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 # de README.md (que solo se regenera en la card de release, AGENTS.md), este
 # HTML lo sirve la imagen en vivo: el build corta si quedó viejo respecto a
 # comandos.txt.
-RUN bash /opt/devkit/scripts/gen-cheatsheet.sh --check
 COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/
+# gen-cheatsheet.sh calcula SALIDA por defecto como <devkit>/vscode/cheatsheet/
+# cheatsheet.html, ruta que en la imagen no existe (solo entrypoint.sh y
+# scripts/ viven bajo /opt/devkit): --check tiene que comparar contra el HTML
+# recién copiado a la carpeta de extensiones, así que se lo indica con la
+# variable que el script ya prevé.
+RUN DEVKIT_GEN_CHEATSHEET_SALIDA="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet.html" \
+    bash /opt/devkit/scripts/gen-cheatsheet.sh --check
 # Desde VS Code 1.80, extensions.json (ya escrito por el --install-extension
 # de más arriba) es el manifiesto autoritativo de qué extensiones carga
 # openvscode-server: una carpeta copiada a mano después no aparece ahí y
