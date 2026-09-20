@@ -191,6 +191,24 @@ else
     exit 1
   fi
   rama_actual="$rama_url"
+
+  # --- Épica: de Lista a En progreso con su primera hija (DEVKIT-109) -------
+  # task-close.sh exige que la Épica esté En progreso para cerrarla (regla de
+  # DEVKIT-44), pero nada la sacaba de Lista: DEVKIT-86 y DEVKIT-103
+  # quedaron con todas sus hijas Hecha y el humano tuvo que cerrarlas a
+  # mano. No toca la Épica si ya está En progreso, Hecha o en cualquier otro
+  # estado; y no es fatal para esta card si falla.
+  padre_id=$(jq -r '.padre[0] // ""' <<<"$card")
+  if [ -n "$padre_id" ]; then
+    if epica=$("$NOTION" pagina "$padre_id" 2>/dev/null) \
+        && [ "$(jq -r '.estado // ""' <<<"$epica")" = "Lista" ]; then
+      if "$NOTION" set "$padre_id" Estado="En progreso" >/dev/null; then
+        "$NOTION" comentar "$padre_id" "Arrancó su primera hija ($clave); pasa a En progreso." >/dev/null 2>&1
+      else
+        err "la Épica padre de $clave estaba en Lista, pero no pude pasarla a En progreso."
+      fi
+    fi
+  fi
 fi
 
 # --- Card lista: el volcado que evita que el agente consulte Notion --------
