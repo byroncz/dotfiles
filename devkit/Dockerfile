@@ -171,14 +171,18 @@ COPY --chown=${USER_UID}:${USER_GID} zsh/zshrc      /home/${USERNAME}/.zshrc
 COPY --chown=${USER_UID}:${USER_GID} zsh/starship.toml /home/${USERNAME}/.config/starship.toml
 COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/data/User/settings.json
 
+COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
+COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
+
 # Chuleta de comandos del editor (DEVKIT-96): extensión local, sin empaquetar
 # ni Open VSX (devkit/vscode/cheatsheet/, con su cheatsheet.html generado por
 # gen-cheatsheet.sh), copiada tal cual a la carpeta de extensiones.
-# openvscode-server la carga igual que una .vsix desempaquetada.
+# openvscode-server la carga igual que una .vsix desempaquetada. A diferencia
+# de README.md (que solo se regenera en la card de release, AGENTS.md), este
+# HTML lo sirve la imagen en vivo: el build corta si quedó viejo respecto a
+# comandos.txt.
+RUN bash /opt/devkit/scripts/gen-cheatsheet.sh --check
 COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/
-
-COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
-COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 
 # Copia de referencia de lo que solo entra por imagen. `entrypoint.sh` la
 # compara en modo dev con el devkit/ del workspace para avisar cuándo hace
