@@ -28,9 +28,9 @@ devkit shell <proyecto>
 devkit recreate <proyecto>
 devkit rebuild <proyecto>
 devkit awake <proyecto>"
-BLOQUES[agentes]="devkit-run --estado --seguir
-devkit-run --tablero --seguir
-devkit-run --seguir <skill> <Clave>
+BLOQUES[agentes]="devkit-run --estado [--seguir]
+devkit-run --tablero [--seguir]
+devkit-run <skill> <Clave>
 devkit-run pr-review <N>
 devkit-run task-fix <N>"
 BLOQUES[cards]="task-close.sh <Clave> [PR]
@@ -53,12 +53,19 @@ escapar() {
 
 cargar_filas() {  # cargar_filas <comandos.txt>: llena FILAS[comando]="ejemplo<TAB>descripcion"
   declare -gA FILAS=()
-  local linea c e d
-  while IFS='|' read -r c e d; do
+  local c e d resto
+  while IFS='|' read -r c e d resto; do
     c="$(printf '%s' "$c" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     e="$(printf '%s' "$e" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     d="$(printf '%s' "$d" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-    [ -n "$c" ] || continue
+    # Una fila que no trae exactamente tres campos no vacíos (por ejemplo,
+    # una fila vieja de dos columnas: "comando | descripción") no debe
+    # desaparecer contenido en silencio -gen-readme.sh sí acepta esa forma,
+    # pero acá "ejemplo" y "descripción" quedarían pisados uno por el otro-.
+    if [ -z "$c" ] || [ -z "$e" ] || [ -z "$d" ] || [ -n "$resto" ]; then
+      echo "gen-cheatsheet.sh: fila inválida en $1 (se esperan tres campos \`comando | ejemplo | descripción\`): $c|$e|$d|$resto" >&2
+      return 2
+    fi
     FILAS["$c"]="$e"$'\t'"$d"
   done < <(awk '!/^[[:space:]]*#/ && !/^[[:space:]]*$/' "$1")
 }
@@ -172,6 +179,11 @@ if [ "${1:-}" = "--test" ]; then
   check "parsea comando con placeholder" "foo 1	hace foo" "${FILAS['foo <x>']:-}"
   check "parsea comando simple" "bar	hace bar" "${FILAS['bar']:-}"
 
+  printf 'foo <x> | foo 1 | hace foo\nbar | hace bar\n' > "$tmp/comandos-degradado.txt"
+  cargar_filas "$tmp/comandos-degradado.txt" >/dev/null 2>&1
+  check "fila de dos columnas corta (código 2)" 2 "$?"
+  cargar_filas "$tmp/comandos.txt"  # restaura FILAS para los checks de abajo
+
   BLOQUES_ORDEN="uno"
   declare -A BLOQUES=( [uno]="foo <x>
 bar" )
@@ -216,7 +228,7 @@ case "${1:-}" in
 esac
 
 [ -f "$COMANDOS" ] || { echo "gen-cheatsheet.sh: no existe $COMANDOS" >&2; exit 2; }
-cargar_filas "$COMANDOS"
+cargar_filas "$COMANDOS" || exit 2
 validar_bloques || exit 2
 
 if [ "${1:-}" = "--check" ]; then
