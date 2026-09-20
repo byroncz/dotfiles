@@ -51,6 +51,27 @@ escapar() {
   printf '%s' "$s"
 }
 
+# Convierte pares de comillas invertidas de markdown ("`texto`") en
+# <code>texto</code>, para que comandos.txt siga sirviendo tal cual al
+# README (que sí entiende markdown) y a la chuleta (que no). Se llama
+# después de escapar(), así que "texto" ya trae entidades HTML.
+codigo_en_linea() {
+  local s=$1 out="" tramo abierto=0
+  while [[ $s == *'`'* ]]; do
+    tramo="${s%%\`*}"
+    s="${s#*\`}"
+    if [ "$abierto" -eq 0 ]; then
+      out+="$tramo<code>"
+      abierto=1
+    else
+      out+="$tramo</code>"
+      abierto=0
+    fi
+  done
+  out+="$s"
+  printf '%s' "$out"
+}
+
 cargar_filas() {  # cargar_filas <comandos.txt>: llena FILAS[comando]="ejemplo<TAB>descripcion"
   declare -gA FILAS=()
   local c e d resto
@@ -150,7 +171,7 @@ HTML_HEAD
       ejemplo="${fila%%$'\t'*}"
       descripcion="${fila#*$'\t'}"
       printf '<div class="tarjeta">\n  <div class="comando">%s</div>\n  <div class="ejemplo">$ %s</div>\n  <p class="descripcion">%s</p>\n</div>\n' \
-        "$(escapar "$comando")" "$(escapar "$ejemplo")" "$(escapar "$descripcion")"
+        "$(escapar "$comando")" "$(escapar "$ejemplo")" "$(codigo_en_linea "$(escapar "$descripcion")")"
     done <<< "${BLOQUES[$bloque]}"
   done
 
@@ -183,6 +204,11 @@ if [ "${1:-}" = "--test" ]; then
   cargar_filas "$tmp/comandos-degradado.txt" >/dev/null 2>&1
   check "fila de dos columnas corta (código 2)" 2 "$?"
   cargar_filas "$tmp/comandos.txt"  # restaura FILAS para los checks de abajo
+
+  check "codigo_en_linea convierte un par de comillas invertidas" \
+    "revisa el <code>PR</code> número" "$(codigo_en_linea 'revisa el `PR` número')"
+  check "codigo_en_linea convierte varios pares" \
+    "<code>a</code> y <code>b</code>" "$(codigo_en_linea '`a` y `b`')"
 
   BLOQUES_ORDEN="uno"
   declare -A BLOQUES=( [uno]="foo <x>
