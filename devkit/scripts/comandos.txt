@@ -26,9 +26,9 @@ gs | gs | Alias de `git status -sb`.
 gl | gl | Alias de `git log` gráfico.
 ll | ll | Alias de `ls -lah`.
 c | c | Alias de `clear`.
-devkit-run --seguir <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina.
-devkit-run --estado --seguir | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
-devkit-run --tablero --seguir | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s.
+devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina.
+devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
+devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s.
 devkit-run pr-review <N> | devkit-run pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto.
 devkit-run task-fix <N> | devkit-run task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión.
 devkit-run --otros-agentes | devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
