@@ -183,6 +183,15 @@ COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 # comandos.txt.
 RUN bash /opt/devkit/scripts/gen-cheatsheet.sh --check
 COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/
+# Desde VS Code 1.80, extensions.json (ya escrito por el --install-extension
+# de más arriba) es el manifiesto autoritativo de qué extensiones carga
+# openvscode-server: una carpeta copiada a mano después no aparece ahí y
+# queda en disco pero invisible para el editor. Se borra para forzar un
+# reescaneo del directorio completo; el grep corta el build si el reescaneo
+# no deja la extensión listada.
+RUN rm -f "$HOME/.openvscode-server/extensions/extensions.json" \
+ && openvscode-server --list-extensions --extensions-dir "$HOME/.openvscode-server/extensions" \
+    | grep -qx devkit.cheatsheet
 
 # Copia de referencia de lo que solo entra por imagen. `entrypoint.sh` la
 # compara en modo dev con el devkit/ del workspace para avisar cuándo hace
