@@ -545,7 +545,7 @@ cmd_activas() {  # cmd_activas <código>
     def clave($n): "\($codigo)-\($n)";
     [ .[] | {clave: clave(.properties.ID.unique_id.number), numero: .properties.ID.unique_id.number,
              estado: .properties.Estado.select.name, tipo: .properties.Tipo.select.name,
-             pr: (.properties.PR.url // "")} ]
+             nivel: .properties.Nivel.select.name, pr: (.properties.PR.url // "")} ]
     | sort_by(.numero) | map(del(.numero))
   ' <<<"$filas"
 }
@@ -974,15 +974,16 @@ $(hija card-59 59 epica-51),$(hija card-60 60 "")],\"has_more\":false}"
   # que la prueba solo pone en el fixture lo que ese filtro dejaría pasar
   # (DEVKIT-90, Hecha, quedaría fuera y por eso no entra aquí) y comprueba el
   # filtro enviado aparte, como hace la prueba de `epicas`.
-  activa() {  # activa <id> <numero> <estado> <tipo> <pr>
-    jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" --arg t "$4" --arg pr "$5" \
+  activa() {  # activa <id> <numero> <estado> <tipo> <pr> <nivel>
+    jq -nc --arg id "$1" --argjson n "$2" --arg e "$3" --arg t "$4" --arg pr "$5" --arg nv "$6" \
       '{id: $id, properties: {ID: {unique_id: {number: $n}}, Estado: {select: {name: $e}},
-        Tipo: {select: {name: $t}}, PR: {url: (if $pr == "" then null else $pr end)}}}'
+        Tipo: {select: {name: $t}}, Nivel: {select: {name: $nv}},
+        PR: {url: (if $pr == "" then null else $pr end)}}}'
   }
-  resp POST__databases_dbtareas_query "{\"results\":[$(activa card-89 89 "Lista para merge" bug https://github.com/o/r/pull/9),\
-$(activa card-88 88 "En progreso" feature "")],\"has_more\":false}"
-  check "activas: ordenadas por número, con Clave/Estado/Tipo/PR" \
-    '[{"clave":"DEVKIT-88","estado":"En progreso","tipo":"feature","pr":""},{"clave":"DEVKIT-89","estado":"Lista para merge","tipo":"bug","pr":"https://github.com/o/r/pull/9"}]' \
+  resp POST__databases_dbtareas_query "{\"results\":[$(activa card-89 89 "Lista para merge" bug https://github.com/o/r/pull/9 Tarea),\
+$(activa card-88 88 "En progreso" feature "" Épica)],\"has_more\":false}"
+  check "activas: ordenadas por número, con Clave/Estado/Tipo/Nivel/PR" \
+    '[{"clave":"DEVKIT-88","estado":"En progreso","tipo":"feature","nivel":"Épica","pr":""},{"clave":"DEVKIT-89","estado":"Lista para merge","tipo":"bug","nivel":"Tarea","pr":"https://github.com/o/r/pull/9"}]' \
     "$(env "${entorno[@]}" bash "$HERE/notion.sh" activas DEVKIT)"
   check "activas: el filtro cubre los cinco Estados activos" \
     '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"or":[{"property":"Estado","select":{"equals":"Lista"}},{"property":"Estado","select":{"equals":"En progreso"}},{"property":"Estado","select":{"equals":"Revisión automática"}},{"property":"Estado","select":{"equals":"Lista para merge"}},{"property":"Estado","select":{"equals":"Bloqueada"}}]}]}' \

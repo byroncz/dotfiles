@@ -18,8 +18,10 @@ Sin argumentos.
    <Clave> <PR>` (bash, desde DEVKIT-55). Si está `CLOSED` sin merge,
    bloquéala con `task-block.sh <Clave> "<motivo>"`, en el mismo directorio,
    pidiendo decisión.
-4. Cards `En progreso` del proyecto: verifica que su rama existe en origin.
-   Si no existe, coméntalo y ponla en `Lista`.
+4. Cards `En progreso` de `Nivel` Tarea del proyecto: verifica que su rama
+   existe en origin. Si no existe, coméntalo y ponla en `Lista`. Una Épica
+   nunca tiene rama, así que queda fuera de este paso sin importar cuánto
+   lleve `En progreso`.
 5. Detecta anomalías y lístalas:
    - Tareas (Nivel Tarea) sin `Padre` y sin `Prioridad`: huérfanas.
    - Cards en `Lista`, `En progreso`, `Revisión automática` o `Lista para
