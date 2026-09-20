@@ -1,0 +1,23 @@
+{
+  "name": "cheatsheet",
+  "displayName": "devkit: comandos",
+  "description": "Chuleta de comandos del devkit en el fondo del editor, generada de devkit/scripts/comandos.txt.",
+  "publisher": "devkit",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:devkit.cheatsheet"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "devkit.cheatsheet.show",
+        "title": "devkit: comandos"
+      }
+    ]
+  }
+}

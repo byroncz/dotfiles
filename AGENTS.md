@@ -86,6 +86,12 @@ adelante, la card de release.
   edita a mano. `gen-readme.sh --check` sale con 1 si el README commiteado
   quedó viejo. La card de release lo corre y actualiza también la entrada
   "Stack y comandos del devkit" con el mismo resumen.
+- El único modo de tocar `devkit/vscode/cheatsheet/cheatsheet.html` (la
+  chuleta de comandos del editor) es `devkit/scripts/gen-cheatsheet.sh`, desde
+  el mismo `comandos.txt`. Nunca se edita a mano. A diferencia de `README.md`,
+  el build de la imagen corre `gen-cheatsheet.sh --check` y corta si el HTML
+  commiteado quedó viejo: la imagen lo sirve en vivo, no es solo
+  documentación.
 
 ## Guía de redacción
 
