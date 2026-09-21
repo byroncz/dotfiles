@@ -365,7 +365,7 @@ log() {
 # despertar. La carrera entre el bucle y el relanzamiento al reescribir el
 # archivo es inocua: lo peor que pasa es repetir o perder una línea, y toda
 # skill es idempotente.
-launched() { grep -qxF "$1" "$LAUNCHED" || grep -qxF "cuota:$1" "$LAUNCHED"; }
+launched() { grep -qxF "$1" "$LAUNCHED" || grep -qxF "cuota:$1" "$LAUNCHED" || grep -qxF "transitorio:$1" "$LAUNCHED"; }
 paused() { grep -qxF "cuota:$1" "$LAUNCHED"; }
 mark() { echo "$1" >> "$LAUNCHED"; }
 unmark() { grep -vxF "$1" "$LAUNCHED" > "$LAUNCHED.tmp" 2>/dev/null; mv "$LAUNCHED.tmp" "$LAUNCHED"; }
@@ -546,25 +546,26 @@ transient_hit() {  # transient_hit <logf>
 }
 
 # Reintento con espera creciente (DEVKIT_WATCH_TRANSIENT_WAITS, 2/5/15 min por
-# defecto) y tope de $TRANSIENT_RETRIES intentos. A diferencia de
-# quota_pause, no deja ninguna marca de "en pausa": el sha nunca llegó a
-# lanzarse de verdad -la respuesta no tiene turnos ni costo-, así que
-# `launched()` debe seguir viéndolo libre mientras se reintenta o si se
-# agotan los intentos. Al cuarto fallo seguido no hace nada más: la ALARMA ya
+# defecto) y tope de $TRANSIENT_RETRIES intentos. Igual que `quota_pause`, la
+# entrada de `launched` se reescribe como `transitorio:<clave>` mientras el
+# reintento espera -el bucle principal no debe relanzar la misma skill por su
+# cuenta durante la espera- y vuelve a su forma normal justo antes de correr
+# `run_skill` de nuevo. Al cuarto fallo seguido no hace nada más: la ALARMA ya
 # quedó en watch.log (la registra `run_skill`, igual que cualquier otro
-# error) y el sha queda como hoy, sin marca.
+# error) y el sha queda marcado como hoy, sin relanzarse solo.
 transient_retry() {  # transient_retry <nombre> <prompt> <clave de launched o -> <intento> <log> [modelo forzado] [Clave]
   local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 forzado=${6:-} clave=${7:-} wait idx
-  [ "$key" = "-" ] || unmark "$key"
   if [ "$attempt" -gt "$TRANSIENT_RETRIES" ]; then
     log "$name sin más reintentos por error transitorio de la API (tope de $TRANSIENT_RETRIES); ver $logf"
     return
   fi
+  if [ "$key" != "-" ]; then unmark "$key"; mark "transitorio:$key"; fi
   idx=$((attempt - 1))
   wait=${TRANSIENT_WAITS[$idx]}
   log "$name reintento $attempt/$TRANSIENT_RETRIES por error transitorio de la API, en ${wait}s: ver $logf"
   (
     sleep "$wait"
+    if [ "$key" != "-" ]; then unmark "transitorio:$key"; mark "$key"; fi
     run_skill "$name" "$prompt" "$key" "$((attempt + 1))" "$forzado" "$clave"
   ) &
 }

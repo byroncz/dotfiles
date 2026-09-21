@@ -444,17 +444,44 @@ check_igual "no pasa del tope" 2 "$LLAMADAS"
 # de que el agente trabajara. `TRANSIENT_WAITS_OVERRIDE=1,1,1` deja las tres
 # esperas en un segundo cada una, así la prueba no tarda 22 minutos de verdad.
 
-# 529 en el turno 1: reintenta y, a diferencia de la cuota, no deja el sha
-# marcado como lanzado -ni durante el reintento ni después de que este
-# termine bien (DEVKIT-124, criterio de aceptación 1).
-PRESEED="revisar:9:abc1234" TRANSIENT_WAITS_OVERRIDE=1,1,1 corre_doble 1 "API Error: 529 Overloaded"
+# 529 en el turno 1: reintenta y, a diferencia de la cuota, la clave no
+# queda con su forma normal mientras el reintento espera -launched() la ve
+# ocupada como "transitorio:<clave>", no como "<clave>"- y termina marcada
+# como cualquier lanzamiento normal una vez que el reintento tiene éxito
+# (DEVKIT-124, criterio de aceptación 1). La primera espera se estira a 2s
+# (las otras quedan en 1s) para poder leer el estado intermedio antes de que
+# el reintento se dispare; se lanza en segundo plano porque `corre_doble` es
+# síncrona y no deja mirar nada hasta que termina todo el intento.
+dir529=$(mktemp -d -p "$TMP")
+mkdir -p "$dir529/run"
+echo "revisar:9:abc1234" > "$dir529/run/launched"
+OUT="$dir529/watch.log"
+DEVKIT_TEST_COUNT="$dir529/llamadas" DEVKIT_TEST_FAILS=1 DEVKIT_TEST_MSG="API Error: 529 Overloaded" \
+DEVKIT_TEST_SLEEP=0 DEVKIT_TEST_RESULT=listo DEVKIT_TEST_FAIL_TURNS=1 DEVKIT_TEST_FAIL_COST=0 \
+DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir529/run" DEVKIT_WS="$dir529" \
+DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+DEVKIT_ROLES_FILE="" DEVKIT_NOTION_BIN="" DEVKIT_TASK_BLOCK_BIN="" \
+DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 DEVKIT_WATCH_QUOTA_RETRIES=3 \
+DEVKIT_WATCH_TRANSIENT_WAITS=2,1,1 \
+DEVKIT_WATCH_SKILL_TIMEOUT=1200 DEVKIT_WATCH_SKILL_POLL=5 \
+  bash "$WATCH" --run-skill pr-review-9-abc1234 "/pr-review 9" "revisar:9:abc1234" "" >"$OUT" 2>&1 &
+pid529=$!
+for ((i = 0; i < 50; i++)); do
+  grep -qE 'reintento 1/3 por error transitorio' "$OUT" 2>/dev/null && break
+  sleep 0.05
+done
 check_log "línea de reintento 1/3 por error transitorio" \
-  'pr-review-9-abc1234 reintento 1/3 por error transitorio de la API, en 1s'
+  'pr-review-9-abc1234 reintento 1/3 por error transitorio de la API, en 2s'
+check_igual "durante la espera, la clave exacta no está lanzada" "" \
+  "$(grep -xF 'revisar:9:abc1234' "$dir529/run/launched" 2>/dev/null)"
+check_igual "durante la espera, launched() la ve ocupada como transitoria" "transitorio:revisar:9:abc1234" \
+  "$(tr '\n' ' ' <"$dir529/run/launched" 2>/dev/null | sed 's/ *$//')"
+wait "$pid529"
 # Éxito en el segundo intento: flujo normal, run_skill termina bien.
 check_log "la skill relanzada tras el 529 terminó bien" 'pr-review-9-abc1234 terminado'
-check_igual "la skill se lanzó dos veces (con el reintento)" 2 "$LLAMADAS"
-check_igual "el 529 no deja el sha marcado como lanzado" "" \
-  "$(tr '\n' ' ' <"$LAUNCHED_FILE" 2>/dev/null | sed 's/ *$//')"
+check_igual "la skill se lanzó dos veces (con el reintento)" 2 "$(cat "$dir529/llamadas" 2>/dev/null || echo 0)"
+check_igual "tras el éxito, la clave queda marcada como un lanzamiento normal" "revisar:9:abc1234" \
+  "$(tr '\n' ' ' <"$dir529/run/launched" 2>/dev/null | sed 's/ *$//')"
 
 # Cuatro fallos seguidos: tres reintentos (2, 5 y 15 min por defecto, acá
 # 1s) y al cuarto fallo deja de reintentar (criterio de aceptación 2). Cada
