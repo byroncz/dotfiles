@@ -72,10 +72,13 @@ lanzar_cola() {  # lanzar_cola <n>
   fi
   out=$("$DEVKIT_RUN" task-start "$siguiente" 2>&1)
   rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/cola-$n.log"
   estado=terminado
   [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
   printf '%s cola-%s %s: bash, lanzada la siguiente card: task-start %s :: %s\n' \
     "$(date +%FT%T%:z)" "$n" "$estado" "$siguiente" "$(printf '%s' "$out" | tail -1 | cut -c1-160)" >>"$WATCH_LOG"
+  [ "$rc" -eq 0 ] || printf '%s ALARMA: cola-%s terminó con error (rc=%s); ver %s/cola-%s.log\n' \
+    "$(date +%FT%T%:z)" "$n" "$rc" "$RUN_DIR" "$n" >>"$WATCH_LOG"
 }
 
 clave="${1:-}"
