@@ -2111,17 +2111,37 @@ ancho_de() {  # ancho_de <valor>...
   printf '%s' "$((max + 1))"
 }
 
-# SKILL: las cinco skills que dejan línea "lanzando" en watch.log (mismo
-# listado que costos_filas, arriba: task-start, pr-review, task-fix,
-# task-document, epic-plan; task-close y task-block son bash, DEVKIT-55, y no
-# aparecen aquí). LANZÓ: quién pidió el lanzamiento -"humano" es el respaldo
-# de origen_de sin ancestro reconocido, "bucle" lo pone run_skill de
-# watch.sh, "task-close" lo exporta task-close.sh (DEVKIT_ORIGEN) y también
-# es el origen fijo que costos_filas asigna al cierre bash del PR- o
-# cualquiera de esas mismas cinco skills como ancestro (origen_de: un
-# `claude -p /epic-plan` lanzando `task-start`, por ejemplo, deja
-# origen=epic-plan).
-SKILLS_CON_LANZAMIENTO=(task-start pr-review task-fix task-document epic-plan)
+# SKILL: cualquier skill real que `devkit-run <skill> <arg>` pueda lanzar deja
+# línea "lanzando" en watch.log (autoprueba de /task-submit, línea ~6852);
+# task-close y task-block son bash, DEVKIT-55, y no aparecen aquí. Se leen los
+# directorios de skills instalados -$WS/.claude/skills, el símlink al
+# template (AGENTS.md)-, con $HERE/../agents/skills como alternativa en modo
+# dev (este mismo repo, antes de reinstalar la imagen); si ninguno de los dos
+# tiene skills, cae al listado fijo de siempre (DEVKIT-131 H1: una lista a
+# mano de cinco se quedó corta contra las 11 reales -template-propagate, la
+# más larga, desbordaba ANCHO_SKILL-). LANZÓ: quién pidió el lanzamiento
+# -"humano" es el respaldo de origen_de sin ancestro reconocido, "bucle" lo
+# pone run_skill de watch.sh, "task-close" lo exporta task-close.sh
+# (DEVKIT_ORIGEN) y también es el origen fijo que costos_filas asigna al
+# cierre bash del PR- o cualquiera de esas mismas skills como ancestro
+# (origen_de: un `claude -p /epic-plan` lanzando `task-start`, por ejemplo,
+# deja origen=epic-plan).
+skills_lanzables() {
+  local base dir encontrados=()
+  for base in "$WS/.claude/skills" "$HERE/../agents/skills"; do
+    encontrados=()
+    for dir in "$base"/*/; do
+      [ -f "${dir}SKILL.md" ] || continue
+      encontrados+=("$(basename "$dir")")
+    done
+    if [ "${#encontrados[@]}" -gt 0 ]; then
+      printf '%s\n' "${encontrados[@]}" | sort
+      return 0
+    fi
+  done
+  printf '%s\n' task-start pr-review task-fix task-document epic-plan
+}
+mapfile -t SKILLS_CON_LANZAMIENTO < <(skills_lanzables)
 ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
 
 # ESTADO: cada estado que arma estado_filas (comentario de esa función,
@@ -5833,6 +5853,22 @@ FIN
   check "ESTADO=sin registro no corre la columna MODELO, alineada con la cabecera" \
     "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
   unset off_hace_131 fila_lanzo_131 off_modelo_131 fila_estado_131
+
+  # DEVKIT-131 H1: SKILL salía de una lista fija de cinco nombres, y
+  # template-propagate (18) ya no entraba en ANCHO_SKILL=14. El skill más
+  # largo se toma de SKILLS_CON_LANZAMIENTO, la misma lista que arma
+  # ANCHO_SKILL -si crece con un nombre más largo, este caso lo sigue sin
+  # tocarlo a mano.
+  skill_mas_largo_131=""
+  for _skill_131 in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+    [ "${#_skill_131}" -gt "${#skill_mas_largo_131}" ] && skill_mas_largo_131=$_skill_131
+  done
+  fila_skill_131=$(COLUMNS=200 formatear_fila "$skill_mas_largo_131" DEVKIT-13 humano 1m 1m terminó sonnet/high -/40 - 0 1 0)
+  check "SKILL=<skill más largo> no corre la columna CARD, alineada con la cabecera" \
+    "$(rellenar "$skill_mas_largo_131" "$ANCHO_SKILL")" "${fila_skill_131:0:$ANCHO_SKILL}"
+  check "SKILL=<skill más largo>: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_skill_131} - 1))"
+  unset _skill_131 skill_mas_largo_131 fila_skill_131
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
