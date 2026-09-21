@@ -1310,7 +1310,7 @@ esperando_aprobacion() {
   IFS=$'\t' read -r ts activas <"$MERGE_CACHE"
   edad=$(( $(date +%s) - ts ))
   [ "$edad" -lt "$MERGE_TTL" ] || refrescar_merge_bg
-  jq -r '[.[] | select(.estado == "Lista para merge")] | sort_by(.clave) | .[0].clave // empty' \
+  jq -r '[.[] | select(.estado == "Lista para merge")] | .[0].clave // empty' \
     <<<"$activas" 2>/dev/null
 }
 
@@ -6782,7 +6782,7 @@ FIN
   check "ultima_actividad_ts: sin ningún cierre todavía, vacío (rc=1)" 1 \
     "$(ultima_actividad_ts "$espera_solo_arranque/watch.log" >/dev/null 2>&1; echo $?)"
 
-  local merge_vacio merge_con
+  local merge_vacio merge_con merge_digitos
   merge_vacio="$tmp/merge-vacio"
   mkdir -p "$merge_vacio"
   printf '%s\t%s\n' "$(date +%s)" '[]' >"$merge_vacio/merge.cache"
@@ -6795,6 +6795,14 @@ FIN
     >"$merge_con/merge.cache"
   check "esperando_aprobacion: la Clave en Lista para merge" "DEVKIT-30" \
     "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" esperando_aprobacion)"
+
+  merge_digitos="$tmp/merge-digitos"
+  mkdir -p "$merge_digitos"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-97","estado":"Lista para merge","tipo":"bug","nivel":"Tarea","pr":""},{"clave":"DEVKIT-133","estado":"Lista para merge","tipo":"feature","nivel":"Tarea","pr":""}]' \
+    >"$merge_digitos/merge.cache"
+  check "esperando_aprobacion: la más antigua, no la que ordena antes como texto" "DEVKIT-97" \
+    "$(MERGE_CACHE="$merge_digitos/merge.cache" MERGE_LOCK="$merge_digitos/merge.lock" esperando_aprobacion)"
 
   check "fila_en_espera: HACE y DURÓ iguales, desde el último terminado (15m)" "15m|15m|en espera|cola vacía" \
     "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
