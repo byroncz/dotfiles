@@ -16,11 +16,11 @@ function leerHtml() {
   return fs.readFileSync(path.join(__dirname, 'cheatsheet.html'), 'utf8');
 }
 
-function mostrarChuleta() {
+function mostrarChuleta(viewColumn = vscode.ViewColumn.One, preserveFocus = false) {
   const panel = vscode.window.createWebviewPanel(
     VIEW_TYPE,
     TITULO,
-    vscode.ViewColumn.One,
+    { viewColumn, preserveFocus },
     { enableScripts: false }
   );
   panel.webview.html = leerHtml();
@@ -31,6 +31,11 @@ function esPestañaDeArchivo(tab) {
   return tab.input instanceof vscode.TabInputText
     || tab.input instanceof vscode.TabInputTextDiff
     || tab.input instanceof vscode.TabInputNotebook;
+}
+
+function esPestañaDeChuleta(tab) {
+  return tab.input instanceof vscode.TabInputWebview
+    && tab.input.viewType.endsWith(VIEW_TYPE);
 }
 
 async function activate(context) {
@@ -47,16 +52,26 @@ async function activate(context) {
   );
 
   const pestañas = vscode.window.tabGroups.all.flatMap((grupo) => grupo.tabs);
-  if (pestañas.some(esPestañaDeArchivo)) return;
+  const hayArchivo = pestañas.some(esPestañaDeArchivo);
 
   // openvscode-server no invoca el serializer de arriba al recargar la
   // ventana: la pestaña "devkit: comandos" vuelve en la lista de pestañas
-  // pero sin contenido. Se cierra esa pestaña en blanco y se abre una nueva
-  // con el html en vez de confiar en que el serializer la repare.
-  const restaurada = pestañas.find((tab) => tab.label === TITULO);
-  if (restaurada) {
-    await vscode.window.tabGroups.close(restaurada);
+  // pero sin contenido. Se repara siempre, haya o no un archivo abierto -si
+  // no se repara cuando hay un archivo abierto, un reload normal (chuleta
+  // abierta, se abre un archivo, Reload Window) la deja en blanco para
+  // siempre-. Se cierran todas las coincidencias (pudo quedar restaurada en
+  // más de un grupo) y se reabre en la misma columna, sin robar el foco si
+  // hay un archivo abierto.
+  const restauradas = pestañas.filter(esPestañaDeChuleta);
+  if (restauradas.length > 0) {
+    const columna = restauradas[0].group.viewColumn;
+    await vscode.window.tabGroups.close(restauradas);
+    mostrarChuleta(columna, hayArchivo);
+    return;
   }
+
+  if (hayArchivo) return;
+
   mostrarChuleta();
 }
 
