@@ -2096,22 +2096,76 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho de cada columna fija antes de DETALLE (DEVKIT-97, ESTADO ensanchada a
-# 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en DEVKIT-107). Angostadas en
-# DEVKIT-107 H1 a lo que de verdad usan: SKILL 14 (task-document mide 13,
-# el nombre más largo), CARD 12 (DEVKIT-9999 mide 11, más un espacio de
-# separador -DEVKIT-107 H4: `rellenar` no lo agrega cuando el texto ya llena
-# el ancho, así que sin ese espacio de más "DEVKIT-1000" pegaba con LANZÓ),
-# LANZÓ 8 ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ
-# usan minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
-ANCHO_SKILL=14
-ANCHO_CARD=12
-ANCHO_LANZO=8
-ANCHO_HACE=7
-ANCHO_DURO=7
-ANCHO_ESTADO=16
-ANCHO_MODELO=16
-ANCHO_TURNOS=9
+# Ancho de una columna fija: la longitud del valor posible más largo, más un
+# espacio de separación con la siguiente (DEVKIT-131). `rellenar` no agrega
+# ese espacio cuando el texto ya llena el ancho (DEVKIT-107 H4), así que tiene
+# que venir incluido acá. Sin este cálculo cada ANCHO_* se fijaba a mano
+# contra una foto de los valores del momento, y un valor nuevo la desbordaba
+# en silencio corriendo el resto de la fila -caso real: ANCHO_LANZO=8 no
+# alcanzaba para "task-close" (10).
+ancho_de() {  # ancho_de <valor>...
+  local max=0 v
+  for v in "$@"; do
+    [ "${#v}" -gt "$max" ] && max=${#v}
+  done
+  printf '%s' "$((max + 1))"
+}
+
+# SKILL: las cinco skills que dejan línea "lanzando" en watch.log (mismo
+# listado que costos_filas, arriba: task-start, pr-review, task-fix,
+# task-document, epic-plan; task-close y task-block son bash, DEVKIT-55, y no
+# aparecen aquí). LANZÓ: quién pidió el lanzamiento -"humano" es el respaldo
+# de origen_de sin ancestro reconocido, "bucle" lo pone run_skill de
+# watch.sh, "task-close" lo exporta task-close.sh (DEVKIT_ORIGEN) y también
+# es el origen fijo que costos_filas asigna al cierre bash del PR- o
+# cualquiera de esas mismas cinco skills como ancestro (origen_de: un
+# `claude -p /epic-plan` lanzando `task-start`, por ejemplo, deja
+# origen=epic-plan).
+SKILLS_CON_LANZAMIENTO=(task-start pr-review task-fix task-document epic-plan)
+ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
+
+# ESTADO: cada estado que arma estado_filas (comentario de esa función,
+# arriba: en curso, terminó, error, bloqueada, no arrancó, no lanzó, y "sin
+# registro" como único valor del caso por defecto) con su glifo -el de UTF-8
+# y el de respaldo ASCII (utf8_disponible), porque sin locale UTF-8 el
+# respaldo puede medir más que el icono real ("!! bloqueada" son 12, dos más
+# que "⊘ bloqueada"-.
+ESTADOS_CON_GLIFO=(
+  "⠿ en curso" "* en curso"
+  "✔ terminó" "ok terminó"
+  "✖ error" "x error"
+  "⊘ bloqueada" "!! bloqueada"
+  "○ no arrancó" "o no arrancó"
+  "○ no lanzó" "o no lanzó"
+  "⚠ sin registro" "! sin registro"
+)
+
+# MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera`
+# (roles.toml, DEVKIT-131: el alias, no un número a mano) y el resto en su
+# forma más larga real -"/medium r9": "medium" es el esfuerzo más largo que
+# acepta `--esfuerzo` (línea de uso, arriba) y una ronda de un dígito es la
+# que se ve en la práctica-.
+mapfile -t ALIAS_FRONTERA < <(frontera_list)
+[ "${#ALIAS_FRONTERA[@]}" -gt 0 ] || ALIAS_FRONTERA=(fable opus sonnet)
+MODELOS_CON_ESFUERZO=()
+for _alias_frontera in "${ALIAS_FRONTERA[@]}"; do
+  MODELOS_CON_ESFUERZO+=("$_alias_frontera/medium r9")
+done
+unset _alias_frontera
+
+ANCHO_SKILL=$(ancho_de "${SKILLS_CON_LANZAMIENTO[@]}")
+ANCHO_CARD=12  # sin cambios (DEVKIT-107 H4): DEVKIT-9999 mide 11, más el espacio de separación.
+ANCHO_LANZO=$(ancho_de "${ORIGENES_LANZAMIENTO[@]}")
+# HACE/DURÓ: la forma más larga que devuelve `hace()` es "23h59m" (6);
+# "59m59s" no ocurre, `hace()` no combina minutos y segundos.
+ANCHO_HACE=$(ancho_de "23h59m")
+ANCHO_DURO=$ANCHO_HACE
+ANCHO_ESTADO=$(ancho_de "${ESTADOS_CON_GLIFO[@]}")
+ANCHO_MODELO=$(ancho_de "${MODELOS_CON_ESFUERZO[@]}")
+# TURNOS: "<turnos_usados>/<presupuesto>[!]"; la forma más larga real hoy es
+# "125/120!" (8), contra `presupuesto.task-start` (roles.toml), el más alto
+# de las cinco skills de arriba -un exceso real no le suma un dígito más.
+ANCHO_TURNOS=$(ancho_de "125/120!")
 ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
@@ -5757,6 +5811,28 @@ FIN
   check "columna CARD deja un espacio antes de LANZÓ con una Clave de 11 caracteres" si \
     "$(COLUMNS=200 formatear_fila task-start DEVKIT-9999 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0 \
         | grep -qF 'DEVKIT-9999 bucle' && echo si || echo no)"
+
+  # DEVKIT-131: ANCHO_LANZO se fijaba a mano (8) y no le entraba "task-close"
+  # (10) -la fila entera se corría dos columnas hacia la derecha, y con ella
+  # el resto de la tabla-. Ahora sale de ORIGENES_LANZAMIENTO (junto a los
+  # demás ANCHO_*, arriba). Esta fila prueba el caso real: task-close como
+  # LANZÓ (no como SKILL, que ya cubría la fila de "estado más largo" de
+  # abajo), comparando contra el mismo desplazamiento que usa `encabezado_tabla`.
+  off_hace_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO))
+  fila_lanzo_131=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 task-close 5m 5m terminó opus/high 3/60 - 0 1 0)
+  check "LANZÓ=task-close: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_lanzo_131} - 1))"
+  check "LANZÓ=task-close no corre la columna HACE, alineada con la cabecera" \
+    "$(rellenar 5m "$ANCHO_HACE")" "${fila_lanzo_131:$off_hace_131:$ANCHO_HACE}"
+
+  # Misma prueba de alineación para el otro extremo: el estado más largo
+  # ("⚠ sin registro", 14) tampoco debe correr la columna que sigue a ESTADO
+  # (MODELO).
+  off_modelo_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
+  fila_estado_131=$(COLUMNS=200 formatear_fila task-document DEVKIT-9 humano 8m 8m "sin registro" fable/max -/40 - 0 1 0)
+  check "ESTADO=sin registro no corre la columna MODELO, alineada con la cabecera" \
+    "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
+  unset off_hace_131 fila_lanzo_131 off_modelo_131 fila_estado_131
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
