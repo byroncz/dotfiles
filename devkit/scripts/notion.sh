@@ -360,7 +360,35 @@ cmd_documentacion() {  # cmd_documentacion <page_id> [clave]
 # por línea en blanco -como "Por qué" o "Modelos"- se pegaban en uno solo,
 # porque la línea en blanco no tocaba el estado y la siguiente línea seguía
 # viendo el párrafo anterior como continuable.
-MD_BLOQUES="$TRAMOS_DEF"'
+# Lenguajes válidos para un bloque de código de Notion (tipo Language del SDK
+# oficial @notionhq/client): la API responde 400 -y tira la tanda entera de
+# agregar_bloques() (DEVKIT-127)- si el bloque trae uno fuera de esta lista.
+# task-document.sh arma los ``` a partir de lo que trae el cuerpo del PR
+# (bloques ```sh de comandos, por ejemplo), así que hace falta normalizar acá
+# en vez de confiar en que el Markdown ya traiga un lenguaje válido.
+LENGUAJE_DEF='
+def lenguajes_validos: ["abap","agda","arduino","ascii art","assembly","bash",
+  "basic","bnf","c","c#","c++","clojure","coffeescript","coq","css","dart",
+  "dhall","diff","docker","ebnf","elixir","elm","erlang","f#","flow","fortran",
+  "gherkin","glsl","go","graphql","groovy","haskell","hcl","html","idris",
+  "java","javascript","json","julia","kotlin","latex","less","lisp",
+  "livescript","llvm ir","lua","makefile","markdown","markup","matlab",
+  "mathematica","mermaid","nix","notion formula","objective-c","ocaml",
+  "pascal","perl","php","plain text","powershell","prolog","protobuf",
+  "purescript","python","r","racket","reason","ruby","rust","sass","scala",
+  "scheme","scss","shell","smalltalk","solidity","sql","swift","toml",
+  "typescript","vb.net","verilog","vhdl","visual basic","webassembly","xml",
+  "yaml","java/c/c++/c#"];
+def alias_lenguaje: {"sh": "bash", "shell": "bash", "zsh": "bash"};
+def lenguaje_notion:
+  (. // "" | ascii_downcase) as $l
+  | if (alias_lenguaje | has($l)) then alias_lenguaje[$l]
+    elif (lenguajes_validos | index($l)) then $l
+    else "plain text"
+    end;
+'
+
+MD_BLOQUES="$TRAMOS_DEF$LENGUAJE_DEF"'
 def bloque($tipo; $contenido):
   {object: "block", type: $tipo, ($tipo): {rich_text: (recortar($contenido) | map(. + {type: "text"}))}};
 def es_continuable: . == "paragraph" or . == "bulleted_list_item" or . == "numbered_list_item";
@@ -370,7 +398,7 @@ def es_continuable: . == "paragraph" or . == "bulleted_list_item" or . == "numbe
       if .en_codigo then
         if ($l | test("^```")) then
           .items += [{tipo: "code", contenido: (.codigo | rtrimstr("\n")),
-                      lenguaje: (if .lenguaje == "" then "plain text" else .lenguaje end)}]
+                      lenguaje: (.lenguaje | lenguaje_notion)}]
           | .en_codigo = false | .codigo = "" | .lenguaje = "" | .corte = false
         else
           .codigo += ($l + "\n")
@@ -847,10 +875,20 @@ echo chau
   check "MD_BLOQUES: tipos de bloque en orden" \
     '["heading_2","paragraph","bulleted_list_item","bulleted_list_item","code","heading_3"]' \
     "$(jq -c '[.[].type]' <<<"$got")"
-  check "MD_BLOQUES: el código conserva las dos líneas y el lenguaje" \
-    '{"lang":"sh","texto":"echo hola\necho chau"}' \
+  check "MD_BLOQUES: el código conserva las dos líneas y normaliza sh a bash (DEVKIT-127)" \
+    '{"lang":"bash","texto":"echo hola\necho chau"}' \
     "$(jq -c '.[4].code | {lang: .language, texto: (.rich_text[0].text.content)}' <<<"$got")"
   check "MD_BLOQUES: una línea en blanco no deja bloque vacío" 6 "$(jq 'length' <<<"$got")"
+
+  # DEVKIT-127: un lenguaje fuera de la lista de Notion (la API responde 400
+  # y agregar_bloques() pierde la tanda entera) cae a "plain text" en vez de
+  # viajar tal cual.
+  got=$(jq -nc --arg md '```cobol
+IDENTIFICATION DIVISION.
+```' "$MD_BLOQUES")
+  check "MD_BLOQUES: un lenguaje que Notion no reconoce cae a plain text" \
+    '"plain text"' \
+    "$(jq -c '.[0].code.language' <<<"$got")"
 
   # H3 (informe del PR 66): líneas cortadas a columna fija -como las que
   # arma task-document.sh a partir del cuerpo del PR- se unen al párrafo o al
