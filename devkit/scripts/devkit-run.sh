@@ -712,12 +712,28 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
 # sumo leer, no empujar un cambio. task-start, task-fix y epic-plan sí
 # escriben la rama de la card: siguen con el perfil amplio de siempre.
 #
-# Solo pr-review recibe además permiso para correr `--test` de cualquier
-# script del worktree que `review-prep.sh` ya dejó armado (DEVKIT-93): las
-# comprobaciones mecánicas fijas de la rúbrica (`devkit-run.sh --test`,
-# `watch-test.sh`) ya corrieron y están en `## Material`, pero un criterio
-# de la card puede pedir el `--test` de otro script (p. ej. `pr-guard.sh`)
-# que esa lista fija no cubre.
+# Los patrones de Bash van con la ruta real de $HERE, nunca con la sintaxis
+# `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` que usan las skills de
+# perfil amplio: Claude Code rechaza con "Contains expansion" cualquier
+# comando que traiga una expansión de variable, antes de mirar la lista
+# allow, así que un patrón con esa sintaxis nunca hace match (DEVKIT-125,
+# revisión del PR 92, H1). `run_claude` inyecta la misma ruta real como texto
+# plano en la primera línea del prompt para que la skill arme el comando sin
+# `$` de por medio.
+#
+# Solo pr-review recibe además permiso para correr `--test` sobre los
+# scripts que de verdad existen en el worktree que `review-prep.sh` ya dejó
+# armado (DEVKIT-93): las comprobaciones mecánicas fijas de la rúbrica
+# (`devkit-run.sh --test`, `watch-test.sh`) ya corrieron y están en
+# `## Material`, pero un criterio de la card puede pedir el `--test` de otro
+# script (p. ej. `pr-guard.sh`) que esa lista fija no cubre. Un patrón con un
+# `*` a mitad de ruta (`.../*.sh`) tampoco hace match: la sintaxis `:*` de
+# Claude Code es un prefijo literal seguido de comodín al final, no un glob de
+# shell (H4), así que en vez de eso se expande la lista real de scripts del
+# worktree aquí mismo, con el glob de bash, y se agrega un patrón literal por
+# cada uno. Por el mismo motivo, la lectura de git queda acotada a ese
+# worktree con `git -C <worktree>` en vez del `git diff`/`log`/`show` sin
+# argumentos que solo sirve sobre /workspace (H7).
 #
 # Imprime el modo de permiso en la primera línea y, una por línea, cada
 # argumento de `--allowedTools`, para que `run_claude` los junte con
@@ -731,17 +747,48 @@ perfil_de() {  # perfil_de <skill> [worktree de pr-review]
         mcp__plugin_Notion_notion mcp__claude_ai_Notion \
         'Bash(gh pr:*)' 'Bash(gh api:*)' \
         'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
-        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-prep.sh":*)' \
-        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh":*)' \
-        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh":*)'
+        "Bash($HERE/review-prep.sh:*)" \
+        "Bash($HERE/review-publish.sh:*)" \
+        "Bash($HERE/notion.sh:*)"
       if [ "$skill" = pr-review ] && [ -n "$worktree" ]; then
-        printf 'Bash(bash %s/devkit/scripts/*.sh --test:*)\n' "$worktree"
+        local script
+        for script in "$worktree"/devkit/scripts/*.sh; do
+          [ -e "$script" ] || continue
+          printf 'Bash(bash %s --test:*)\n' "$script"
+        done
+        printf 'Bash(git -C %s diff:*)\n' "$worktree"
+        printf 'Bash(git -C %s log:*)\n' "$worktree"
+        printf 'Bash(git -C %s show:*)\n' "$worktree"
+        printf 'Bash(git -C %s grep:*)\n' "$worktree"
+        printf 'Bash(bash -n %s:*)\n' "$worktree"
+        printf 'Bash(ruff check %s:*)\n' "$worktree"
+        printf 'Bash(pytest %s:*)\n' "$worktree"
       fi
       ;;
     *)
       printf '%s\n' acceptEdits \
         Bash Read Edit Write Grep Glob Skill \
         mcp__plugin_Notion_notion mcp__claude_ai_Notion
+      ;;
+  esac
+}
+
+# Complemento de `perfil_de` (DEVKIT-125, revisión del PR 92, H5):
+# `--allowedTools` solo se suma a la lista `allow` de
+# `devkit/agents/settings.json`, que sigue autorizando `git add`, `git
+# commit`, `git push` a las ramas de card y `gh pr merge --auto` para el
+# perfil amplio. Sin negarlos aparte, pr-review y task-document podrían
+# usarlos igual pese a que el perfil restringido no los incluye en su lista
+# allow. `--disallowedTools` sí gana sobre cualquier `allow`, sea de
+# `--allowedTools` o de `settings.json`, así que aquí se niegan explícitos.
+# Vacío para el perfil amplio: task-start, task-fix y epic-plan sí necesitan
+# escribir la rama.
+perfil_disallow_de() {  # perfil_disallow_de <skill>
+  case "$1" in
+    pr-review|task-document)
+      printf '%s\n' Edit Write NotebookEdit \
+        'Bash(git add:*)' 'Bash(git commit:*)' 'Bash(git push:*)' \
+        'Bash(gh pr merge:*)'
       ;;
   esac
 }
@@ -815,12 +862,30 @@ $material"
     alarma_sin_notion "$1"
     return 67
   fi
-  local -a perfil
+  local -a perfil perfil_disallow
   mapfile -t perfil < <(perfil_de "$skill" "$worktree")
-  "${lanzador[@]}" "$CLAUDE_BIN" -p "$prompt" --model "$2" --effort "$3" --output-format json \
-    --permission-mode "${perfil[0]}" \
-    --allowedTools "${perfil[@]:1}" \
-    </dev/null
+  mapfile -t perfil_disallow < <(perfil_disallow_de "$skill")
+
+  # Cabecera de metadatos (DEVKIT-125, revisión del PR 92, H1 y H3): pr-review
+  # y task-document arman comandos con la ruta de los scripts y con la marca
+  # "Revisado/Documentado con <modelo>, esfuerzo <x>". Antes lo hacían con
+  # `${DEVKIT_SCRIPTS_DIR:-...}` y `echo "...${DEVKIT_MODEL:-?}..."`, pero
+  # Claude Code rechaza con "Contains expansion" cualquier comando de Bash que
+  # traiga una expansión de variable, sea o no el patrón allow correcto (H1,
+  # H3). La variable sigue exportada (extra[], abajo) para las skills de
+  # perfil amplio que ya la usan así sin problema bajo `acceptEdits`; esta
+  # línea es solo para las que corren en `default` y no pueden depender de
+  # que el shell expanda nada. Una sola línea de texto plano, sin `$`: la
+  # skill copia el valor tal cual, no lo evalúa.
+  local -a claude_args=(
+    -p "(DEVKIT_SCRIPTS_DIR=$HERE DEVKIT_MODEL=$2 DEVKIT_EFFORT=$3)
+$prompt"
+    --model "$2" --effort "$3" --output-format json
+    --permission-mode "${perfil[0]}"
+    --allowedTools "${perfil[@]:1}"
+  )
+  [ "${#perfil_disallow[@]}" -eq 0 ] || claude_args+=(--disallowedTools "${perfil_disallow[@]}")
+  "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" </dev/null
 }
 
 # Copia recortada de la transcripción de un `claude -p` real, junto a su log
@@ -3457,7 +3522,7 @@ FIN
   # el perfil amplio de siempre. `perfil_de` aislada primero, y después de
   # punta a punta con el doble de `claude` (la línea real que recibiría).
   check "perfil_de: pr-review sin worktree, sin el --test acotado" \
-    'default
+    "default
 Read
 Grep
 Glob
@@ -3469,19 +3534,25 @@ Bash(gh api:*)
 Bash(git diff:*)
 Bash(git log:*)
 Bash(git show:*)
-Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-prep.sh":*)
-Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh":*)
-Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh":*)' \
+Bash($HERE/review-prep.sh:*)
+Bash($HERE/review-publish.sh:*)
+Bash($HERE/notion.sh:*)" \
     "$(perfil_de pr-review)"
-  check "perfil_de: pr-review con worktree agrega el --test acotado a ese worktree" \
-    'Bash(bash /tmp/devkit-review-42/devkit/scripts/*.sh --test:*)' \
-    "$(perfil_de pr-review /tmp/devkit-review-42 | tail -1)"
   check "perfil_de: task-document recibe el mismo perfil restringido que pr-review, sin el --test" \
     "$(perfil_de pr-review)" "$(perfil_de task-document)"
   check "perfil_de: task-document ignora un worktree, nunca agrega el --test" 0 \
     "$(perfil_de task-document /tmp/devkit-review-42 | grep -c -F -- '--test')"
   check "perfil_de: pr-review y task-document no traen Edit ni Write" 0 \
     "$(perfil_de pr-review | grep -xc -E 'Edit|Write')"
+  # H1 y H3 de la revisión del PR 92: ningún patrón puede traer una
+  # expansión de variable (`$` o backtick), porque Claude Code la rechaza con
+  # "Contains expansion" antes de mirar la lista allow. Cubre también el
+  # perfil amplio, aunque ahí nunca importó (acceptEdits no consulta la
+  # lista), para que nadie vuelva a colar `${DEVKIT_SCRIPTS_DIR:-...}` ahí.
+  for skill_chequeo in pr-review task-document task-start task-fix epic-plan; do
+    check "perfil_de: $skill_chequeo sin expansión de variables en ningún patrón" 0 \
+      "$(perfil_de "$skill_chequeo" /tmp/devkit-review-42 | grep -c '[$`]')"
+  done
   for skill_amplio in task-start task-fix epic-plan; do
     check "perfil_de: $skill_amplio conserva el perfil amplio de siempre" \
       'acceptEdits
@@ -3497,20 +3568,96 @@ mcp__claude_ai_Notion' \
       "$(perfil_de "$skill_amplio")"
   done
 
+  # H4 y H7 de la revisión del PR 92: el `--test` del worktree ya no depende
+  # de un `*` a mitad de patrón (esa sintaxis no existe para Claude Code, que
+  # solo entiende un prefijo literal más `:*` al final): `perfil_de` expande
+  # el glob de bash sobre los scripts que de verdad están en el worktree y
+  # agrega un patrón literal por cada uno, más la lectura de git y las
+  # comprobaciones mecánicas acotadas a esa misma ruta.
+  local worktree_perfil="$tmp/worktree-perfil-h4"
+  mkdir -p "$worktree_perfil/devkit/scripts"
+  : >"$worktree_perfil/devkit/scripts/devkit-run.sh"
+  : >"$worktree_perfil/devkit/scripts/pr-guard.sh"
+  check "perfil_de: --test del worktree, un patrón literal por script real" \
+    "Bash(bash $worktree_perfil/devkit/scripts/devkit-run.sh --test:*)
+Bash(bash $worktree_perfil/devkit/scripts/pr-guard.sh --test:*)
+Bash(git -C $worktree_perfil diff:*)
+Bash(git -C $worktree_perfil log:*)
+Bash(git -C $worktree_perfil show:*)
+Bash(git -C $worktree_perfil grep:*)
+Bash(bash -n $worktree_perfil:*)
+Bash(ruff check $worktree_perfil:*)
+Bash(pytest $worktree_perfil:*)" \
+    "$(perfil_de pr-review "$worktree_perfil" | tail -9)"
+  check "perfil_de: sin scripts en el worktree, ningún --test, pero sí la lectura acotada" \
+    "Bash(git -C /tmp/devkit-review-vacio diff:*)
+Bash(git -C /tmp/devkit-review-vacio log:*)
+Bash(git -C /tmp/devkit-review-vacio show:*)
+Bash(git -C /tmp/devkit-review-vacio grep:*)
+Bash(bash -n /tmp/devkit-review-vacio:*)
+Bash(ruff check /tmp/devkit-review-vacio:*)
+Bash(pytest /tmp/devkit-review-vacio:*)" \
+    "$(perfil_de pr-review /tmp/devkit-review-vacio | tail -7)"
+
+  # H5 de la revisión del PR 92: `--allowedTools` solo se suma a la lista
+  # `allow` de `settings.json`, que sigue autorizando `git add/commit/push` y
+  # `gh pr merge --auto` para el perfil amplio. `perfil_disallow_de` niega
+  # eso aparte para pr-review/task-document -`--disallowedTools` sí gana
+  # sobre cualquier `allow`- y va vacía para el perfil amplio.
+  check "perfil_disallow_de: pr-review niega escritura y push/merge" \
+    'Edit
+Write
+NotebookEdit
+Bash(git add:*)
+Bash(git commit:*)
+Bash(git push:*)
+Bash(gh pr merge:*)' \
+    "$(perfil_disallow_de pr-review)"
+  check "perfil_disallow_de: task-document recibe la misma lista de negados" \
+    "$(perfil_disallow_de pr-review)" "$(perfil_disallow_de task-document)"
+  for skill_amplio in task-start task-fix epic-plan; do
+    check "perfil_disallow_de: $skill_amplio no niega nada" "" \
+      "$(perfil_disallow_de "$skill_amplio")"
+  done
+
+  # H1, H3 y H6 de la revisión del PR 92: comprobación estática de que
+  # ningún bloque ```sh``` de estas dos skills -los comandos que de verdad
+  # se ejecutan, a diferencia de la prosa que explica el respaldo para una
+  # sesión interactiva- trae la sintaxis `${VAR:-...}` que Claude Code
+  # rechaza con "Contains expansion". Una referencia simple como `"$cuerpo"`
+  # (una variable local que la misma skill arma en el paso anterior, sin
+  # respaldo de shell) no es el problema que encontró la revisión: solo
+  # `${...}` lo es. Es la clase de comprobación que el "ciclo real" de más
+  # abajo no puede hacer, porque su doble de `claude` no pasa por el motor de
+  # permisos real (H6).
+  local bloques_sh_sin_expansion
+  bloques_sh_sin_expansion() {  # bloques_sh_sin_expansion <SKILL.md>
+    awk '/^   ```sh$/{f=1;next} /^   ```$/{f=0} f' "$1" | grep -c '\${'
+  }
+  check "pr-review/SKILL.md: los bloques sh no traen expansión de variables" 0 \
+    "$(bloques_sh_sin_expansion "$HERE/../agents/skills/pr-review/SKILL.md")"
+  check "task-document/SKILL.md: los bloques sh no traen expansión de variables" 0 \
+    "$(bloques_sh_sin_expansion "$HERE/../agents/skills/task-document/SKILL.md")"
+
   # De punta a punta: la línea que de verdad recibe el doble de `claude`,
-  # reconstruida con `perfil_de` para no repetir la lista a mano y quedar
-  # desincronizada si cambia (la integración entre `perfil_de` y `run_claude`
-  # -el slice `perfil[@]:1`, sobre todo- es lo que esto prueba; la lista en sí
-  # ya quedó cubierta arriba).
+  # reconstruida con `perfil_de`/`perfil_disallow_de` para no repetir la
+  # lista a mano y quedar desincronizada si cambia (la integración con
+  # `run_claude` -el slice `perfil[@]:1`, sobre todo- es lo que esto prueba;
+  # la lista en sí ya quedó cubierta arriba). También comprueba que la
+  # cabecera de metadatos (`DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=...
+  # DEVKIT_EFFORT=...`) llega como primera línea del prompt.
   local perfil_prompt perfil_skill perfil_extra
   for perfil_prompt in '/pr-review 30' '/task-document DEVKIT-1 5' \
       '/task-start DEVKIT-1' '/task-fix DEVKIT-1' '/epic-plan DEVKIT-1'; do
     perfil_skill=${perfil_prompt#/}; perfil_skill=${perfil_skill%% *}
     perfil_extra=""
     [ "$perfil_skill" = pr-review ] && perfil_extra="$tmp/worktrees-perfil/devkit-review-30"
-    local -a perfil_esperado
+    local -a perfil_esperado perfil_disallow_esperado
     mapfile -t perfil_esperado < <(perfil_de "$perfil_skill" "$perfil_extra")
+    mapfile -t perfil_disallow_esperado < <(perfil_disallow_de "$perfil_skill")
     local linea_esperada="--permission-mode ${perfil_esperado[0]} --allowedTools ${perfil_esperado[*]:1}"
+    [ "${#perfil_disallow_esperado[@]}" -eq 0 ] \
+      || linea_esperada="$linea_esperada --disallowedTools ${perfil_disallow_esperado[*]}"
     : >"$tmp/claude-llamadas"
     DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-codigo" \
       DEVKIT_REVIEW_WORKTREE_DIR="$tmp/worktrees-perfil" \
@@ -3519,6 +3666,8 @@ mcp__claude_ai_Notion' \
       bash "$HERE/devkit-run.sh" --sync "$perfil_prompt" >/dev/null 2>&1
     check "el claude -p de $perfil_skill recibe exactamente su perfil" 1 \
       "$(grep -c -F -- "$linea_esperada" "$tmp/claude-llamadas")"
+    check "el claude -p de $perfil_skill recibe la cabecera de metadatos" 1 \
+      "$(grep -c -F -- "DEVKIT_SCRIPTS_DIR=$HERE" "$tmp/claude-llamadas")"
   done
 
   # --- Ciclo real de pr-review con el perfil restringido (DEVKIT-125, AC2) ---
@@ -3592,8 +3741,10 @@ FIN
     bash "$HERE/devkit-run.sh" --sync '/pr-review 9401' >/dev/null 2>&1
   check "ciclo real con perfil restringido: el doble recibe --permission-mode default" 1 \
     "$(grep -c -- '--permission-mode default' "$ciclo2_dir/claude-llamadas")"
-  check "ciclo real con perfil restringido: el doble no recibe Edit ni Write" 0 \
-    "$(grep -c -E '(^| )(Edit|Write)( |$)' "$ciclo2_dir/claude-llamadas")"
+  check "ciclo real con perfil restringido: --allowedTools no trae Edit ni Write" 0 \
+    "$(sed -E 's/--disallowedTools.*//' "$ciclo2_dir/claude-llamadas" | grep -c -E '(^| )(Edit|Write)( |$)')"
+  check "ciclo real con perfil restringido: --disallowedTools sí niega Edit y Write (H5)" 1 \
+    "$(grep -c -E -- '--disallowedTools.*( |^)Edit( |$)' "$ciclo2_dir/claude-llamadas")"
   check "ciclo real con perfil restringido: veredicto OK mueve la card a Lista para merge" 1 \
     "$(grep -c 'card-9401 Estado=Lista para merge' "$ciclo2_dir/set-llamadas" 2>/dev/null)"
   check "ciclo real con perfil restringido: el informe publicado no deja residuo" 1 \
@@ -3750,6 +3901,50 @@ FIN
     bash "$HERE/review-publish.sh" 9303 "$rpub_dir/informe-nuevo.md" >"$rpub_dir/salida.out" 2>"$rpub_dir/salida.err"
   check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
     "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
+
+  # --- review-publish.sh de verdad: `-` lee el informe por stdin, sin que la
+  # skill tenga que escribirlo antes (DEVKIT-125, revisión del PR 92, H2) ----
+  # El perfil restringido de pr-review no trae `Write`; el heredoc que la
+  # skill manda por `stdin` debe llegar igual a `gh pr review` y, con
+  # `--conservar`, dejar una copia en `.devkit/review-<N>.md` para depurar.
+  local rpub_stdin_dir
+  rpub_stdin_dir=$(mktemp -d "$tmp/rpub-stdin.XXXXXX")
+  mkdir -p "$rpub_stdin_dir/.devkit" "$rpub_stdin_dir/tmpdir"
+  cat >"$rpub_stdin_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$1 $2" >>"$(dirname "$0")/llamadas"
+case "$1 $2" in
+  "pr view") printf '' ;;
+  "pr review")
+    shift 2
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --body-file ]; then
+        cat "$2" >"$(dirname "$0")/cuerpo-publicado"
+        shift
+      fi
+      shift
+    done
+    ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub_stdin_dir/gh-doble"
+  DEVKIT_WS="$rpub_stdin_dir" DEVKIT_GH_BIN="$rpub_stdin_dir/gh-doble" TMPDIR="$rpub_stdin_dir/tmpdir" \
+    bash "$HERE/review-publish.sh" 9307 - <<'FIN' >"$rpub_stdin_dir/salida.out" 2>"$rpub_stdin_dir/salida.err"
+<!-- devkit-review sha=def456 verdict=CAMBIOS -->
+Informe recibido por stdin.
+FIN
+  check "review-publish.sh de verdad: '-' publica el informe recibido por stdin" 1 \
+    "$(grep -c 'Informe recibido por stdin' "$rpub_stdin_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: '-' no deja ningún temporal sin '--conservar'" 0 \
+    "$(find "$rpub_stdin_dir/tmpdir" -type f 2>/dev/null | wc -l | tr -d ' ')"
+  DEVKIT_WS="$rpub_stdin_dir" DEVKIT_GH_BIN="$rpub_stdin_dir/gh-doble" TMPDIR="$rpub_stdin_dir/tmpdir" \
+    bash "$HERE/review-publish.sh" --conservar 9307 - <<'FIN' >/dev/null 2>&1
+<!-- devkit-review sha=def456 verdict=CAMBIOS -->
+Informe recibido por stdin, con --conservar.
+FIN
+  check "review-publish.sh de verdad: '-' con --conservar deja una copia en .devkit/review-<N>.md" 1 \
+    "$(grep -c 'con --conservar' "$rpub_stdin_dir/.devkit/review-9307.md" 2>/dev/null)"
 
   # --- review-publish.sh de verdad: "Qué hace" trae el primer párrafo
   # completo de "## Qué cambia", no dos líneas físicas (DEVKIT-115) ----------

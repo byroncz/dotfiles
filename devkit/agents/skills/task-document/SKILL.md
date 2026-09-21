@@ -43,8 +43,19 @@ sus alternativas.
    misma card (p. ej. una decisión congelada, DEVKIT-87):
 
    ```sh
-   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" documentacion <page_id de la card> <Clave>
+   <ruta>/notion.sh documentacion <page_id de la card> <Clave>
    ```
+
+   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la primera línea de este
+   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`),
+   copiado tal cual, como texto plano y sin `$`: por ejemplo
+   `/opt/devkit/scripts/notion.sh`. Un comando armado con
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve aquí: Claude
+   Code rechaza con "Contains expansion" cualquier Bash que traiga una
+   expansión de variable, sin mirar siquiera la lista allow (DEVKIT-125). Si
+   esta sesión es interactiva y esa primera línea no está, usa
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí corre
+   bajo un perfil que lo permite.
 
    Devuelve `{id, url}` si existe una entrada cuyo `Título` empieza por
    `<Clave>:` y sale con 1 si no.
@@ -53,14 +64,14 @@ sus alternativas.
    actualiza `Rama`/`PR`:
 
    ```sh
-   printf '%s' "$cuerpo" | "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" reemplazar-doc <page_id de la entrada> <Rama> <PR>
+   printf '%s' "$cuerpo" | <ruta>/notion.sh reemplazar-doc <page_id de la entrada> <Rama> <PR>
    ```
 
    Si no existe, créala en **Documentación**, con `Título` = `<Clave>:
    <título corto>`, `Tarea` = la card y `Tipo` = `decisión`:
 
    ```sh
-   printf '%s' "$cuerpo" | "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh" crear-doc <page_id de la card> <page_id del Proyecto> "<Clave>: <título corto>" decisión <Rama> <PR>
+   printf '%s' "$cuerpo" | <ruta>/notion.sh crear-doc <page_id de la card> <page_id del Proyecto> "<Clave>: <título corto>" decisión <Rama> <PR>
    ```
 
    `$cuerpo`, con estas secciones en este orden y completas:
@@ -93,12 +104,14 @@ sus alternativas.
    La sección "Modelos" (DEVKIT-58) copia las marcas, no las deduce: la
    línea "Implementado con ..." del cuerpo del PR, la línea "Revisado con
    ..." de cada informe `devkit-review` en orden (una por informe, con su
-   `sha` y veredicto) y, al final, la tuya, que sale de las variables que
-   `devkit-run` exporta al `claude -p`: `echo "Documentado con
-   ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"`. Si una marca falta en
-   el PR o en un informe, escribe "sin marca" en su lugar. Si tus variables
-   vienen vacías (sesión interactiva), escribe el alias del modelo que te
-   ejecuta y `esfuerzo sin registrar`.
+   `sha` y veredicto) y, al final, la tuya: "Documentado con `<modelo>`,
+   esfuerzo `<esfuerzo>`", con el `<modelo>` y el `<esfuerzo>` de la primera
+   línea de este prompt (`DEVKIT_MODEL=... DEVKIT_EFFORT=...`), copiados tal
+   cual, sin correr `echo` ni `printenv`: bajo este perfil, Claude Code
+   rechaza con "Contains expansion" cualquier Bash que expanda una variable
+   (DEVKIT-125). Si una marca falta en el PR o en un informe, escribe "sin
+   marca" en su lugar. Si esa primera línea no está (sesión interactiva),
+   escribe el alias del modelo que te ejecuta y `esfuerzo sin registrar`.
 
 6. Marcador en el PR, solo si sigue abierto. Es lo que le dice a `watch.sh`
    que ese head ya está documentado; sin él, el bucle te relanza en cada
