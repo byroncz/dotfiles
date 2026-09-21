@@ -31,6 +31,9 @@
 #                                             {id,url} (DEVKIT-92)
 #   notion.sh hijas <page_id>                 hijas de una Épica (relación
 #                                             Padre), como lista JSON
+#   notion.sh sueltas <código>                Tareas del proyecto en Lista
+#                                             sin Padre, como lista JSON
+#                                             (grupo 2 de `cola.sh`, DEVKIT-119)
 #   notion.sh criterios <page_id>             texto de la sección "Criterios
 #                                             de aceptación" de la página
 #   notion.sh contenido <page_id>             toda la página en Markdown
@@ -192,6 +195,8 @@ def ids: (. // []) | map(.id);
    tipo: $p.Tipo.select.name,
    prioridad: $p.Prioridad.select.name,
    orden: $p.Orden.number,
+   agente: $p.Agente.select.name,
+   creado: .created_time,
    pr: $p.PR.url,
    rama: $p.Rama.url,
    padre: ($p.Padre.relation | ids),
@@ -439,6 +444,25 @@ cmd_hijas() {  # cmd_hijas <page_id>
   filas=$(query_all "$(db_id tareas)" \
     "$(jq -nc --arg p "$1" '{property: "Padre", relation: {contains: $p}}')") || return
   codigo=$(codigo_de_proyecto "$(jq -r '.[0].properties.Proyecto.relation[0].id // empty' <<<"$filas")")
+  jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
+}
+
+# Tareas sueltas: sin Épica, en Lista (DEVKIT-119, grupo 2 de `cola.sh`).
+# `hijas` parte de una Épica conocida y `activas`/`epicas` no traen Padre, así
+# que ninguna de las dos sirve para encontrar una Tarea sin Padre; de ahí la
+# consulta aparte que pedían las Notas de la card. El filtro va en un solo
+# "and" de cuatro condiciones (Padre con `is_empty`, no una lista de valores),
+# sin anidar "or": mismo límite de dos niveles que documentan `bloqueos` y
+# `epicas`.
+cmd_sueltas() {  # cmd_sueltas <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {property: "Nivel", select: {equals: "Tarea"}},
+            {property: "Estado", select: {equals: "Lista"}},
+            {property: "Padre", relation: {is_empty: true}}]}')") || return
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
@@ -989,6 +1013,23 @@ $(activa card-88 88 "En progreso" feature "" Épica)],\"has_more\":false}"
     '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"or":[{"property":"Estado","select":{"equals":"Lista"}},{"property":"Estado","select":{"equals":"En progreso"}},{"property":"Estado","select":{"equals":"Revisión automática"}},{"property":"Estado","select":{"equals":"Lista para merge"}},{"property":"Estado","select":{"equals":"Bloqueada"}}]}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
+  # sueltas (DEVKIT-119): Tareas en Lista sin Padre, grupo 2 de `cola.sh`. El
+  # filtro es un solo "and" de cuatro condiciones (sin "or" que anidar) y
+  # Padre va por `is_empty`, no por una lista de valores a excluir.
+  resp POST__databases_dbtareas_query '{"results":[{"id":"card-70","created_time":"2026-01-02T00:00:00.000Z",
+    "properties":{"ID":{"unique_id":{"number":70}},"Título":{"title":[{"plain_text":"suelta"}]},
+    "Estado":{"select":{"name":"Lista"}},"Nivel":{"select":{"name":"Tarea"}},
+    "Prioridad":{"select":{"name":"alta"}},"Orden":{"number":1},
+    "Agente":{"select":{"name":"claude"}},"Padre":{"relation":[]},
+    "Depende de":{"relation":[]}}}],"has_more":false}'
+  got=$(env "${entorno[@]}" bash "$HERE/notion.sh" sueltas DEVKIT)
+  check "sueltas: Clave, Prioridad, Orden, Agente y Creado de una tarea sin Padre" \
+    '{"clave":"DEVKIT-70","prioridad":"alta","orden":1,"agente":"claude","creado":"2026-01-02T00:00:00.000Z"}' \
+    "$(jq -c '.[0] | {clave,prioridad,orden,agente,creado}' <<<"$got")"
+  check "sueltas: el filtro no anida un \"or\", Padre por is_empty" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"equals":"Lista"}},{"property":"Padre","relation":{"is_empty":true}}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+
   # El uso calcula su rango buscando la línea de --test en vez de un rango
   # fijo (DEVKIT-80: un rango fijo cortaba la ayuda a media frase cada vez
   # que el bloque crecía, hallazgo H1 de `pr-review` sobre el PR #57, que
@@ -1009,6 +1050,7 @@ case "${1:-}" in
   crear-doc) cmd_crear_doc "${2:?tarea_id}" "${3:?proyecto_id}" "${4:?titulo}" "${5:?tipo}" "${6:-}" "${7:-}" ;;
   reemplazar-doc) cmd_reemplazar_doc "${2:?page_id}" "${3:-}" "${4:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
+  sueltas) cmd_sueltas "${2:?código}" ;;
   criterios) cmd_criterios "${2:?page_id}" ;;
   contenido) cmd_contenido "${2:?page_id}" ;;
   comentarios) cmd_comentarios "${2:?page_id}" ;;
