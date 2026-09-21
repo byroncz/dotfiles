@@ -35,6 +35,34 @@ function esPestañaDeArchivo(tab) {
     || tab.input instanceof vscode.TabInputNotebook;
 }
 
+// Vuelve a traer al frente una pestaña de archivo. Cada tipo de entrada se
+// reabre distinto: TabInputTextDiff no tiene uri -expone original y
+// modified- y un notebook abierto con showTextDocument volvería como JSON
+// crudo en una pestaña nueva. Un fallo aquí no debe tumbar activate(): la
+// chuleta ya quedó reparada y lo único que se pierde es el orden de las
+// pestañas, así que se traga el error en vez de rechazar la promesa.
+async function revelarPestaña(tab, viewColumn) {
+  const opciones = { viewColumn, preserveFocus: false, preview: false };
+  try {
+    if (tab.input instanceof vscode.TabInputText) {
+      await vscode.window.showTextDocument(tab.input.uri, opciones);
+    } else if (tab.input instanceof vscode.TabInputTextDiff) {
+      await vscode.commands.executeCommand(
+        'vscode.diff',
+        tab.input.original,
+        tab.input.modified,
+        tab.label,
+        opciones
+      );
+    } else if (tab.input instanceof vscode.TabInputNotebook) {
+      const documento = await vscode.workspace.openNotebookDocument(tab.input.uri);
+      await vscode.window.showNotebookDocument(documento, { viewColumn, preserveFocus: false });
+    }
+  } catch (error) {
+    console.error(`devkit: no se pudo revelar ${tab.label}`, error);
+  }
+}
+
 function esPestañaDeChuleta(tab) {
   return tab.input instanceof vscode.TabInputWebview
     && tab.input.viewType.endsWith(VIEW_TYPE);
@@ -76,11 +104,7 @@ async function activate(context) {
     await vscode.window.tabGroups.close(restauradas);
     mostrarChuleta(columna, true);
     if (activa) {
-      await vscode.window.showTextDocument(activa.input.uri, {
-        viewColumn: activa.group.viewColumn,
-        preserveFocus: false,
-        preview: false,
-      });
+      await revelarPestaña(activa, activa.group.viewColumn);
     }
     return;
   }
