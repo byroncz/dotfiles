@@ -7,6 +7,7 @@
 #
 # Uso:
 #   review-publish.sh [--conservar] <número de PR> <archivo del informe>
+#   review-publish.sh [--conservar] <número de PR> -
 #
 # <archivo> es el informe que escribió la skill en `.devkit/review-<N>.md`,
 # con el formato de la rúbrica: el marcador `<!-- devkit-review sha=<head>
@@ -14,10 +15,18 @@
 # aceptación, la lectura adversarial, el Veredicto y, si hay hallazgos, el
 # bloque `<!-- devkit-findings -->`.
 #
-# Borra <archivo> al salir, publicación exitosa o no (DEVKIT-99): un residuo
+# `-` en vez de un archivo lee el informe de `stdin` (DEVKIT-125, revisión
+# del PR 92, H2): el perfil restringido de pr-review no trae `Edit` ni
+# `Write`, así que la skill no puede dejar el informe en
+# `.devkit/review-<N>.md` antes de llamar a este script. Con `-`, el informe
+# llega por un heredoc en el mismo comando de Bash y este script lo copia a
+# un archivo temporal propio.
+#
+# Borra el informe al salir, publicación exitosa o no (DEVKIT-99): un residuo
 # de ese informe en el workspace deja el árbol sucio y bloquea la siguiente
 # card (`task-begin.sh` rechaza con árbol sucio antes de mirar Notion). Con
-# `--conservar` lo deja, para depurar un informe que falló al publicarse.
+# `--conservar` lo deja -en `.devkit/review-<N>.md`, también cuando vino por
+# `stdin`-, para depurar un informe que falló al publicarse.
 #
 # Último paso, siempre: `touch /run/devkit/poke` (DEVKIT-108), para que
 # watch.sh no espere el resto del intervalo antes de decidir sobre este PR
@@ -42,12 +51,26 @@ fi
 numero="${1:-}"
 archivo="${2:-}"
 if [ -z "$numero" ] || [ -z "$archivo" ]; then
-  echo "uso: review-publish.sh [--conservar] <número de PR> <archivo del informe>" >&2
+  echo "uso: review-publish.sh [--conservar] <número de PR> <archivo del informe|->" >&2
   exit 64
+fi
+tmp_stdin=""
+if [ "$archivo" = "-" ]; then
+  tmp_stdin=$(mktemp)
+  cat >"$tmp_stdin"
+  archivo="$tmp_stdin"
 fi
 [ -f "$archivo" ] || { err "no existe $archivo"; exit 1; }
 
 limpiar() {
+  if [ -n "$tmp_stdin" ]; then
+    if [ "$conservar" = 1 ]; then
+      mkdir -p "$WS/.devkit"
+      cp "$tmp_stdin" "$WS/.devkit/review-$numero.md" 2>/dev/null
+    fi
+    rm -f "$tmp_stdin"
+    return
+  fi
   [ "$conservar" = 1 ] && return
   rm -f "$archivo"
 }
