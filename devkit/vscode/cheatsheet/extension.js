@@ -96,15 +96,20 @@ async function activate(context) {
   // abierta, se abre un archivo, Reload Window) la deja en blanco para
   // siempre-. Se cierran todas las coincidencias (pudo quedar restaurada en
   // más de un grupo) y se reabre en la misma columna; si había un archivo
-  // activo en ese grupo, se vuelve a revelar después para no taparlo.
+  // activo en ese grupo, se vuelve a revelar después para no taparlo. La
+  // búsqueda del archivo se acota al grupo de la chuleta: isActive es por
+  // grupo, y con el editor partido el primer archivo activo de
+  // tabGroups.all suele estar en otro grupo, ya visible, donde revelarlo
+  // roba el foco y deja tapado el archivo que la chuleta sí tapó.
   const restauradas = pestañas.filter(esPestañaDeChuleta);
   if (restauradas.length > 0) {
-    const columna = restauradas[0].group.viewColumn;
-    const activa = pestañas.find((t) => t.isActive && esPestañaDeArchivo(t));
+    const grupo = restauradas[0].group;
+    const columna = grupo.viewColumn;
+    const activa = grupo.tabs.find((t) => t.isActive && esPestañaDeArchivo(t));
     await vscode.window.tabGroups.close(restauradas);
     mostrarChuleta(columna, true);
     if (activa) {
-      await revelarPestaña(activa, activa.group.viewColumn);
+      await revelarPestaña(activa, columna);
     }
     return;
   }
