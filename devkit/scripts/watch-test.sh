@@ -290,14 +290,20 @@ check_quota_reset "fecha y hora del límite semanal" "$(date -d 'Feb 3 10:00' +%
 # Relanzamiento de punta a punta, con un doble de `claude` que cuenta sus
 # llamadas. `DEVKIT_TEST_FAILS` dice cuántas de ellas mueren por cuota y
 # `DEVKIT_TEST_MSG` con qué aviso; el resto responde como una ejecución normal.
+# `DEVKIT_TEST_FAIL_TURNS`/`DEVKIT_TEST_FAIL_COST` (1 y 0 por defecto): turnos
+# y costo que trae la respuesta de un fallo, igual que un `claude -p` real -la
+# evidencia de DEVKIT-124 mostraba turnos=1 costo=0 en un 529-. Las pruebas de
+# error transitorio los suben para comprobar que un fallo con trabajo real
+# (turnos > 1) no se reintenta.
 DOBLE="$TMP/claude"
 cat >"$DOBLE" <<'FIN'
 #!/usr/bin/env bash
 n=$(( $(cat "$DEVKIT_TEST_COUNT" 2>/dev/null || echo 0) + 1 ))
 echo "$n" > "$DEVKIT_TEST_COUNT"
 if [ "$n" -le "${DEVKIT_TEST_FAILS:-1}" ]; then
-  printf '{"result":"%s","is_error":true}\n' \
+  printf '{"result":"%s","is_error":true,"num_turns":%s,"total_cost_usd":%s}\n' \
     "${DEVKIT_TEST_MSG:-Claude AI usage limit reached|@RESET@}" \
+    "${DEVKIT_TEST_FAIL_TURNS:-1}" "${DEVKIT_TEST_FAIL_COST:-0}" \
     | sed "s/@RESET@/$(( $(date +%s) + 2 ))/"
   exit 1
 fi
@@ -344,6 +350,7 @@ corre_doble() {
   if [ -n "${PRESEED:-}" ]; then mkdir -p "$dir/run"; echo "$PRESEED" > "$dir/run/launched"; fi
   DEVKIT_TEST_COUNT="$dir/llamadas" DEVKIT_TEST_FAILS="$1" DEVKIT_TEST_MSG="${2:-}" \
   DEVKIT_TEST_SLEEP="${DEVKIT_TEST_SLEEP:-0}" DEVKIT_TEST_RESULT="${DEVKIT_TEST_RESULT:-listo}" \
+  DEVKIT_TEST_FAIL_TURNS="${DEVKIT_TEST_FAIL_TURNS:-1}" DEVKIT_TEST_FAIL_COST="${DEVKIT_TEST_FAIL_COST:-0}" \
   DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
   DEVKIT_REVIEW_PREP_BIN="${REVIEW_PREP_OVERRIDE:-$REVIEW_PREP_DOBLE}" \
   DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
@@ -351,17 +358,36 @@ corre_doble() {
   DEVKIT_TASK_BLOCK_BIN="${BLOCK_OVERRIDE:-}" \
   DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 \
   DEVKIT_WATCH_QUOTA_RETRIES="${RETRIES:-3}" \
+  DEVKIT_WATCH_TRANSIENT_WAITS="${TRANSIENT_WAITS_OVERRIDE:-1,1,1}" \
   DEVKIT_WATCH_SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}" \
   DEVKIT_WATCH_SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}" \
     bash "$WATCH" --run-skill "${NOMBRE:-pr-review-9-abc1234}" "${PROMPT:-/pr-review 9}" "revisar:9:abc1234" \
     "${CLAVE_OVERRIDE:-}" \
     >"$OUT" 2>&1
-  LLAMADAS=$(cat "$dir/llamadas" 2>/dev/null || echo 0)
+  LLAMADAS_FILE="$dir/llamadas"
+  LLAMADAS=$(cat "$LLAMADAS_FILE" 2>/dev/null || echo 0)
   LAUNCHED_FILE="$dir/run/launched"
   # `forzar_task_block` (devkit-run.sh) escribe su ALARMA directo en
   # `$RUN_DIR/watch.log`, no por stdout: no queda en $OUT, que aquí es un
   # archivo distinto (DEVKIT-94).
   RUN_WATCH_LOG="$dir/run/watch.log"
+}
+
+# esperar_llamadas <esperadas> [décimas de segundo de tope]: un reintento
+# encadenado (DEVKIT-124) se agenda desde un subshell que ya corre en segundo
+# plano, así que cada nivel nuevo queda huérfano del `wait` que hace el hook
+# `--run-skill` -solo alcanza al primer nivel-. Sigue escribiendo en el mismo
+# $LLAMADAS_FILE y en el mismo $OUT (descriptores heredados), así que alcanza
+# con sondear hasta que el conteo esperado aparece, en vez de tocar la
+# cascada real. Actualiza $LLAMADAS al volver.
+esperar_llamadas() {
+  local esperadas=$1 tope=${2:-50} i
+  for ((i = 0; i < tope; i++)); do
+    LLAMADAS=$(cat "$LLAMADAS_FILE" 2>/dev/null || echo 0)
+    [ "$LLAMADAS" -ge "$esperadas" ] 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 # check_log <nombre> <patrón>
@@ -411,6 +437,84 @@ check_igual "la skill se lanzó una sola vez" 1 "$LLAMADAS"
 RETRIES=2 corre_doble 9
 check_log "tope de intentos alcanzado" 'cuota agotada: pr-review-9-abc1234 sin más intentos \(tope de 2\)'
 check_igual "no pasa del tope" 2 "$LLAMADAS"
+
+# --- Error transitorio de la API antes del primer turno (DEVKIT-124) --------
+# Mismo doble que la cuota, pero con un 529 y turnos=1/costo=0 (los valores
+# por defecto de DEVKIT_TEST_FAIL_TURNS/DEVKIT_TEST_FAIL_COST): un fallo antes
+# de que el agente trabajara. `TRANSIENT_WAITS_OVERRIDE=1,1,1` deja las tres
+# esperas en un segundo cada una, así la prueba no tarda 22 minutos de verdad.
+
+# 529 en el turno 1: reintenta y, a diferencia de la cuota, la clave no
+# queda con su forma normal mientras el reintento espera -launched() la ve
+# ocupada como "transitorio:<clave>", no como "<clave>"- y termina marcada
+# como cualquier lanzamiento normal una vez que el reintento tiene éxito
+# (DEVKIT-124, criterio de aceptación 1). La primera espera se estira a 2s
+# (las otras quedan en 1s) para poder leer el estado intermedio antes de que
+# el reintento se dispare; se lanza en segundo plano porque `corre_doble` es
+# síncrona y no deja mirar nada hasta que termina todo el intento.
+dir529=$(mktemp -d -p "$TMP")
+mkdir -p "$dir529/run"
+echo "revisar:9:abc1234" > "$dir529/run/launched"
+OUT="$dir529/watch.log"
+DEVKIT_TEST_COUNT="$dir529/llamadas" DEVKIT_TEST_FAILS=1 DEVKIT_TEST_MSG="API Error: 529 Overloaded" \
+DEVKIT_TEST_SLEEP=0 DEVKIT_TEST_RESULT=listo DEVKIT_TEST_FAIL_TURNS=1 DEVKIT_TEST_FAIL_COST=0 \
+DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$dir529/run" DEVKIT_WS="$dir529" \
+DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+DEVKIT_ROLES_FILE="" DEVKIT_NOTION_BIN="" DEVKIT_TASK_BLOCK_BIN="" \
+DEVKIT_WATCH_QUOTA_MIN_WAIT=1 DEVKIT_WATCH_QUOTA_WAIT=2 DEVKIT_WATCH_QUOTA_RETRIES=3 \
+DEVKIT_WATCH_TRANSIENT_WAITS=2,1,1 \
+DEVKIT_WATCH_SKILL_TIMEOUT=1200 DEVKIT_WATCH_SKILL_POLL=5 \
+  bash "$WATCH" --run-skill pr-review-9-abc1234 "/pr-review 9" "revisar:9:abc1234" "" >"$OUT" 2>&1 &
+pid529=$!
+for ((i = 0; i < 50; i++)); do
+  grep -qE 'reintento 1/3 por error transitorio' "$OUT" 2>/dev/null && break
+  sleep 0.05
+done
+check_log "línea de reintento 1/3 por error transitorio" \
+  'pr-review-9-abc1234 reintento 1/3 por error transitorio de la API, en 2s'
+check_igual "durante la espera, la clave exacta no está lanzada" "" \
+  "$(grep -xF 'revisar:9:abc1234' "$dir529/run/launched" 2>/dev/null)"
+check_igual "durante la espera, launched() la ve ocupada como transitoria" "transitorio:revisar:9:abc1234" \
+  "$(tr '\n' ' ' <"$dir529/run/launched" 2>/dev/null | sed 's/ *$//')"
+wait "$pid529"
+# Éxito en el segundo intento: flujo normal, run_skill termina bien.
+check_log "la skill relanzada tras el 529 terminó bien" 'pr-review-9-abc1234 terminado'
+check_igual "la skill se lanzó dos veces (con el reintento)" 2 "$(cat "$dir529/llamadas" 2>/dev/null || echo 0)"
+check_igual "tras el éxito, la clave queda marcada como un lanzamiento normal" "revisar:9:abc1234" \
+  "$(tr '\n' ' ' <"$dir529/run/launched" 2>/dev/null | sed 's/ *$//')"
+
+# Cuatro fallos seguidos: tres reintentos (2, 5 y 15 min por defecto, acá
+# 1s) y al cuarto fallo deja de reintentar (criterio de aceptación 2). Cada
+# nivel del reintento se agenda desde el subshell del nivel anterior, así que
+# el `wait` del hook solo alcanza al primero: se sondea el resto.
+TRANSIENT_WAITS_OVERRIDE=1,1,1 corre_doble 9 "API Error: 529 Overloaded"
+if ! esperar_llamadas 4; then
+  printf 'FAIL %-58s no llegó a las 4 llamadas\n' "cuatro intentos en total (uno más tres reintentos)"
+  fail=1
+fi
+# Espera la línea del tope en vez de un `sleep` fijo: run_skill sigue
+# trabajando (ALARMA, work_state) después de la 4a llamada.
+for ((i = 0; i < 50; i++)); do
+  grep -qE 'sin más reintentos por error transitorio de la API' "$OUT" 2>/dev/null && break
+  sleep 0.1
+done
+check_log "tope de reintentos por error transitorio" \
+  'pr-review-9-abc1234 sin más reintentos por error transitorio de la API \(tope de 3\)'
+check_igual "cuatro intentos en total (uno más tres reintentos)" 4 "$LLAMADAS"
+
+# Un fallo con turnos = 5 no es transitorio -el agente sí llegó a trabajar-,
+# así que no reintenta aunque el texto hable de un 529 (criterio de
+# aceptación 1, segunda mitad).
+TRANSIENT_WAITS_OVERRIDE=1,1,1 DEVKIT_TEST_FAIL_TURNS=5 corre_doble 1 "API Error: 529 Overloaded"
+check_igual "turnos = 5 no reintenta" 1 "$LLAMADAS"
+check_igual "sin línea de reintento con turnos = 5" 0 "$(grep -c 'reintento' "$OUT")"
+
+# El timeout de Claude Code dice "Request timed out", no "timeout": también
+# debe reintentar (DEVKIT-124, H2).
+TRANSIENT_WAITS_OVERRIDE=1,1,1 corre_doble 1 "API Error: Request timed out."
+check_log "reintento por 'timed out' (no solo 'timeout')" \
+  'pr-review-9-abc1234 reintento 1/3 por error transitorio de la API, en 1s'
+check_igual "la skill se lanzó dos veces con 'timed out'" 2 "$LLAMADAS"
 
 # --- devkit-run como único punto de lanzamiento (DEVKIT-45/DEVKIT-54) ------
 # run_skill delega en devkit-run.sh, que resuelve modelo y esfuerzo por rol
