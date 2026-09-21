@@ -143,7 +143,7 @@ if [ -z "$que_cambia" ]; then
   que_cambia="(el PR no trae la sección \"## Qué cambia\")"
 elif [ "${#que_cambia}" -gt 400 ]; then
   limite="${que_cambia:0:400}"
-  corte="${limite%.*}"
+  corte="${limite%. *}"
   if [ "$corte" != "$limite" ]; then
     que_cambia="$corte. (…)"
   else
