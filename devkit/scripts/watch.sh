@@ -529,7 +529,7 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
 # a trabajar-. Un turno con más trabajo o algún costo ya no cuenta: ahí el
 # agente sí llegó a hacer algo y un reintento automático pisaría ese trabajo.
 
-TRANSIENT_RE='API [Ee]rror:[[:space:]]*5[0-9]{2}|[Oo]verloaded|[Tt]ime ?out'
+TRANSIENT_RE='API [Ee]rror:[[:space:]]*5[0-9]{2}|[Oo]verloaded|[Tt]imed? ?out'
 
 # ¿La respuesta de <logf> es un error transitorio de la API? Turnos y costo
 # se leen del mismo JSON que ya usa `--resumen`.

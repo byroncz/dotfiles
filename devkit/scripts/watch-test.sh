@@ -501,6 +501,13 @@ TRANSIENT_WAITS_OVERRIDE=1,1,1 DEVKIT_TEST_FAIL_TURNS=5 corre_doble 1 "API Error
 check_igual "turnos = 5 no reintenta" 1 "$LLAMADAS"
 check_igual "sin línea de reintento con turnos = 5" 0 "$(grep -c 'reintento' "$OUT")"
 
+# El timeout de Claude Code dice "Request timed out", no "timeout": también
+# debe reintentar (DEVKIT-124, H2).
+TRANSIENT_WAITS_OVERRIDE=1,1,1 corre_doble 1 "API Error: Request timed out."
+check_log "reintento por 'timed out' (no solo 'timeout')" \
+  'pr-review-9-abc1234 reintento 1/3 por error transitorio de la API, en 1s'
+check_igual "la skill se lanzó dos veces con 'timed out'" 2 "$LLAMADAS"
+
 # --- devkit-run como único punto de lanzamiento (DEVKIT-45/DEVKIT-54) ------
 # run_skill delega en devkit-run.sh, que resuelve modelo y esfuerzo por rol
 # desde roles.toml; pr-review siempre cae en el rol "revision" (el segundo
