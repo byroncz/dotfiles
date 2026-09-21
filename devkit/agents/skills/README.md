@@ -12,7 +12,7 @@ con `claude -p "/nombre argumentos"`.
 | `project-init` | Alta de proyecto en Notion | Humano, una vez |
 | `epic-plan` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
 | `task-create` | Nace en Por refinar | Humano o agente |
-| `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-next.sh` |
+| `task-start` | Lista → En progreso | Agente; también `epic-plan` y `cola.sh` |
 | `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
 | `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
@@ -21,15 +21,15 @@ con `claude -p "/nombre argumentos"`.
 | `template-update` | Sube la versión del template y pone al día `AGENTS.md` | Agente |
 | `template-propagate` | PR de actualización en cada proyecto | Agente, desde DEVKIT |
 
-Cerrar y bloquear no son skills desde DEVKIT-55, ni encadenar la siguiente
-hija desde DEVKIT-56: son scripts bash contra la API de Notion, con el token
-`notion_token`, que no gastan modelo.
+Cerrar y bloquear no son skills desde DEVKIT-55, ni lanzar la siguiente card
+de la cola desde DEVKIT-56/DEVKIT-120: son scripts bash contra la API de
+Notion, con el token `notion_token`, que no gastan modelo.
 
 | Script | Transición | Quién lo lanza |
 |---|---|---|
-| `task-close.sh <Clave> [PR]` | Lista para merge → Hecha; cierra la Épica o llama a `task-next.sh` | `watch.sh` tras el merge; humano con `devkit-run task-close` |
+| `task-close.sh <Clave> [PR]` | Lista para merge → Hecha; cierra la Épica y llama a `cola.sh` | `watch.sh` tras el merge; humano con `devkit-run task-close` |
 | `task-document.sh <Clave> [PR]` | Escribe o reemplaza la entrada "cambio" de una card, copiando Objetivo, secciones del PR, hallazgos corregidos y marcas de modelo; no cambia el Estado. Idempotente por head | `watch.sh` al OK de `pr-review`; `task-close.sh` al merge |
-| `task-next.sh <Clave>` | Lanza `task-start` de la siguiente hija libre de la Épica: su `Depende de` en `Hecha`, ninguna hermana en curso | `watch.sh` al OK de `pr-review`; `task-close.sh` al merge |
+| `cola.sh` | Imprime la Clave de la siguiente card de la cola del proyecto (o nada): hijas de Épicas en `Lista`, luego tareas sueltas en `Lista`, su `Depende de` en `Hecha` y nada `En progreso`/`Revisión automática` ni un `task-start` vivo. `watch.sh`/`task-close.sh` lanzan `task-start` con lo que devuelve | `watch.sh` en cada pasada del sondeo sin nada en curso y al OK de `pr-review`; `task-close.sh` al merge |
 | `task-block.sh <Clave> <motivo>` | Cualquiera (salvo `Hecha`, que se niega) → Bloqueada | Agente, `watch.sh` y `devkit-run`; humano con `devkit-run task-block` |
 
 Las skills los invocan por ruta, `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh"`:

@@ -692,7 +692,17 @@ esac
 FIN
 cat >"$CICLO/devkit-run.sh" <<'FIN'
 #!/usr/bin/env bash
+[ "$1" = --otros-agentes ] && exit 0
 printf '%s\n' "$*" >>"$FAKE_NOTION/lanzamientos"
+FIN
+# Doble de cola.sh (DEVKIT-120): task-close.sh ya no elige la siguiente hija
+# por su cuenta, se la pregunta a cola.sh. `$FAKE_NOTION/cola-siguiente`
+# controla la respuesta; vacío o ausente, como cola.sh real sin nada que
+# sugerir.
+cat >"$CICLO/cola.sh" <<'FIN'
+#!/usr/bin/env bash
+cat "$FAKE_NOTION/cola-siguiente" 2>/dev/null
+exit 0
 FIN
 # Doble de task-document.sh (DEVKIT-92): task-close.sh ya no lanza el agente
 # para una card de Nivel Tarea, así que aquí no hace falta un `claude` de
@@ -720,7 +730,7 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 FIN
-chmod +x "$CICLO/notion.sh" "$CICLO/devkit-run.sh" "$CICLO/task-document.sh" "$CICLO/bin/gh"
+chmod +x "$CICLO/notion.sh" "$CICLO/devkit-run.sh" "$CICLO/cola.sh" "$CICLO/task-document.sh" "$CICLO/bin/gh"
 
 # tarea <id> <numero> <estado> <orden> <depende (ids separados por coma)>
 tarea() {
@@ -741,7 +751,7 @@ printf '[%s,%s,%s,%s]' "$(tarea card-3 3 Hecha 1 "")" "$(tarea card-4 4 Lista 3 
 printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
 
 # `ps` sin procesos: la prueba puede correr dentro de un `devkit-run --worker
-# /task-start` de verdad, que task-next.sh tomaría por una hija ya lanzada.
+# /task-start` de verdad, que cola.sh tomaría por una card ya lanzada.
 cat >"$CICLO/ps-vacio" <<'FIN'
 #!/usr/bin/env bash
 exit 0
@@ -749,6 +759,7 @@ FIN
 chmod +x "$CICLO/ps-vacio"
 ciclo_env=(FAKE_NOTION="$N" FAKE_GH="$CICLO/gh" PATH="$CICLO/bin:$PATH"
            DEVKIT_NOTION_BIN="$CICLO/notion.sh" DEVKIT_RUN_BIN="$CICLO/devkit-run.sh"
+           DEVKIT_COLA_BIN="$CICLO/cola.sh"
            DEVKIT_TASK_DOCUMENT_BIN="$CICLO/task-document.sh"
            DEVKIT_PS_BIN="$CICLO/ps-vacio"
            DEVKIT_WS="$CICLO/ws" DEVKIT_RUN_DIR="$CICLO/run" DEVKIT_HOY=2026-09-16)
@@ -803,6 +814,11 @@ check "ciclo: documentado, espera el merge" nada a1 "$(rev T01 a1 OK)" -- "$(doc
 
 # 3. Merge: el bucle de mergeados cierra con task-close.sh.
 MERGED_AT=$(date -u -d '-5 seconds' +%FT%TZ)
+# La siguiente card de la cola, para la última comprobación de este bloque
+# (DEVKIT-120): el doble de cola.sh responde DEVKIT-4, como antes elegía
+# task-next.sh. Se limpia después de usarla para no interferir con el resto
+# del ciclo (candados de doc, comentarios sin entrada, marcas de modelo...).
+printf 'DEVKIT-4\n' >"$N/cola-siguiente"
 printf '40\thttps://github.com/o/r/pull/40\t%s\tDEVKIT-3 algo\n' "$MERGED_AT" >"$CICLO/gh/mergeados"
 jq -nc '{state: "MERGED", number: 40, url: "https://github.com/o/r/pull/40", headRefOid: "a1",
          mergeCommit: {oid: "f1"}, comments: [{body: "<!-- devkit-doc sha=a1 -->"}],
@@ -822,8 +838,9 @@ check_igual "ciclo: comentario con Documentación y marcas de modelo" "comentar 
   "$(grep '^comentar card-3' "$N/llamadas" | head -1)"
 check_igual "ciclo: marcador devkit-closed con sha y enlace" 1 \
   "$(grep -c 'pr comment 40 --body <!-- devkit-closed sha=f1 -->' "$CICLO/gh/comentarios" 2>/dev/null)"
-check_igual "ciclo: lanza la siguiente hija libre por Orden y dependencias" "task-start DEVKIT-4" \
+check_igual "ciclo: lanza la siguiente card de la cola" "task-start DEVKIT-4" \
   "$(tail -1 "$N/lanzamientos" 2>/dev/null)"
+: >"$N/cola-siguiente"
 # 4. Una segunda pasada no repite el cierre: `launched` lo recuerda.
 env "${ciclo_env[@]}" bash "$WATCH" --merged-once >>"$CICLO/watch.log" 2>&1
 check_igual "ciclo: una segunda pasada no vuelve a cerrar" 1 "$(grep -c 'task-close-40 terminado' "$OUT")"
@@ -897,53 +914,153 @@ env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
 check_igual "task-close: Épica sin criterios no se cierra" "0 1" \
   "$(grep -c '^set epica-1' "$N/llamadas") $(grep -c '^comentar epica-1 Sus hijas terminaron' "$N/llamadas")"
 
-# --- Siguiente hija al OK del revisor (DEVKIT-56) ----------------------------
-# task-next.sh real, llamado por el hook --chain-next de watch.sh, contra los
-# mismos dobles. Épica 2 con dos hijas en Lista detrás de DEVKIT-10, que acaba
-# de recibir OK: DEVKIT-11 depende de ella (tocan los mismos archivos) y
-# DEVKIT-12 no. Arranca DEVKIT-12 aunque DEVKIT-11 tenga menor Orden.
-hija() {  # hija <id> <numero> <estado> <orden> <depende>, en la Épica 2
-  tarea "$@" | jq -c '.padre = ["epica-2"]'
-}
-hija card-10 10 "Lista para merge" 1 "" >"$N/card-DEVKIT-10.json"
-printf '[%s,%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 Lista 2 card-10)" \
-  "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
+# --- La siguiente card de la cola (DEVKIT-120) ------------------------------
+# lanzar_cola generaliza chain_next/task-next.sh (DEVKIT-56): en vez de mirar
+# solo las hermanas de la Épica de una card, pregunta a cola.sh por la
+# siguiente de todo el proyecto. watch.sh la llama con el hook --lanzar-cola
+# tanto al OK del revisor (dentro de procesar_pr) como en cada pasada del
+# sondeo sin nada en curso; task-close.sh la llama al cerrar (ver el bloque
+# "ciclo" de arriba). Acá se prueba el hook directo, con el doble de cola.sh
+# del mismo ciclo.
 : >"$N/llamadas"; : >"$N/lanzamientos"
-env "${ciclo_env[@]}" bash "$WATCH" --chain-next 50 DEVKIT-10 >"$CICLO/chain.log" 2>&1
-OUT="$CICLO/chain.log"
-check_igual "encadenar: al OK arranca la hija que no depende de la aprobada" "task-start DEVKIT-12" \
+printf 'DEVKIT-12\n' >"$N/cola-siguiente"
+env "${ciclo_env[@]}" bash "$WATCH" --lanzar-cola 50 >"$CICLO/cola-hook.log" 2>&1
+OUT="$CICLO/cola-hook.log"
+check_igual "cola: con una Clave, lanza task-start" "task-start DEVKIT-12" \
   "$(cat "$N/lanzamientos")"
-check_log "encadenar: la línea de watch.log lo registra" \
-  'task-next-50 terminado: bash, DEVKIT-10 en Lista para merge :: task-next: lanzada la siguiente hija: task-start DEVKIT-12'
+check_log "cola: la línea cola-<n> queda en watch.log" \
+  'cola-50 terminado: bash, lanzada la siguiente card: task-start DEVKIT-12'
 
-# Solo queda la dependiente: espera el merge, sin lanzar ni comentar en la
-# Épica, porque el cierre de DEVKIT-10 vuelve a llamar a task-next.sh.
-printf '[%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 Lista 2 card-10)" >"$N/hijas-epica-2.json"
-: >"$N/llamadas"; : >"$N/lanzamientos"
-check_igual "encadenar: la dependiente espera a Hecha" "task-next: sin hija libre; DEVKIT-11 esperan dependencias" \
-  "$(env "${ciclo_env[@]}" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
-check_igual "encadenar: esperar un merge no comenta en la Épica" "0 0" \
-  "$(wc -l <"$N/lanzamientos" | tr -d ' ') $(grep -c '^comentar' "$N/llamadas")"
-
-# Una hija ya en curso: no se arranca otra encima.
-printf '[%s,%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-11 11 "En progreso" 2 "")" \
-  "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
+# Sin nada que sugerir: cola.sh (que ya trae su propia guarda de "algo en
+# curso") devuelve vacío, y no se lanza ni se registra nada.
 : >"$N/lanzamientos"
-check_igual "encadenar: con una hermana En progreso no lanza" "task-next: no lanzo otra hija: DEVKIT-11 (En progreso) sigue en curso" \
-  "$(env "${ciclo_env[@]}" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
+: >"$N/cola-siguiente"
+env "${ciclo_env[@]}" bash "$WATCH" --lanzar-cola 51 >"$CICLO/cola-hook.log" 2>&1
+OUT="$CICLO/cola-hook.log"
+check_igual "cola: sin Clave, no lanza nada" "" "$(cat "$N/lanzamientos")"
+check_igual "cola: sin Clave, sin línea en watch.log" 0 "$(grep -c 'cola-51' "$OUT")"
 
-# task-start ya lanzado al OK, esperando el candado, y el merge llega antes de
-# que cambie el Estado: task-close.sh no lo lanza dos veces.
-printf '[%s,%s]' "$(hija card-10 10 "Lista para merge" 1 "")" "$(hija card-12 12 Lista 3 "")" >"$N/hijas-epica-2.json"
-cat >"$CICLO/ps-arrancando" <<'FIN'
+# cola.sh falla (Notion caído, por ejemplo): ALARMA en vez de lanzar algo a
+# ciegas.
+COLA_ROTO="$CICLO/cola-roto.sh"
+cat >"$COLA_ROTO" <<'FIN'
 #!/usr/bin/env bash
-echo "bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-12 /run/devkit/task-start-1.log opus high 40"
+echo "no pude leer Notion" >&2
+exit 1
 FIN
-chmod +x "$CICLO/ps-arrancando"
+chmod +x "$COLA_ROTO"
 : >"$N/lanzamientos"
-check_igual "encadenar: task-start vivo para la hermana no se duplica" "task-next: no lanzo otra hija: task-start DEVKIT-12 ya corre o espera el candado" \
-  "$(env "${ciclo_env[@]}" DEVKIT_PS_BIN="$CICLO/ps-arrancando" bash "$HERE/task-next.sh" DEVKIT-10 2>&1 | tail -1)"
-check_igual "encadenar: sin segundo lanzamiento" 0 "$(wc -l <"$N/lanzamientos" | tr -d ' ')"
+env "${ciclo_env[@]}" DEVKIT_COLA_BIN="$COLA_ROTO" bash "$WATCH" --lanzar-cola 52 >"$CICLO/cola-hook.log" 2>&1
+OUT="$CICLO/cola-hook.log"
+check_log "cola: cola.sh falla, ALARMA sin lanzar nada" \
+  'ALARMA: cola-52 no pudo leer la cola \(rc=1\): no pude leer Notion'
+check_igual "cola: cola.sh falla, no lanza nada" "" "$(cat "$N/lanzamientos")"
+
+# Idempotente (criterio de aceptación): dos llamadas seguidas no lanzan dos
+# veces. Un doble con estado propio lo reproduce sin tocar Notion: la
+# primera llamada lanza y marca un archivo; la segunda ya no ve la card
+# libre, igual que cola.sh real deja de sugerirla en cuanto queda En
+# progreso o con un `task-start` vivo (mismas guardas de cola.sh --test).
+IDEMP_COLA="$TMP/idemp-cola"
+mkdir -p "$IDEMP_COLA"
+cat >"$IDEMP_COLA/cola" <<FIN
+#!/usr/bin/env bash
+[ -f "$IDEMP_COLA/lanzada" ] && exit 0
+echo DEVKIT-90
+FIN
+chmod +x "$IDEMP_COLA/cola"
+cat >"$IDEMP_COLA/devkit-run" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
+printf '%s\n' "\$*" >>"$IDEMP_COLA/lanzamientos"
+touch "$IDEMP_COLA/lanzada"
+FIN
+chmod +x "$IDEMP_COLA/devkit-run"
+env DEVKIT_COLA_BIN="$IDEMP_COLA/cola" DEVKIT_RUN_BIN="$IDEMP_COLA/devkit-run" \
+    DEVKIT_RUN_DIR="$IDEMP_COLA/run" DEVKIT_WS="$IDEMP_COLA" \
+  bash "$WATCH" --lanzar-cola 1 >"$IDEMP_COLA/watch1.log" 2>&1
+env DEVKIT_COLA_BIN="$IDEMP_COLA/cola" DEVKIT_RUN_BIN="$IDEMP_COLA/devkit-run" \
+    DEVKIT_RUN_DIR="$IDEMP_COLA/run" DEVKIT_WS="$IDEMP_COLA" \
+  bash "$WATCH" --lanzar-cola 2 >"$IDEMP_COLA/watch2.log" 2>&1
+check_igual "cola: idempotente, dos llamadas seguidas no lanzan dos veces" "task-start DEVKIT-90" \
+  "$(cat "$IDEMP_COLA/lanzamientos" 2>/dev/null)"
+
+# --- Caso "card suelta en Lista arranca sola" (DEVKIT-120) ------------------
+# Fin a fin con cola.sh real (no doblado): sin nada En progreso/Revisión
+# automática en el proyecto, una card suelta (sin Épica) en Lista arranca
+# con --lanzar-cola, la misma llamada que watch.sh hace en cada pasada del
+# sondeo sin card activa. `notion.sh` es un doble mínimo que solo entiende
+# `activas` y `sueltas`, lo que cola.sh necesita para el grupo de sueltas.
+SUELTA=$(mktemp -d -p "$TMP")
+mkdir -p "$SUELTA/run" "$SUELTA/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$SUELTA/ws/.devkit/devkit.toml"
+printf '[{"clave":"DEVKIT-90","estado":"Lista","nivel":"Tarea"}]' >"$SUELTA/activas.json"
+printf '[{"id":"card-90","clave":"DEVKIT-90","estado":"Lista","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"suelta"}]' \
+  >"$SUELTA/sueltas.json"
+cat >"$SUELTA/notion.sh" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT") cat "$SUELTA/activas.json" ;;
+  "sueltas DEVKIT") cat "$SUELTA/sueltas.json" ;;
+esac
+FIN
+chmod +x "$SUELTA/notion.sh"
+cat >"$SUELTA/ps-vacio" <<'FIN'
+#!/usr/bin/env bash
+exit 0
+FIN
+chmod +x "$SUELTA/ps-vacio"
+cat >"$SUELTA/devkit-run" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
+printf '%s\n' "\$*" >>"$SUELTA/lanzamientos"
+FIN
+chmod +x "$SUELTA/devkit-run"
+
+env DEVKIT_NOTION_BIN="$SUELTA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
+    DEVKIT_RUN_BIN="$SUELTA/devkit-run" DEVKIT_RUN_DIR="$SUELTA/run" DEVKIT_WS="$SUELTA/ws" \
+  bash "$WATCH" --lanzar-cola 90 >"$SUELTA/watch.log" 2>&1
+OUT="$SUELTA/watch.log"
+check_igual "card suelta en Lista arranca sola" "task-start DEVKIT-90" \
+  "$(cat "$SUELTA/lanzamientos" 2>/dev/null)"
+check_log "card suelta en Lista arranca sola: línea cola-<n> en watch.log" \
+  'cola-90 terminado: bash, lanzada la siguiente card: task-start DEVKIT-90'
+
+# Workspace sucio: no se lanza nada, solo queda "cola-<n> espera" en
+# watch.log (DEVKIT-120, H1). Antes, un archivo sin commit hacía fallar
+# `task-start` en cada pasada del sondeo y `task_begin_fallo` bloqueaba la
+# card en Lista, y la siguiente pasada bloqueaba la que seguía: la cola
+# entera se apagaba card por card en minutos.
+SUCIO=$(mktemp -d -p "$TMP")
+mkdir -p "$SUCIO/run" "$SUCIO/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$SUCIO/ws/.devkit/devkit.toml"
+git init -q "$SUCIO/ws"
+touch "$SUCIO/ws/sin-commit.txt"
+cat >"$SUCIO/devkit-run" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
+printf '%s\n' "\$*" >>"$SUCIO/lanzamientos"
+FIN
+chmod +x "$SUCIO/devkit-run"
+env DEVKIT_NOTION_BIN="$SUELTA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
+    DEVKIT_RUN_BIN="$SUCIO/devkit-run" DEVKIT_RUN_DIR="$SUCIO/run" DEVKIT_WS="$SUCIO/ws" \
+  bash "$WATCH" --lanzar-cola 92 >"$SUCIO/watch.log" 2>&1
+OUT="$SUCIO/watch.log"
+check_igual "workspace sucio: no lanza task-start" "" \
+  "$(cat "$SUCIO/lanzamientos" 2>/dev/null)"
+check_log "workspace sucio: cola-<n> espera queda en watch.log" \
+  'cola-92 espera: workspace sucio'
+
+# Idempotente: con la card ya En progreso (lo que Notion reflejaría tras el
+# lanzamiento real), cola.sh no vuelve a sugerirla y una segunda pasada no
+# lanza otra vez.
+printf '[{"clave":"DEVKIT-90","estado":"En progreso","nivel":"Tarea"}]' >"$SUELTA/activas.json"
+: >"$SUELTA/lanzamientos"
+env DEVKIT_NOTION_BIN="$SUELTA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
+    DEVKIT_RUN_BIN="$SUELTA/devkit-run" DEVKIT_RUN_DIR="$SUELTA/run" DEVKIT_WS="$SUELTA/ws" \
+  bash "$WATCH" --lanzar-cola 91 >>"$SUELTA/watch.log" 2>&1
+check_igual "card suelta en Lista arranca sola: idempotente, no la relanza" "" \
+  "$(cat "$SUELTA/lanzamientos" 2>/dev/null)"
 
 # Bloqueo por tres ciclos sin OK: marcador en el PR y task-block.sh real.
 tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
@@ -1295,7 +1412,7 @@ check_igual "poke: sleep_or_poke borra el archivo al despertar" 0 \
 
 # `procesar_pr` encadena decide+actúa sin dormir hasta un estado terminal: un
 # PR nuevo pasa por pr-review (CAMBIOS) -> task-fix -> pr-review (OK) ->
-# task-document.sh + chain_next -> nada, todo en una sola llamada. `gh` y
+# task-document.sh + lanzar_cola -> nada, todo en una sola llamada. `gh` y
 # `devkit-run.sh` son dobles con estado propio en $PP_STATE: el segundo
 # simula lo que review-publish.sh/fix-publish.sh publicarían de verdad
 # (nuevo devkit-review o devkit-fix) para que la siguiente vuelta de `decide`
@@ -1375,16 +1492,15 @@ echo "task-document: $1 documentado: https://notion.so/doc-x"
 FIN
 chmod +x "$PP/task-document"
 
-cat >"$PP/task-next" <<'FIN'
+cat >"$PP/cola" <<'FIN'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$PP_STATE/task-next-llamadas"
-echo "task-next: nada que hacer"
+printf '%s\n' "$*" >>"$PP_STATE/cola-llamadas"
 FIN
-chmod +x "$PP/task-next"
+chmod +x "$PP/cola"
 
 PP_INICIO=$(date +%s%N)
 PP_STATE="$PP_STATE" PATH="$PP/bin:$PATH" DEVKIT_RUN_BIN="$PP/devkit-run" \
-DEVKIT_TASK_DOCUMENT_BIN="$PP/task-document" DEVKIT_TASK_NEXT_BIN="$PP/task-next" \
+DEVKIT_TASK_DOCUMENT_BIN="$PP/task-document" DEVKIT_COLA_BIN="$PP/cola" \
 DEVKIT_RUN_DIR="$PP/run" DEVKIT_WS="$PP" \
   bash "$WATCH" --procesar-pr 77 https://github.com/o/r/pull/77 "DEVKIT-9 algo" "" \
   >"$PP/watch.log" 2>&1
@@ -1406,16 +1522,14 @@ check_log "procesar_pr: respuesta sin push lanza pr-review otra vez, en el mismo
   'PR #77 \(DEVKIT-9\) head a1b2c3d con respuesta sin push: lanzando pr-review otra vez'
 check_log "procesar_pr: OK lanza task-document.sh en el mismo tick" \
   'PR #77 \(DEVKIT-9\) OK en a1b2c3d: task-document\.sh'
-check_log "procesar_pr: OK encadena la siguiente hija (chain_next) en el mismo tick" \
-  'task-next-77 terminado: bash, DEVKIT-9 en Lista para merge'
 check_igual "procesar_pr: pr-review corrió dos veces (CAMBIOS y OK)" 2 \
   "$(cat "$PP_STATE/pr-calls" 2>/dev/null || echo 0)"
 check_igual "procesar_pr: task-fix corrió una sola vez" 1 \
   "$(grep -c 'devkit-fix' "$PP_STATE/comments" 2>/dev/null || echo 0)"
 check_igual "procesar_pr: task-document.sh corrió una sola vez" 1 \
   "$(wc -l <"$PP_STATE/task-document-llamadas" 2>/dev/null | tr -d ' ')"
-check_igual "procesar_pr: chain_next corrió una sola vez" 1 \
-  "$(wc -l <"$PP_STATE/task-next-llamadas" 2>/dev/null | tr -d ' ')"
+check_igual "procesar_pr: OK encadena vía cola.sh (lanzar_cola) una sola vez, en el mismo tick" 1 \
+  "$(wc -l <"$PP_STATE/cola-llamadas" 2>/dev/null | tr -d ' ')"
 # Cinco vueltas de la cadena (revisar, fix, revisar, documentar, nada), más
 # la consulta que hace `atender_fix` para saber si task-fix respondió vacío
 # (DEVKIT-57): seis en total, y ninguna más -la cadena para sola al llegar a

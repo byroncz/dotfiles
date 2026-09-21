@@ -835,10 +835,10 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
 # cierre con error también gastó turnos y costo, así que cuenta igual que uno
 # exitoso (H2 de pr-review en DEVKIT-89): "ALARMA: <id> terminó con error" es
 # el formato de `run_skill` en watch.sh, "falló (rc=" el de `devkit-run.sh` y
-# el de `task-close-N`/`task-next-N` en bash. Sin este filtro, costos.log
-# arrastraría también las líneas narrativas del bucle ("PR #31 ... lanzando
-# pr-review") y las de task-block/task-next, que no aportan costo/turnos y
-# solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
+# el de `task-close-N` en bash. Sin este filtro, costos.log arrastraría
+# también las líneas narrativas del bucle ("PR #31 ... lanzando pr-review")
+# y las de task-block/cola, que no aportan costo/turnos y solo inflarían un
+# archivo que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
     *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*|*" no lanzó: "*) ;;
@@ -2309,7 +2309,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
 #      muerto. Sin alarma -si esa fila ya superó SKILL_TIMEOUT, la marca
 #      "lento" vive en su propia fila de la tabla (`estado_filas`); esta línea
 #      no la duplica ni la reemplaza. `task-start` con origen `bucle` viene de
-#      `chain_next` -> `task-next.sh` -> `devkit-run.sh task-start`, que lanza
+#      `lanzar_cola` -> `cola.sh` -> `devkit-run.sh task-start`, que lanza
 #      un worker con `nohup setsid` y vuelve enseguida (ver la cabecera de
 #      este archivo): no bloquea a `watch.sh` como sí lo hace `run_skill` con
 #      pr-review/task-fix/task-close/task-document (`--sync`, con `wait`).
@@ -2705,7 +2705,7 @@ clave_de_lanzamiento() {  # clave_de_lanzamiento <prompt> <id>
 # sin las ramas de "en curso"/"no arrancó": aquí solo interesa lo que ya
 # cerró). Un cierre con error cuenta igual que uno exitoso (H2 de pr-review en
 # DEVKIT-89), así que se empareja también "$id falló (rc=" (task-close-N,
-# task-next-N) y "ALARMA: $id terminó con error" (`run_skill` en watch.sh, que
+# cola-N) y "ALARMA: $id terminó con error" (`run_skill` en watch.sh, que
 # no deja línea "$id terminado:" cuando falla). "$id no lanzó: " también
 # cierra (DEVKIT-107 H2): sin esto, un pr-review que no lanzó (por ejemplo
 # "ya revisado en <sha>") y que luego se relanza con el mismo id -mismo head,
@@ -5833,8 +5833,8 @@ FIN
     "$(PS_BIN="$pslist_esperando" LOCK="$est/skill.lock" estado_filas "$esperando_lento_log" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-87" {print $5"|"$6}')"
 
-  # DEVKIT-97 H2: task-start con origen bucle viene de `chain_next` ->
-  # `task-next.sh` -> `devkit-run.sh task-start`, un worker `nohup setsid` que
+  # DEVKIT-97 H2: task-start con origen bucle viene de `lanzar_cola` ->
+  # `cola.sh` -> `devkit-run.sh task-start`, un worker `nohup setsid` que
   # no bloquea a `watch.sh` -a diferencia de `run_skill` (pr-review/task-fix/
   # task-close/task-document), que corre con `--sync` y `wait`. Con el worker
   # todavía en `ps` (fila `en curso`) pero sin `--sync /task-start` y un tick
@@ -5855,9 +5855,10 @@ FIN
 
   # DEVKIT-81 H5, regla sin excepción: un `claude -p` vivo de cada origen real
   # -humano (terminal), bucle (run_skill lanza pr-review/task-fix/
-  # task-document, y watch.sh también lanza task-next.sh con este origen tras
-  # el OK), task-close (task-close.sh lo declara, y encadena task-next.sh con
-  # el mismo origen tras el merge) y epic-plan (detectado por ancestro)-
+  # task-document, y watch.sh también lanza cola.sh con este origen tras el
+  # OK y en cada pasada sin nada en curso), task-close (task-close.sh lo
+  # declara, y lanza cola.sh con el mismo origen tras el merge) y epic-plan
+  # (detectado por ancestro)-
   # aparece `en curso` con su origen, nunca `sin registro`. `ps` trae las dos
   # entradas de un lanzamiento real: el `bash devkit-run.sh --worker` con el
   # log (lo que ve la fila principal) y el `claude -p` hijo (lo que ve

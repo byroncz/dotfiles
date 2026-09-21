@@ -51,7 +51,6 @@ watch-test.sh | watch-test.sh | Prueba `watch.sh` sin GitHub y sin gastar cuota.
 notion.sh | notion.sh <endpoint> | Cliente de la API de Notion para bash: leer y escribir cards y Documentación.
 task-close.sh <Clave> [PR] | task-close.sh DEVKIT-42 118 | Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR. Úsalo tras mergear a mano, cuando el bucle no la alcanzó a cerrar solo.
 task-block.sh <Clave> <motivo> | task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card y anota el motivo. Úsalo cuando falte algo del humano y no puedas seguir sin preguntar.
-task-next.sh <Clave> | task-next.sh DEVKIT-1 | Lanza la siguiente hija libre de la Épica de la card.
 cola.sh [--lista] | cola.sh --lista | Imprime la Clave de la siguiente card de la cola, o con `--lista`, las primeras diez.
 prompt-status.sh | prompt-status.sh | Arma la línea dinámica del prompt de starship.
 dropbox-setup.sh | dropbox-setup.sh | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`.

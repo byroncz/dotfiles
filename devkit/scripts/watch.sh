@@ -8,14 +8,18 @@
 #   último marcador OK y comentario humano posterior        -> task-fix "<texto>"
 #   último marcador OK para el head, sin devkit-doc del head -> task-document.sh
 #                                                                (o la skill, si el PR trae "Tipo: decisión")
-#   último marcador OK para el head                         -> task-next.sh
+#   último marcador OK para el head                         -> cola.sh
 #   3 ciclos respondidos y CAMBIOS otra vez en el head      -> task-block.sh
 #   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
 #
-# task-next.sh arranca la siguiente hija libre de la Épica en cuanto la card
-# entra en `Lista para merge`, sin esperar el approve humano ni el merge
-# (DEVKIT-56). Corre una vez por head en cada vida del contenedor; es
-# idempotente, así que repetirlo tras un rebuild no lanza nada dos veces.
+# cola.sh arranca la siguiente card de la cola del proyecto en cuanto una
+# card entra en `Lista para merge`, sin esperar el approve humano ni el
+# merge (DEVKIT-56). Desde DEVKIT-120 también se llama en cada pasada del
+# sondeo sin nada en curso, así que cualquier card libre en Lista arranca
+# sola, no solo las hijas de una Épica en curso: `lanzar_cola`, más abajo, es
+# el único punto que lo hace. Es idempotente (la guarda de "algo en curso"
+# vive dentro de cola.sh), así que repetirlo tras un rebuild, o dos pasadas
+# seguidas, no lanza nada dos veces.
 #
 # task-block.sh y task-close.sh son bash contra la API de Notion (DEVKIT-55),
 # no skills: no gastan modelo ni esperan el candado de `claude -p`. Los PRs
@@ -29,7 +33,7 @@
 # bucle sobre un PR (pr-review, task-fix, el task-document agente), vuelve a
 # consultar `decide` sobre ese mismo PR ahí mismo, sin dormir: un CAMBIOS
 # lanza task-fix, una respuesta sin push lanza pr-review otra vez, un OK
-# dispara task-document.sh y chain_next, todo en la misma pasada. La cadena
+# dispara task-document.sh y lanzar_cola, todo en la misma pasada. La cadena
 # solo para cuando `decide` repite la misma tupla que la vuelta anterior (ya
 # no hay nada nuevo que lanzar, `launched` lo confirma) o llega a un estado
 # terminal (nada, bloqueado). Antes, cada transición del ciclo esperaba el
@@ -126,7 +130,11 @@ ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 # cabe de sobra en el límite de 5000 peticiones por hora del token.
 TASK_CLOSE="${DEVKIT_TASK_CLOSE_BIN:-$SCRIPTS_DIR/task-close.sh}"
 TASK_BLOCK="${DEVKIT_TASK_BLOCK_BIN:-$SCRIPTS_DIR/task-block.sh}"
-TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$SCRIPTS_DIR/task-next.sh}"
+# La siguiente card de la cola del proyecto (DEVKIT-119/DEVKIT-120), que
+# `lanzar_cola` usa en los tres momentos descritos en la cabecera. Sustituye
+# a task-next.sh (DEVKIT-56): cola.sh ya trae su propia guarda de "algo en
+# curso", así que `lanzar_cola` no necesita repetirla.
+COLA_BIN="${DEVKIT_COLA_BIN:-$SCRIPTS_DIR/cola.sh}"
 # task-document.sh escribe la entrada de tipo "cambio" en bash, sin agente
 # (DEVKIT-92); el agente solo corre cuando el cuerpo del PR trae la marca
 # "Tipo: decisión" (ver documentar_pr más abajo).
@@ -297,10 +305,10 @@ touch "$LAUNCHED"
 # cierre con error también gastó turnos y costo, así que cuenta igual que uno
 # exitoso (H2 de pr-review en DEVKIT-89): "ALARMA: <id> terminó con error" es
 # el formato de `run_skill` de aquí mismo, "falló (rc=" el de `devkit-run.sh`
-# y el de `task-close-N`/`task-next-N`. Sin este filtro, costos.log
-# arrastraría también las líneas narrativas ("PR #31 ... lanzando
-# pr-review") y las de task-block/task-next, que no aportan costo/turnos y
-# solo inflarían un archivo que vive fuera de tmpfs y no se rota nunca.
+# y el de `task-close-N`. Sin este filtro, costos.log arrastraría también
+# las líneas narrativas ("PR #31 ... lanzando pr-review") y las de
+# task-block/cola, que no aportan costo/turnos y solo inflarían un archivo
+# que vive fuera de tmpfs y no se rota nunca.
 costos_log_candidata() {  # costos_log_candidata <línea con fecha>
   case "$1" in
     *" lanzando "*|*" terminado"*|*" terminó con error"*|*" falló (rc="*|*" no lanzó: "*) ;;
@@ -884,17 +892,59 @@ caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
   run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "$lkey"
 }
 
-# Siguiente hija al OK del revisor, en bash (DEVKIT-56). La línea de watch.log
-# es la evidencia de que la hija arrancó mientras el PR espera el approve.
-chain_next() {  # chain_next <num> <Clave>
-  local num=$1 key=$2 out rc estado
-  out=$(DEVKIT_ORIGEN=bucle "$TASK_NEXT" "$key" 2>&1)
+# La siguiente card de la cola del proyecto, en bash (DEVKIT-120). Sustituye
+# a chain_next/task-next.sh (DEVKIT-56): antes solo miraba las hermanas de
+# una Épica, y solo se llamaba al OK del revisor y al merge. cola.sh mira el
+# proyecto entero, y esta misma función también se llama en cada pasada del
+# sondeo sin nada en curso (bucle principal, más abajo): así cualquier card
+# libre en Lista arranca sola, no solo las hijas de una Épica en curso.
+# `<n>` solo identifica la línea en watch.log: el número de PR que disparó
+# la llamada, o la hora de la llamada del bucle principal, sin PR de por
+# medio.
+#
+# Idempotente: `cola.sh` (sin argumento) no devuelve nada si ya hay una card
+# `En progreso` o `Revisión automática` en el proyecto, o un `task-start`
+# vivo para una card en `Lista` -la guarda vive en cola.sh, no aquí-, así
+# que dos llamadas seguidas no lanzan dos veces.
+#
+# Persiste entre pasadas del bucle principal, que vive en este mismo proceso
+# (DEVKIT-120, H1): guarda el último motivo por el que no se lanzó, para
+# avisar una sola vez por motivo y no en cada pasada del sondeo.
+LANZAR_COLA_ULTIMO_MOTIVO=""
+lanzar_cola() {  # lanzar_cola <n>
+  local n=$1 siguiente out rc estado sucio otros motivo
+  siguiente=$("$COLA_BIN" 2>&1)
   rc=$?
-  printf '%s\n' "$out" >"$RUN_DIR/task-next-$num.log"
+  if [ "$rc" -ne 0 ]; then
+    log "ALARMA: cola-$n no pudo leer la cola (rc=$rc): $(printf '%s' "$siguiente" | tail -1 | cut -c1-160)"
+    return
+  fi
+  [ -n "$siguiente" ] || return 0
+  # Mismo chequeo que task-begin.sh antes de tocar el workspace (DEVKIT-120,
+  # H1): sin él, un archivo sin commit o un `claude -p` ajeno hacía fallar
+  # `task-start` en cada pasada, y `task_begin_fallo` bloqueaba la cola
+  # entera card por card, minuto a minuto.
+  sucio=$(git -C "$WS" status --porcelain --untracked-files=all 2>/dev/null)
+  if [ -n "$sucio" ]; then
+    motivo="workspace sucio: $(printf '%s' "$sucio" | tr '\n' ' ')"
+  elif ! otros=$("$DEVKIT_RUN" --otros-agentes 2>&1); then
+    motivo="otro agente: $(printf '%s' "$otros" | tr '\n' ' ')"
+  fi
+  if [ -n "${motivo:-}" ]; then
+    if [ "$motivo" != "$LANZAR_COLA_ULTIMO_MOTIVO" ]; then
+      log "cola-$n espera: $motivo"
+      LANZAR_COLA_ULTIMO_MOTIVO=$motivo
+    fi
+    return 0
+  fi
+  LANZAR_COLA_ULTIMO_MOTIVO=""
+  out=$(DEVKIT_ORIGEN=bucle "$DEVKIT_RUN" task-start "$siguiente" 2>&1)
+  rc=$?
+  printf '%s\n' "$out" >"$RUN_DIR/cola-$n.log"
   estado=terminado
   [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
-  log "task-next-$num $estado: bash, $key en Lista para merge :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
-  [ "$rc" -eq 0 ] || log "ALARMA: task-next-$num terminó con error (rc=$rc); ver $RUN_DIR/task-next-$num.log"
+  log "cola-$n $estado: bash, lanzada la siguiente card: task-start $siguiente :: $(printf '%s' "$out" | tail -1 | cut -c1-160)"
+  [ "$rc" -eq 0 ] || log "ALARMA: cola-$n terminó con error (rc=$rc); ver $RUN_DIR/cola-$n.log"
 }
 
 # ¿El cuerpo del PR trae la marca "Tipo: decisión" (DEVKIT-92)? La escribe el
@@ -982,7 +1032,7 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
         # candado, así que no le quita el turno a la entrada.
         if ! launched "encadenar:$num:$head"; then
           mark "encadenar:$num:$head"
-          chain_next "$num" "$key"
+          lanzar_cola "$num"
         fi
         ;;
       nada)
@@ -990,7 +1040,7 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
         # contenedor): el encadenamiento se intenta igual una vez.
         if [ "$ref" = OK ] && ! launched "encadenar:$num:$head"; then
           mark "encadenar:$num:$head"
-          chain_next "$num" "$key"
+          lanzar_cola "$num"
         fi
         return 0
         ;;
@@ -1072,8 +1122,7 @@ check_merged_prs() {
 #   --merged-once           una pasada del bucle de PRs mergeados
 #   --block-pr <num> <Clave> <url> <head> <ciclos>
 #                           el bloqueo por tres ciclos sin OK
-#   --chain-next <num> <Clave>
-#                           la siguiente hija al OK del revisor
+#   --lanzar-cola <n>       la siguiente card de la cola del proyecto
 #   --fix <num> <Clave> <url> <head> <ref>
 #                           el caso `fix` completo: task-fix, alarma de
 #                           task-fix vacío, relanzamiento y bloqueo
@@ -1144,8 +1193,8 @@ case "${1:-}" in
     block_pr "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     exit 0
     ;;
-  --chain-next)
-    chain_next "${2:-}" "${3:-}"
+  --lanzar-cola)
+    lanzar_cola "${2:-}"
     exit 0
     ;;
   --documentar)
@@ -1195,6 +1244,12 @@ fi
 
 while true; do
   CODE=$(project_code)
+  # Cada pasada sin nada en curso, la cola drena sola (DEVKIT-120): no hace
+  # falta comprobar aquí si hay una card activa, esa guarda ya vive dentro de
+  # cola.sh. Antes de la consulta a GitHub: si el proyecto no tiene nada que
+  # revisar en PRs abiertos, la card recién lanzada aparece igual en el
+  # siguiente `--estado` sin esperar el resto del intervalo.
+  [ -z "$CODE" ] || lanzar_cola "$(date +%s)"
   if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
     BOT="$(gh api user --jq .login 2>/dev/null)"
     log "consultando GitHub"
@@ -1204,7 +1259,7 @@ while true; do
     # `-u 3`/`3< <(...)` (DEVKIT-102, H4): mismo motivo que check_merged_prs.
     # `procesar_pr` corre `run_skill` de forma síncrona, que a su vez corre
     # `claude -p` -el caso real del PR 68, donde ese `claude -p` se comió la
-    # fila de otro PR de esta misma tubería- y también task-next.sh,
+    # fila de otro PR de esta misma tubería- y también cola.sh,
     # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
     # la tubería como entrada estándar.
     while IFS=$'\t' read -r -u 3 num url title; do
