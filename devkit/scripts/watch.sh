@@ -21,6 +21,12 @@
 # vive dentro de cola.sh), así que repetirlo tras un rebuild, o dos pasadas
 # seguidas, no lanza nada dos veces.
 #
+# Antes de eso, cada pasada también corre `arrastrar_hijas` (DEVKIT-121): una
+# Épica en Lista o En progreso con hijas en Backlog -creadas a mano, o antes
+# de aprobar la Épica- las pasa a Lista, así cola.sh ya las ve en esa misma
+# vuelta. Una hija con Criterios de aceptación pendientes de definir no se
+# mueve; el comentario que deja en la Épica dice qué se movió y qué quedó.
+#
 # task-block.sh y task-close.sh son bash contra la API de Notion (DEVKIT-55),
 # no skills: no gastan modelo ni esperan el candado de `claude -p`. Los PRs
 # mergeados los atiende un segundo bucle, cada DEVKIT_WATCH_MERGED_INTERVAL
@@ -140,6 +146,10 @@ COLA_BIN="${DEVKIT_COLA_BIN:-$SCRIPTS_DIR/cola.sh}"
 # "Tipo: decisión" (ver documentar_pr más abajo).
 TASK_DOCUMENT="${DEVKIT_TASK_DOCUMENT_BIN:-$SCRIPTS_DIR/task-document.sh}"
 MERGED_INTERVAL="${DEVKIT_WATCH_MERGED_INTERVAL:-30}"
+# Arrastre de hijas de Backlog a Lista (DEVKIT-121): notion.sh directo, mismo
+# trato que `bloqueos`/`epicas` en `devkit-run.sh`, no un script propio -no
+# hay más lógica que una consulta y un `set` por hija.
+NOTION_BIN="${DEVKIT_NOTION_BIN:-$SCRIPTS_DIR/notion.sh}"
 
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cinco campos separados por tabulador (acción, head, referencia,
@@ -892,6 +902,81 @@ caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
   run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "$lkey"
 }
 
+# Arrastre de hijas de Backlog a Lista (DEVKIT-121): una Épica movida a
+# Lista o En progreso no debería quedarse a medias porque una hija -creada a
+# mano, o antes de aprobar la Épica- se quedó en Backlog y nadie la arranca.
+# `epic-plan` ya crea sus hijas en Lista (paso 5 de su SKILL.md); esto cubre
+# las que no pasaron por ahí. Cada pasada del bucle principal (más abajo)
+# revisa las Épicas del proyecto en esos dos Estados, mueve a Lista sus
+# hijas en Backlog y deja un comentario en la Épica con las Claves movidas.
+# Una hija con Criterios de aceptación vacíos o "pendientes de definir"
+# (misma regla de cierre de Épica que DEVKIT-44, en task-close.sh) no se
+# mueve y se nombra igual en el comentario, para que no quede perdida en
+# silencio.
+#
+# Sin script propio, a diferencia de `lanzar_cola`/`cola.sh`: no hay más
+# lógica que una consulta a Notion y un `set` por hija, así que habla con
+# `notion.sh` directo, igual que `devkit-run.sh` con `bloqueos`/`epicas`.
+#
+# Guardado en `launched`, con el conjunto de Claves movidas y pendientes de
+# cada Épica: si nada cambió desde la última pasada, no repite el
+# comentario. Una hija que ya se movió sale de la siguiente lectura de
+# Backlog -ya no aparece-, así que la guarda solo hace falta para la hija
+# que se queda pendiente pasada tras pasada.
+join_coma() {  # join_coma <elemento>...
+  local out="" x
+  for x in "$@"; do
+    if [ -z "$out" ]; then out="$x"; else out="$out, $x"; fi
+  done
+  printf '%s' "$out"
+}
+
+arrastrar_hijas() {  # arrastrar_hijas <n>
+  local n=$1 codigo epicas epica_id epica_clave hijas backlog item hid clave criterios
+  local movidas=() pendientes=() lkey comentario
+  codigo=$(project_code)
+  [ -n "$codigo" ] || return 0
+  if ! epicas=$("$NOTION_BIN" epicas-abiertas "$codigo" 2>&1); then
+    log "ALARMA: arrastre-$n no pudo leer Épicas abiertas: $(printf '%s' "$epicas" | tail -1 | cut -c1-160)"
+    return
+  fi
+  while IFS=$'\t' read -r epica_id epica_clave; do
+    [ -n "$epica_id" ] || continue
+    if ! hijas=$("$NOTION_BIN" hijas "$epica_id" 2>&1); then
+      log "ALARMA: arrastre-$n ($epica_clave) no pudo leer sus hijas: $(printf '%s' "$hijas" | tail -1 | cut -c1-160)"
+      continue
+    fi
+    backlog=$(jq -c '[.[] | select(.nivel == "Tarea" and .estado == "Backlog")]' <<<"$hijas")
+    [ "$(jq 'length' <<<"$backlog")" -gt 0 ] || continue
+    movidas=() pendientes=()
+    while IFS= read -r item; do
+      [ -n "$item" ] || continue
+      hid=$(jq -r .id <<<"$item")
+      clave=$(jq -r .clave <<<"$item")
+      criterios=$("$NOTION_BIN" criterios "$hid" 2>&1) || criterios=""
+      if [ -z "$criterios" ] || printf '%s' "$criterios" | grep -qiE 'pendientes? de definir'; then
+        pendientes+=("$clave")
+      elif "$NOTION_BIN" set "$hid" Estado=Lista >/dev/null 2>&1; then
+        movidas+=("$clave")
+      else
+        log "ALARMA: arrastre-$n no pudo mover $clave (hija de $epica_clave) a Lista"
+      fi
+    done < <(jq -c '.[]' <<<"$backlog")
+    [ "${#movidas[@]}" -gt 0 ] || [ "${#pendientes[@]}" -gt 0 ] || continue
+    lkey="arrastre:$epica_clave:$(join_coma "${movidas[@]}")/$(join_coma "${pendientes[@]}")"
+    launched "$lkey" && continue
+    mark "$lkey"
+    comentario=""
+    [ "${#movidas[@]}" -eq 0 ] || comentario="Arrastradas de Backlog a Lista: $(join_coma "${movidas[@]}")."
+    if [ "${#pendientes[@]}" -gt 0 ]; then
+      [ -z "$comentario" ] || comentario="$comentario "
+      comentario="${comentario}Con Criterios de aceptación pendientes de definir, sin mover: $(join_coma "${pendientes[@]}")."
+    fi
+    "$NOTION_BIN" comentar "$epica_id" "$comentario" >/dev/null 2>&1
+    log "arrastre-$n ($epica_clave): $comentario"
+  done < <(jq -r '.[] | [.id, .clave] | @tsv' <<<"$epicas")
+}
+
 # La siguiente card de la cola del proyecto, en bash (DEVKIT-120). Sustituye
 # a chain_next/task-next.sh (DEVKIT-56): antes solo miraba las hermanas de
 # una Épica, y solo se llamaba al OK del revisor y al merge. cola.sh mira el
@@ -1197,6 +1282,10 @@ case "${1:-}" in
     lanzar_cola "${2:-}"
     exit 0
     ;;
+  --arrastrar-hijas)
+    arrastrar_hijas "${2:-}"
+    exit 0
+    ;;
   --documentar)
     documentar_pr "${2:-}" "${3:-}" "${4:-}" "${5:-}"
     exit 0
@@ -1244,6 +1333,10 @@ fi
 
 while true; do
   CODE=$(project_code)
+  # Cada pasada, antes de drenar la cola: una Épica en Lista o En progreso
+  # puede tener hijas nuevas en Backlog -DEVKIT-121- que arrastrar_hijas pasa
+  # a Lista, así cola.sh ya las ve en esta misma vuelta.
+  [ -z "$CODE" ] || arrastrar_hijas "$(date +%s)"
   # Cada pasada sin nada en curso, la cola drena sola (DEVKIT-120): no hace
   # falta comprobar aquí si hay una card activa, esa guarda ya vive dentro de
   # cola.sh. Antes de la consulta a GitHub: si el proyecto no tiene nada que

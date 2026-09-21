@@ -67,6 +67,12 @@
 #                                             Tipo y PR, en una sola consulta
 #                                             (tablero de `devkit-run
 #                                             --tablero`, DEVKIT-82)
+#   notion.sh epicas-abiertas <código>        Épicas del proyecto en Lista o
+#                                             En progreso, normalizadas (con
+#                                             id, para pedir después sus
+#                                             hijas), como lista JSON
+#                                             (arrastre de hijas de Backlog a
+#                                             Lista de `watch.sh`, DEVKIT-121)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -574,6 +580,22 @@ cmd_activas() {  # cmd_activas <código>
   ' <<<"$filas"
 }
 
+# Épicas en Lista o En progreso (DEVKIT-121): las que pueden tener hijas
+# esperando en Backlog. A diferencia de `epicas`, que solo mira las En
+# progreso y no trae `id` (arma la agrupación del tablero en jq), esta sí lo
+# necesita: quien llama pide después las hijas de cada una con `hijas <id>`.
+cmd_epicas_abiertas() {  # cmd_epicas_abiertas <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {property: "Nivel", select: {equals: "Épica"}},
+            {or: [{property: "Estado", select: {equals: "Lista"}},
+                  {property: "Estado", select: {equals: "En progreso"}}]}]}')") || return
+  jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
+}
+
 cmd_criterios() {  # cmd_criterios <page_id>
   local cursor="" page acc='[]'
   while :; do
@@ -1013,6 +1035,18 @@ $(activa card-88 88 "En progreso" feature "" Épica)],\"has_more\":false}"
     '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"or":[{"property":"Estado","select":{"equals":"Lista"}},{"property":"Estado","select":{"equals":"En progreso"}},{"property":"Estado","select":{"equals":"Revisión automática"}},{"property":"Estado","select":{"equals":"Lista para merge"}},{"property":"Estado","select":{"equals":"Bloqueada"}}]}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
+  # epicas-abiertas (DEVKIT-121): Épicas en Lista o En progreso, con id -a
+  # diferencia de `epicas`, que solo trae las En progreso y sin id-, para que
+  # `watch.sh` pida después sus hijas.
+  resp POST__databases_dbtareas_query "{\"results\":[$(epica epica-50 50 "En progreso"),\
+$(epica epica-51 51 Lista)],\"has_more\":false}"
+  check "epicas-abiertas: las Épicas en Lista y En progreso, con id" \
+    '[{"id":"epica-50","clave":"DEVKIT-50","estado":"En progreso"},{"id":"epica-51","clave":"DEVKIT-51","estado":"Lista"}]' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas-abiertas DEVKIT | jq -c '[.[] | {id, clave, estado}]')"
+  check "epicas-abiertas: el filtro es Nivel Épica y Estado Lista o En progreso" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Épica"}},{"or":[{"property":"Estado","select":{"equals":"Lista"}},{"property":"Estado","select":{"equals":"En progreso"}}]}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+
   # sueltas (DEVKIT-119): Tareas en Lista sin Padre, grupo 2 de `cola.sh`. El
   # filtro es un solo "and" de cuatro condiciones (sin "or" que anidar) y
   # Padre va por `is_empty`, no por una lista de valores a excluir.
@@ -1057,6 +1091,7 @@ case "${1:-}" in
   bloqueos) cmd_bloqueos "${2:?código}" ;;
   epicas) cmd_epicas "${2:?código}" ;;
   activas) cmd_activas "${2:?código}" ;;
+  epicas-abiertas) cmd_epicas_abiertas "${2:?código}" ;;
   --test) run_tests ;;
   *)
     fin=$(grep -n '^#   notion.sh --test' "$0" | head -1 | cut -d: -f1)
