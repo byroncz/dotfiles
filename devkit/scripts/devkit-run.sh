@@ -2135,7 +2135,10 @@ alto_terminal() {
 # al arrancar el script para medir la columna: definida aquí arriba, no junto
 # a `clave_de_pr` más abajo, para que ese cálculo top-level la encuentre ya
 # declarada. "-" si `gh` no responde: sin owner/repo no hay enlace que armar,
-# y esa fila cae al mismo "-" que una fila sin PR.
+# y esa fila cae al mismo "-" que una fila sin PR. Ese "-" no se persiste
+# (DEVKIT-134 H1): si se guardara, un solo fallo de `gh` -sin red, sin auth,
+# o un `--test` corrido sin `gh`- dejaría la columna en "-" para siempre
+# mientras viva /run/devkit, aunque `gh` ya responda en la siguiente llamada.
 repo_name_with_owner() {
   local repo
   if [ -s "$REPO_NAME_WITH_OWNER_CACHE" ]; then
@@ -2143,10 +2146,16 @@ repo_name_with_owner() {
     return 0
   fi
   repo=$("$GH_BIN" repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)
-  [ -n "$repo" ] || repo="-"
-  mkdir -p "$(dirname "$REPO_NAME_WITH_OWNER_CACHE")" 2>/dev/null
-  printf '%s' "$repo" >"$REPO_NAME_WITH_OWNER_CACHE" 2>/dev/null
-  printf '%s' "$repo"
+  case "$repo" in
+    ?*/?*)
+      mkdir -p "$(dirname "$REPO_NAME_WITH_OWNER_CACHE")" 2>/dev/null
+      printf '%s' "$repo" >"$REPO_NAME_WITH_OWNER_CACHE" 2>/dev/null
+      printf '%s' "$repo"
+      ;;
+    *)
+      printf -- '-'
+      ;;
+  esac
 }
 
 # Número de PR de un lanzamiento (DEVKIT-134): "-" si no tiene uno todavía
@@ -6050,6 +6059,26 @@ FIN
   REPO_NAME_WITH_OWNER_CACHE="$pr_url_tmp/repo-2.cache" GH_BIN="$gh_contador_pr" url_de_pr 2 >/dev/null
   check "repo_name_with_owner: una sola llamada a gh mientras la caché exista" 1 \
     "$(wc -l < "$pr_url_tmp/llamadas" | tr -d ' ')"
+
+  # DEVKIT-134 H1: un fallo de `gh` no envenena la caché. Sobre el mismo
+  # archivo, primero un doble que falla y después uno sano: la segunda
+  # llamada debe volver a consultar `gh` y ya devolver el owner/repo.
+  local gh_falla_pr repo_h1_cache
+  gh_falla_pr="$pr_url_tmp/gh-falla"
+  cat >"$gh_falla_pr" <<'FIN'
+#!/usr/bin/env bash
+exit 1
+FIN
+  chmod +x "$gh_falla_pr"
+  repo_h1_cache="$pr_url_tmp/repo-h1.cache"
+  check "repo_name_with_owner: '-' sin persistir cuando gh falla" "-" \
+    "$(REPO_NAME_WITH_OWNER_CACHE="$repo_h1_cache" GH_BIN="$gh_falla_pr" repo_name_with_owner)"
+  check "repo_name_with_owner: el fallo anterior no dejó caché" no \
+    "$([ -s "$repo_h1_cache" ] && echo si || echo no)"
+  check "repo_name_with_owner: se recupera en cuanto gh vuelve a responder" \
+    "byroncz/dotfiles" \
+    "$(REPO_NAME_WITH_OWNER_CACHE="$repo_h1_cache" GH_BIN="$gh_doble_pr_url" repo_name_with_owner)"
+  unset gh_falla_pr repo_h1_cache
   rm -rf "$pr_url_tmp"
 
   # `formatear_fila`: la columna PR entre CARD y LANZÓ, con el enlace completo
