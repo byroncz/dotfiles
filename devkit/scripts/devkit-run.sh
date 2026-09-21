@@ -1876,6 +1876,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   fi
   local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col resto_bloqueo fin_ln
   local duracion_col dur_seg turnos_usados turnos_col presupuesto
+  local short_pr decision_ln decision
   # Todos los prompts lanzados alguna vez, no solo los ESTADO_FILAS visibles
   # en la tabla: un `claude -p` lanzado antes de esa cola, y todavía vivo, no
   # debe salir como `sin registro` (DEVKIT-81 H2). Una sola lectura de
@@ -1910,7 +1911,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     resto=$(tail -n +"$((ln + 1))" "$wlog")
     fin=$(printf '%s\n' "$resto" | grep -m1 -E \
       "^[^ ]+ ($id (terminado|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]$)")
-    estado="" detalle=""
+    estado="" detalle="" fin_ln=""
     if [ -n "$fin" ]; then
       case "$fin" in
         *"ALARMA: no arrancó"*) estado="no arrancó"; detalle="el worker murió al arrancar; ver $logf" ;;
@@ -1997,6 +1998,35 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
             END { exit (found ? 0 : 1) }'; then
       estado=error
       detalle="terminó sin entregar ni bloquear; card $clave sigue En progreso"
+    fi
+    # DEVKIT-132: ESTADO de una fila pr-review terminada muestra el veredicto
+    # del bucle -Lista para merge, CAMBIOS o Bloqueada- en vez del genérico
+    # "terminó", para no tener que abrir GitHub a ver qué decidió el
+    # revisor. Se lee de la primera línea "PR #<num> (<Clave>) ..." que
+    # watch.sh escribe después de $fin: por la reacción inmediata de
+    # `procesar_pr` (DEVKIT-108), es siempre la decisión que salió de ESTE
+    # informe, no de uno posterior (ver el comentario de `procesar_pr` en
+    # watch.sh). Sin esa línea todavía -el bucle no volvió a decidir, o
+    # decidió `fix-humano`/`nada`, que no dejan una línea con este prefijo-
+    # sigue "terminó". También corre cuando el bloqueo de arriba (DEVKIT-97
+    # H3) ya dejó estado=bloqueada: si esa misma línea de decisión es
+    # "bloqueando con task-block.sh", el bloqueo es el veredicto de ESTE
+    # informe y pasa a "Bloqueada" (negrita), conservando el detalle con el
+    # motivo que el bloque de arriba ya extrajo; si no matchea ninguna
+    # decisión, el bloqueo era ajeno y sigue "bloqueada" (sin negrita).
+    if [ "$skill" = pr-review ] && { [ "$estado" = terminó ] || [ "$estado" = bloqueada ]; } \
+       && [ -n "$arg" ]; then
+      short_pr=${id#pr-review-"$arg"-}
+      decision_ln=${fin_ln:-}
+      [ -n "$decision_ln" ] || decision_ln=$(printf '%s\n' "$resto" | grep -nF -m1 -- "$fin" | cut -d: -f1)
+      if [ -n "$decision_ln" ]; then
+        decision=$(printf '%s\n' "$resto" | tail -n "+$((decision_ln + 1))" | grep -m1 -E "^[^ ]+ PR #$arg \(")
+        case "$decision" in
+          *" OK en $short_pr"*) estado="Lista para merge" ;;
+          *" CAMBIOS en $short_pr: lanzando task-fix") estado=CAMBIOS ;;
+          *"bloqueando con task-block.sh") estado=Bloqueada ;;
+        esac
+      fi
     fi
     if [ "$modelo" = - ] || [ -z "$modelo" ]; then
       modelo_col=-
@@ -2213,12 +2243,18 @@ ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
 # registro" como único valor del caso por defecto) con su glifo -el de UTF-8
 # y el de respaldo ASCII (utf8_disponible), porque sin locale UTF-8 el
 # respaldo puede medir más que el icono real ("!! bloqueada" son 12, dos más
-# que "⊘ bloqueada"-.
+# que "⊘ bloqueada"-. "Lista para merge" y "Bloqueada" (DEVKIT-132: el
+# veredicto de un pr-review terminado, no un paso del ciclo) entran acá
+# también, porque son los valores más anchos que de verdad puede mostrar
+# ESTADO -sin ellos, `ancho_de` los calcularía cortos y la fila desbordaría
+# en silencio en cuanto el bucle deje ese veredicto-.
 ESTADOS_CON_GLIFO=(
   "⠿ en curso" "* en curso"
   "✔ terminó" "ok terminó"
+  "✔ Lista para merge" "ok Lista para merge"
   "✖ error" "x error"
   "⊘ bloqueada" "!! bloqueada"
+  "⊘ Bloqueada" "!! Bloqueada"
   "○ no arrancó" "o no arrancó"
   "○ no lanzó" "o no lanzó"
   "○ en espera" "o en espera"
@@ -2312,35 +2348,49 @@ utf8_disponible() {
 # refresco de `--seguir`; fijo en ⠿ en una sola foto de `--estado`.
 GIRO_BRAILLE='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
-# Aplica el color ANSI de <color> ("verde"/"ambar"/"rojo"/"gris"/vacío) a
-# <texto> si <habilitado> es 1 -mismo patrón que <color> en `senal_bucle`:
-# quien arma el cuadro dentro de un `$(...)` no puede decidirlo ahí adentro
-# con `[ -t 1 ]` y lo resuelve antes, afuera. Sin color que aplicar (vacío o
-# <habilitado> distinto de 1), <texto> vuelve intacto.
+# Aplica el color ANSI de <color> ("verde"/"ambar"/"rojo"/"gris"/vacío, cada
+# uno con un sufijo "-negrita" opcional -DEVKIT-132, para "Lista para merge"
+# y "Bloqueada" en `color_de_estado_fila`-) a <texto> si <habilitado> es 1
+# -mismo patrón que <color> en `senal_bucle`: quien arma el cuadro dentro de
+# un `$(...)` no puede decidirlo ahí adentro con `[ -t 1 ]` y lo resuelve
+# antes, afuera. Sin color que aplicar (vacío o <habilitado> distinto de 1),
+# <texto> vuelve intacto.
 colorear() {  # colorear <color> <texto> <habilitado>
-  local color=$1 texto=$2 habilitado=$3 code=''
+  local color=$1 texto=$2 habilitado=$3 code='' negrita='' num=''
+  case "$color" in
+    *-negrita) negrita=1; color=${color%-negrita} ;;
+  esac
   if [ "$habilitado" = 1 ]; then
     case "$color" in
-      verde) code=$'\033[32m' ;;
-      ambar) code=$'\033[33m' ;;
-      rojo) code=$'\033[31m' ;;
-      gris) code=$'\033[90m' ;;
+      verde) num=32 ;;
+      ambar) num=33 ;;
+      rojo) num=31 ;;
+      gris) num=90 ;;
     esac
+    if [ -n "$num" ]; then
+      if [ -n "$negrita" ]; then code=$'\033[1;'"$num"m; else code=$'\033['"$num"m; fi
+    fi
   fi
   if [ -n "$code" ]; then printf '%s%s\033[0m' "$code" "$texto"; else printf '%s' "$texto"; fi
 }
 
 # Glifo sin color de una fila de `estado_filas` (skill/tarea). "en curso" gira
 # en braille, una posición por refresco (<idx>), fijo en ⠿ con <fijo>=1 (una
-# sola foto de `--estado` sin `--seguir`); terminó ✔; error -mismo icono para
+# sola foto de `--estado` sin `--seguir`); terminó ✔ -mismo icono para "Lista
+# para merge" (DEVKIT-132): el veredicto OK de un pr-review terminado, no un
+# paso distinto-; error -mismo icono para
 # "falló", el texto que trae la línea cruda de watch.log antes de que
-# `estado_filas` lo normalice a "error"- ✖; bloqueada ⊘ -no ⛔: ese glifo es
+# `estado_filas` lo normalice a "error"- ✖; bloqueada ⊘ -mismo icono para
+# "Bloqueada" (DEVKIT-132), el veredicto de bloqueo de un pr-review terminado-
+# -no ⛔: ese glifo es
 # East Asian Wide y mide dos celdas, mientras que `rellenar` cuenta caracteres
 # (DEVKIT-106 H1)-; no arrancó (la card
 # nunca llegó a lanzar; "no lanzó" es el mismo caso con otro nombre) ○;
-# cualquier otro valor -hoy solo "sin registro", un `claude -p` vivo que
-# `devkit-run` no reconoce- ⚠, la misma alarma que "lento": es una anomalía,
-# no un paso esperado del ciclo. Separado de `color_de_estado_fila` para que
+# cualquier otro valor -"sin registro", un `claude -p` vivo que `devkit-run`
+# no reconoce, y también "CAMBIOS" (DEVKIT-132): el veredicto de corrección de
+# un pr-review terminado- ⚠, la misma alarma que "lento": es una anomalía o
+# algo que necesita atención, no un paso resuelto del ciclo. Separado de
+# `color_de_estado_fila` para que
 # `formatear_fila` rellene la columna con el texto plano -sin las secuencias
 # ANSI, que `rellenar` contaría como caracteres visibles y correría el resto
 # de la tabla- y recién después pinte el glifo ya alineado.
@@ -2356,9 +2406,9 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
         printf '*'
       fi
       ;;
-    terminó) [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
+    terminó|"Lista para merge") [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
-    bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
+    bloqueada|Bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
     "no arrancó"|"no lanzó"|"en espera") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
     *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
   esac
@@ -2366,11 +2416,19 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
 
 # Color del glifo de `glifo_estado_fila` para el mismo <estado>. "en curso"
 # vuelve vacío -el girador no lleva color, ya se distingue por moverse-.
+# "Lista para merge" y "Bloqueada" (DEVKIT-132) son los mismos verde/rojo de
+# "terminó"/"bloqueada", pero en negrita -el atributo ANSI que suma
+# `colorear`-: son un veredicto ya tomado por el revisor, no el genérico "el
+# lanzamiento terminó" o "la card quedó bloqueada por otro motivo". "CAMBIOS"
+# (DEVKIT-132, el tercer veredicto) no tiene caso propio: cae en el `ambar`
+# por defecto, igual que cualquier estado que esta función no reconoce.
 color_de_estado_fila() {  # color_de_estado_fila <estado>
   case "$1" in
     "en curso") printf '' ;;
     terminó) printf verde ;;
+    "Lista para merge") printf verde-negrita ;;
     error|falló|"falló ("*|bloqueada) printf rojo ;;
+    Bloqueada) printf rojo-negrita ;;
     "no arrancó"|"no lanzó") printf gris ;;
     "en espera") printf ambar ;;
     *) printf ambar ;;
@@ -5842,6 +5900,20 @@ FIN
 2026-09-16T11:00:00Z PR #41 (DEVKIT-56) head abc1234 sin informe: lanzando pr-review
 2026-09-16T11:00:00Z pr-review-41-abc1234 lanzando (origen=bucle): "/pr-review 41" log=$est/pr-review-41-abc1234.log
 2026-09-16T11:05:00Z pr-review-41-abc1234 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T11:06:00Z PR #100 (DEVKIT-100) head aaa1111 sin informe: lanzando pr-review
+2026-09-16T11:06:00Z pr-review-100-aaa1111 lanzando (origen=bucle): "/pr-review 100" log=$est/pr-review-100-aaa1111.log
+2026-09-16T11:07:00Z pr-review-100-aaa1111 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T11:07:01Z PR #100 (DEVKIT-100) OK en aaa1111: task-document.sh
+2026-09-16T11:08:00Z PR #101 (DEVKIT-101) head bbb2222 sin informe: lanzando pr-review
+2026-09-16T11:08:00Z pr-review-101-bbb2222 lanzando (origen=bucle): "/pr-review 101" log=$est/pr-review-101-bbb2222.log
+2026-09-16T11:09:00Z pr-review-101-bbb2222 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
+2026-09-16T11:09:01Z PR #101 (DEVKIT-101) CAMBIOS en bbb2222: lanzando task-fix
+2026-09-16T11:10:00Z PR #102 (DEVKIT-102) head ccc3333 sin informe: lanzando pr-review
+2026-09-16T11:10:00Z pr-review-102-ccc3333 lanzando (origen=bucle): "/pr-review 102" log=$est/pr-review-102-ccc3333.log
+2026-09-16T11:11:00Z pr-review-102-ccc3333 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
+2026-09-16T11:11:01Z PR #102 (DEVKIT-102) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:11:02Z task-block.sh DEVKIT-102 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/102
+2026-09-16T11:11:03Z task-block-102 terminado: bash :: task-block: DEVKIT-102 Bloqueada desde Revisión automática
 2026-09-16T11:08:00Z task-start-5 lanzando (origen=humano): "/task-start DEVKIT-5" log=$est/task-start-5.log
 2026-09-16T11:10:00Z task-start-1 lanzando (origen=task-close): "/task-start DEVKIT-57" log=$est/task-start-1.log
 2026-09-16T11:12:00Z task-block.sh DEVKIT-5 Bloqueada desde En progreso: motivo de la cinco.
@@ -5884,6 +5956,47 @@ FIN
   check "estado en curso desde la línea lanzando, sin proceso" "en curso|humano" "$(fila DEVKIT-61)"
   check "la tabla trae skill y hace cuánto" "task-fix 2s" \
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-61" {print $1, $4}')"
+
+  # DEVKIT-132: ESTADO de una fila pr-review terminada muestra el veredicto
+  # del bucle, leído de la línea de decisión que watch.sh deja para ese PR y
+  # head, no el genérico "terminó". DEVKIT-56 arriba ya cubre el caso "sin
+  # línea de decisión todavía": sigue "terminó".
+  check "pr-review terminado con OK: ESTADO Lista para merge" "Lista para merge|bucle" \
+    "$(fila DEVKIT-100)"
+  check "pr-review terminado con CAMBIOS: ESTADO CAMBIOS" "CAMBIOS|bucle" \
+    "$(fila DEVKIT-101)"
+  check "pr-review terminado y bloqueado (tres ciclos sin OK): ESTADO Bloqueada" \
+    "Bloqueada|bucle" "$(fila DEVKIT-102)"
+  check "detalle del bloqueo real de pr-review conserva el motivo" \
+    "Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/102" \
+    "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-102" {print $6}')"
+  check "pr-review sin línea de decisión todavía: sigue terminó (DEVKIT-56)" \
+    "terminó|bucle" "$(fila DEVKIT-56)"
+  estado_de_fila() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
+  check "icono: Lista para merge, mismo que terminó" '✔' \
+    "$(glifo_estado_fila "$(estado_de_fila DEVKIT-100)" 0 1 1)"
+  check "icono: Bloqueada (pr-review), mismo que bloqueada" '⊘' \
+    "$(glifo_estado_fila "$(estado_de_fila DEVKIT-102)" 0 1 1)"
+  check "icono: CAMBIOS, sin caso propio, cae en la alarma ámbar" '⚠' \
+    "$(glifo_estado_fila "$(estado_de_fila DEVKIT-101)" 0 1 1)"
+  check "color: Lista para merge, verde y negrita" verde-negrita \
+    "$(color_de_estado_fila "Lista para merge")"
+  check "color: Bloqueada (pr-review), rojo y negrita" rojo-negrita \
+    "$(color_de_estado_fila "Bloqueada")"
+  check "color: CAMBIOS, ámbar sin negrita (el defecto de color_de_estado_fila)" ambar \
+    "$(color_de_estado_fila "CAMBIOS")"
+  check "colorear: negrita sobre verde suma el atributo ANSI 1" si \
+    "$(colorear verde-negrita texto 1 | grep -qF $'\033[1;32m' && echo si || echo no)"
+  check "colorear: negrita sobre rojo suma el atributo ANSI 1" si \
+    "$(colorear rojo-negrita texto 1 | grep -qF $'\033[1;31m' && echo si || echo no)"
+  check "colorear: un color sin -negrita no suma el atributo 1" no \
+    "$(colorear verde texto 1 | grep -qF $'\033[1;' && echo si || echo no)"
+  check "formatear_fila: Lista para merge se pinta verde y negrita" si \
+    "$(formatear_fila pr-review DEVKIT-100 bucle 1m 1m "Lista para merge" fable/high -/40 - 0 1 1 \
+        | grep -qF $'\033[1;32m' && echo si || echo no)"
+  check "columna ESTADO no cambia de ancho con Lista para merge (el estado más largo)" \
+    "$ANCHO_COLUMNAS_FIJAS" \
+    "$(fila_ancho=$(COLUMNS=200 formatear_fila pr-review DEVKIT-100 bucle 1m 1m "Lista para merge" fable/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
 
   # DEVKIT-107: columnas DURÓ y TURNOS, más "no lanzó" cuando review-prep.sh
   # corta un pr-review con salida 3 (en vez de "error: murió sin resumen").
