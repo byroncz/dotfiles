@@ -938,7 +938,7 @@ check_log "cola: la línea cola-<n> queda en watch.log" \
 env "${ciclo_env[@]}" bash "$WATCH" --lanzar-cola 51 >"$CICLO/cola-hook.log" 2>&1
 OUT="$CICLO/cola-hook.log"
 check_igual "cola: sin Clave, no lanza nada" "" "$(cat "$N/lanzamientos")"
-check_igual "cola: sin Clave, sin línea en watch.log" 0 "$(grep -c '^cola-51' "$OUT")"
+check_igual "cola: sin Clave, sin línea en watch.log" 0 "$(grep -c 'cola-51' "$OUT")"
 
 # cola.sh falla (Notion caído, por ejemplo): ALARMA en vez de lanzar algo a
 # ciegas.
