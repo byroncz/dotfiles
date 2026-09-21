@@ -2372,6 +2372,7 @@ color_de_estado_fila() {  # color_de_estado_fila <estado>
     terminó) printf verde ;;
     error|falló|"falló ("*|bloqueada) printf rojo ;;
     "no arrancó"|"no lanzó") printf gris ;;
+    "en espera") printf ambar ;;
     *) printf ambar ;;
   esac
 }
@@ -5919,6 +5920,11 @@ FIN
   check "review-prep corta con rc=3: sin duracion=, DURÓ es un guion" "-" "$(campo DEVKIT-73 8)"
   check "icono: \"no lanzó\" también gris (mismo caso que \"no arrancó\")" gris \
     "$(color_de_estado_fila "no lanzó")"
+  # DEVKIT-133 H3: "en espera" listado a propósito en el case, no dependiendo
+  # del comodín `*)`, para que un case nuevo no lo pinte de otro color sin que
+  # nadie lo note.
+  check "icono: \"en espera\" (fila sintética de la card DEVKIT-133) color ámbar" ambar \
+    "$(color_de_estado_fila "en espera")"
   check "encabezado_tabla: orden nuevo, DURÓ junto a HACE y TURNOS antes de DETALLE" \
     "SKILL CARD LANZÓ HACE DURÓ ESTADO MODELO TURNOS DETALLE" \
     "$(encabezado_tabla | tr -s ' ')"
