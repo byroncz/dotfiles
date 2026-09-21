@@ -31,9 +31,12 @@
 # card de ahí es una acción -la pasa a `Lista` con el comentario "tomada por
 # la cola" antes de devolver su Clave, porque de lo contrario `task-begin.sh`
 # la rechazaría (una card en `Backlog` no se puede arrancar). Si es hija de
-# una Épica en `Backlog`, además le aplica la regla de arrastre de
-# `watch.sh` (DEVKIT-121, "hija 3"): el resto de las hijas elegibles de esa
-# Épica pasan a `Lista` también, con un comentario aparte en la Épica.
+# una Épica en `Backlog`, además mueve la propia Épica a `Lista` -si no,
+# `task-begin.sh` no la pasa a `En progreso` y sus hermanas arrastradas
+# quedan huérfanas de los cuatro grupos (H1 de pr-review, DEVKIT-122)- y le
+# aplica la regla de arrastre de `watch.sh` (DEVKIT-121, "hija 3"): el resto
+# de las hijas elegibles de esa Épica pasan a `Lista` también, con un
+# comentario aparte en la Épica.
 # `--lista` sigue siendo una foto pura: muestra los cuatro grupos pero nunca
 # muta nada, la mutación solo ocurre al elegir "la" siguiente card.
 #
@@ -246,12 +249,20 @@ task_start_vivo() {  # task_start_vivo <activas JSON>
 # la rechaza, una card en Backlog no arranca- y devuelve 1 si Notion no deja
 # escribir, para que modo_siguiente corte en vez de sugerir una card que
 # nunca cambió de Estado.
-# Si es hija de una Épica en Backlog (trae `epica_id`), además le aplica la
-# regla de arrastre de `watch.sh` (DEVKIT-121, "hija 3"): el resto de las
-# hijas elegibles de esa Épica -ya están en `cola`, `armar_cola` las agrupa
-# por Épica- pasan a Lista también, con la misma regla de Criterios de
-# aceptación pendientes de definir que usa `arrastrar_hijas`, y un solo
-# comentario en la Épica.
+# Si es hija de una Épica en Backlog (trae `epica_id`), además mueve la
+# propia Épica a Lista antes de devolver la Clave (H1 de pr-review,
+# DEVKIT-122): sin eso, `task-begin.sh:213` no la pasa a En progreso -sigue
+# en Backlog- y en la siguiente pasada las hermanas que sí llegaron a Lista
+# no entran en ninguno de los cuatro grupos (su Épica ni está en Lista/En
+# progreso para el grupo 1, ni siguen en Backlog para el grupo 3), y
+# `task-close.sh` tampoco puede cerrar la Épica. Un fallo al mover la Épica
+# aborta igual que un fallo al mover la card elegida: dejar la card en Lista
+# con su Épica en Backlog es el mismo estado a medias.
+# Le aplica también la regla de arrastre de `watch.sh` (DEVKIT-121, "hija
+# 3"): el resto de las hijas elegibles de esa Épica -ya están en `cola`,
+# `armar_cola` las agrupa por Épica- pasan a Lista también, con la misma
+# regla de Criterios de aceptación pendientes de definir que usa
+# `arrastrar_hijas`, y un solo comentario en la Épica.
 tomar_de_backlog() {  # tomar_de_backlog <elegido JSON> <cola JSON>
   local elegido=$1 cola=$2 id clave epica_id hermanos hitem hid hclave criterios
   local movidas=() pendientes=() comentario
@@ -265,6 +276,11 @@ tomar_de_backlog() {  # tomar_de_backlog <elegido JSON> <cola JSON>
 
   epica_id=$(jq -r '.epica_id // empty' <<<"$elegido")
   [ -n "$epica_id" ] || return 0
+
+  if ! "$NOTION" set "$epica_id" Estado=Lista >/dev/null 2>&1; then
+    err "no pude mover la Épica de $clave (Backlog) a Lista"
+    return 1
+  fi
 
   hermanos=$(jq -c --arg eid "$epica_id" --arg propia "$clave" \
     '[.[] | select(.epica_id == $eid and .clave != $propia)]' <<<"$cola")
@@ -282,13 +298,10 @@ tomar_de_backlog() {  # tomar_de_backlog <elegido JSON> <cola JSON>
     fi
   done < <(jq -c '.[]' <<<"$hermanos")
 
-  comentario=""
-  [ "${#movidas[@]}" -eq 0 ] || comentario="Arrastradas de Backlog a Lista: $(join_coma "${movidas[@]}")."
-  if [ "${#pendientes[@]}" -gt 0 ]; then
-    [ -z "$comentario" ] || comentario="$comentario "
-    comentario="${comentario}Con Criterios de aceptación pendientes de definir, sin mover: $(join_coma "${pendientes[@]}")."
-  fi
-  [ -z "$comentario" ] || "$NOTION" comentar "$epica_id" "$comentario" >/dev/null 2>&1
+  comentario="Épica movida de Backlog a Lista: la tomó $clave."
+  [ "${#movidas[@]}" -eq 0 ] || comentario="$comentario Arrastradas de Backlog a Lista: $(join_coma "${movidas[@]}")."
+  [ "${#pendientes[@]}" -eq 0 ] || comentario="$comentario Con Criterios de aceptación pendientes de definir, sin mover: $(join_coma "${pendientes[@]}")."
+  "$NOTION" comentar "$epica_id" "$comentario" >/dev/null 2>&1
   return 0
 }
 
@@ -551,6 +564,8 @@ case "\$1 \$2" in
     echo "criterio definido" ;;
   "criterios card-305")
     echo "pendientes de definir" ;;
+  "set epica-300")
+    echo ok ;;
   "set card-301")
     echo ok ;;
   "set card-302")
@@ -573,12 +588,14 @@ FIN
     "$(grep -c '^set card-301 Estado=Lista$' "$llamadas_backlog")"
   check "cola.backlog: comenta \"tomada por la cola\" en la card elegida" 1 \
     "$(grep -c '^comentar card-301 tomada por la cola$' "$llamadas_backlog")"
+  check "cola.backlog: mueve también la Épica de Backlog a Lista" 1 \
+    "$(grep -c '^set epica-300 Estado=Lista$' "$llamadas_backlog")"
   check "cola.backlog: hija 3 arrastra a Lista la otra hija con Criterios definidos" 1 \
     "$(grep -c '^set card-302 Estado=Lista$' "$llamadas_backlog")"
   check "cola.backlog: hija 3 no mueve la hija con Criterios pendientes de definir" 0 \
     "$(grep -c '^set card-305' "$llamadas_backlog")"
-  check "cola.backlog: hija 3 comenta en la Épica las movidas y las pendientes" 1 \
-    "$(grep -cF 'comentar epica-300 Arrastradas de Backlog a Lista: DEVKIT-302. Con Criterios de aceptación pendientes de definir, sin mover: DEVKIT-305.' "$llamadas_backlog")"
+  check "cola.backlog: comenta en la Épica que se movió y qué hijas arrastró" 1 \
+    "$(grep -cF 'comentar epica-300 Épica movida de Backlog a Lista: la tomó DEVKIT-301. Arrastradas de Backlog a Lista: DEVKIT-302. Con Criterios de aceptación pendientes de definir, sin mover: DEVKIT-305.' "$llamadas_backlog")"
 
   got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh" --lista)
   check "cola.backlog: --lista nunca muestra una card Por refinar" no \
@@ -595,6 +612,31 @@ DEVKIT-310" \
   # Backlog.
   got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
   check "cola.backlog apagada por defecto: nada de Backlog aunque Lista esté vacía" "" "$got"
+
+  # H1 de pr-review (DEVKIT-122), segunda pasada: la Épica ya está en Lista
+  # -como quedaría tras la pasada de arriba- y trae una hija en Lista
+  # (arrastrada). Sin el fix, la Épica se quedaba en Backlog y esta hija no
+  # entraba en ningún grupo; con la Épica en Lista, el grupo 1 normal la ve.
+  local activas_segunda_pasada="$tmp/activas-segunda-pasada.json"
+  cat >"$activas_segunda_pasada" <<'FIN'
+[{"clave":"DEVKIT-300","estado":"Lista","nivel":"Épica"},
+ {"clave":"DEVKIT-302","estado":"Lista","nivel":"Tarea"}]
+FIN
+  local notion_segunda_pasada="$tmp/notion-segunda-pasada"
+  cat >"$notion_segunda_pasada" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    cat "$activas_segunda_pasada" ;;
+  "card DEVKIT-300")
+    echo '{"id":"epica-300","clave":"DEVKIT-300","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
+  "hijas epica-300")
+    echo '[{"id":"card-302","clave":"DEVKIT-302","nivel":"Tarea","estado":"Lista","prioridad":"alta","orden":2,"agente":"claude","depende":[],"titulo":"hija backlog 2"}]' ;;
+esac
+FIN
+  chmod +x "$notion_segunda_pasada"
+  got=$(env DEVKIT_NOTION_BIN="$notion_segunda_pasada" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "segunda pasada: Épica ya en Lista con su hija arrastrada, la cola la sugiere" "DEVKIT-302" "$got"
 
   return $fail
 }
