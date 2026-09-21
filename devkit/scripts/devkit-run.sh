@@ -702,6 +702,50 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
     "$(date +%FT%T%:z)" "$1" >> "$WATCH_LOG" 2>/dev/null
 }
 
+# Perfil de herramientas por skill (DEVKIT-125). pr-review y task-document no
+# tocan la rama: revisar y documentar es leer más los scripts mecánicos que
+# ya hacen la escritura que necesitan (review-publish.sh mueve la card y
+# publica la review, notion.sh escribe la entrada de Documentación), así que
+# reciben Bash acotado a patrones concretos, sin Edit ni Write, y
+# `--permission-mode default` en vez de `acceptEdits`. Así, un agente
+# confundido que responda a un hallazgo de otro PR (DEVKIT-102) puede a lo
+# sumo leer, no empujar un cambio. task-start, task-fix y epic-plan sí
+# escriben la rama de la card: siguen con el perfil amplio de siempre.
+#
+# Solo pr-review recibe además permiso para correr `--test` de cualquier
+# script del worktree que `review-prep.sh` ya dejó armado (DEVKIT-93): las
+# comprobaciones mecánicas fijas de la rúbrica (`devkit-run.sh --test`,
+# `watch-test.sh`) ya corrieron y están en `## Material`, pero un criterio
+# de la card puede pedir el `--test` de otro script (p. ej. `pr-guard.sh`)
+# que esa lista fija no cubre.
+#
+# Imprime el modo de permiso en la primera línea y, una por línea, cada
+# argumento de `--allowedTools`, para que `run_claude` los junte con
+# `mapfile` sin depender de cómo separe espacios un array armado a mano.
+perfil_de() {  # perfil_de <skill> [worktree de pr-review]
+  local skill=$1 worktree=${2:-}
+  case "$skill" in
+    pr-review|task-document)
+      printf '%s\n' default \
+        Read Grep Glob Skill \
+        mcp__plugin_Notion_notion mcp__claude_ai_Notion \
+        'Bash(gh pr:*)' 'Bash(gh api:*)' \
+        'Bash(git diff:*)' 'Bash(git log:*)' 'Bash(git show:*)' \
+        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-prep.sh":*)' \
+        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh":*)' \
+        'Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh":*)'
+      if [ "$skill" = pr-review ] && [ -n "$worktree" ]; then
+        printf 'Bash(bash %s/devkit/scripts/*.sh --test:*)\n' "$worktree"
+      fi
+      ;;
+    *)
+      printf '%s\n' acceptEdits \
+        Bash Read Edit Write Grep Glob Skill \
+        mcp__plugin_Notion_notion mcp__claude_ai_Notion
+      ;;
+  esac
+}
+
 run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
   local skill prompt=$1
   skill=$(printf '%s' "$1" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
@@ -713,9 +757,11 @@ run_claude() {  # run_claude <prompt> <modelo> <esfuerzo>
   # llama lo deje en watch.log sin ALARMA. Cualquier otra salida distinta de
   # cero es un fallo real (gh/Notion no respondieron) y se corta igual, con el
   # motivo en stderr.
+  local worktree=""
   if [ "$skill" = pr-review ]; then
     local numero material prep_rc
     numero=$(printf '%s' "$1" | grep -oE '[0-9]+' | head -1)
+    worktree="${DEVKIT_REVIEW_WORKTREE_DIR:-/tmp}/devkit-review-$numero"
     material=$("$REVIEW_PREP_BIN" "$numero" 2>&1)
     prep_rc=$?
     if [ "$prep_rc" -eq 3 ]; then
@@ -769,10 +815,11 @@ $material"
     alarma_sin_notion "$1"
     return 67
   fi
+  local -a perfil
+  mapfile -t perfil < <(perfil_de "$skill" "$worktree")
   "${lanzador[@]}" "$CLAUDE_BIN" -p "$prompt" --model "$2" --effort "$3" --output-format json \
-    --permission-mode acceptEdits \
-    --allowedTools "Bash" "Read" "Edit" "Write" "Grep" "Glob" "Skill" \
-      "mcp__plugin_Notion_notion" "mcp__claude_ai_Notion" \
+    --permission-mode "${perfil[0]}" \
+    --allowedTools "${perfil[@]:1}" \
     </dev/null
 }
 
@@ -3402,6 +3449,157 @@ FIN
     "$(grep -c 'ya revisado en abc123' <<<"$salida_nada")"
   check "nada que revisar: no llama a claude -p (cero turnos de Opus)" 0 \
     "$(wc -l <"$tmp/claude-llamadas" | tr -d ' ')"
+
+  # --- Perfil de herramientas por skill (DEVKIT-125) --------------------------
+  # pr-review y task-document no tocan la rama: reciben Read/Grep/Glob/Skill,
+  # Notion, y Bash acotado a patrones concretos, sin Edit ni Write y con
+  # `--permission-mode default`. task-start, task-fix y epic-plan siguen con
+  # el perfil amplio de siempre. `perfil_de` aislada primero, y después de
+  # punta a punta con el doble de `claude` (la línea real que recibiría).
+  check "perfil_de: pr-review sin worktree, sin el --test acotado" \
+    'default
+Read
+Grep
+Glob
+Skill
+mcp__plugin_Notion_notion
+mcp__claude_ai_Notion
+Bash(gh pr:*)
+Bash(gh api:*)
+Bash(git diff:*)
+Bash(git log:*)
+Bash(git show:*)
+Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-prep.sh":*)
+Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh":*)
+Bash("${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/notion.sh":*)' \
+    "$(perfil_de pr-review)"
+  check "perfil_de: pr-review con worktree agrega el --test acotado a ese worktree" \
+    'Bash(bash /tmp/devkit-review-42/devkit/scripts/*.sh --test:*)' \
+    "$(perfil_de pr-review /tmp/devkit-review-42 | tail -1)"
+  check "perfil_de: task-document recibe el mismo perfil restringido que pr-review, sin el --test" \
+    "$(perfil_de pr-review)" "$(perfil_de task-document)"
+  check "perfil_de: task-document ignora un worktree, nunca agrega el --test" 0 \
+    "$(perfil_de task-document /tmp/devkit-review-42 | grep -c -F -- '--test')"
+  check "perfil_de: pr-review y task-document no traen Edit ni Write" 0 \
+    "$(perfil_de pr-review | grep -xc -E 'Edit|Write')"
+  for skill_amplio in task-start task-fix epic-plan; do
+    check "perfil_de: $skill_amplio conserva el perfil amplio de siempre" \
+      'acceptEdits
+Bash
+Read
+Edit
+Write
+Grep
+Glob
+Skill
+mcp__plugin_Notion_notion
+mcp__claude_ai_Notion' \
+      "$(perfil_de "$skill_amplio")"
+  done
+
+  # De punta a punta: la línea que de verdad recibe el doble de `claude`,
+  # reconstruida con `perfil_de` para no repetir la lista a mano y quedar
+  # desincronizada si cambia (la integración entre `perfil_de` y `run_claude`
+  # -el slice `perfil[@]:1`, sobre todo- es lo que esto prueba; la lista en sí
+  # ya quedó cubierta arriba).
+  local perfil_prompt perfil_skill perfil_extra
+  for perfil_prompt in '/pr-review 30' '/task-document DEVKIT-1 5' \
+      '/task-start DEVKIT-1' '/task-fix DEVKIT-1' '/epic-plan DEVKIT-1'; do
+    perfil_skill=${perfil_prompt#/}; perfil_skill=${perfil_skill%% *}
+    perfil_extra=""
+    [ "$perfil_skill" = pr-review ] && perfil_extra="$tmp/worktrees-perfil/devkit-review-30"
+    local -a perfil_esperado
+    mapfile -t perfil_esperado < <(perfil_de "$perfil_skill" "$perfil_extra")
+    local linea_esperada="--permission-mode ${perfil_esperado[0]} --allowedTools ${perfil_esperado[*]:1}"
+    : >"$tmp/claude-llamadas"
+    DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-codigo" \
+      DEVKIT_REVIEW_WORKTREE_DIR="$tmp/worktrees-perfil" \
+      DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+      DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+      bash "$HERE/devkit-run.sh" --sync "$perfil_prompt" >/dev/null 2>&1
+    check "el claude -p de $perfil_skill recibe exactamente su perfil" 1 \
+      "$(grep -c -F -- "$linea_esperada" "$tmp/claude-llamadas")"
+  done
+
+  # --- Ciclo real de pr-review con el perfil restringido (DEVKIT-125, AC2) ---
+  # Con los dobles de DEVKIT-93 (notion-doble, gh-doble), de punta a punta:
+  # `review-prep.sh` prepara el material, `run_claude` lanza el doble de
+  # `claude` con el perfil restringido, y el doble hace lo único que ese
+  # perfil permite escribir de verdad -el informe y la llamada a
+  # `review-publish.sh`, los dos cubiertos por los patrones nuevos-. Con
+  # veredicto OK, la card debe terminar igual que con el perfil de antes: en
+  # "Lista para merge", informe publicado y sin residuo en el árbol.
+  local ciclo2_dir
+  ciclo2_dir=$(mktemp -d "$tmp/ciclo2.XXXXXX")
+  mkdir -p "$ciclo2_dir/ws/.devkit" "$ciclo2_dir/run"
+  cat >"$ciclo2_dir/notion-doble" <<FIN
+#!/usr/bin/env bash
+case "\$1" in
+  card) printf '{"id":"card-9401","url":"https://notion.so/card9401","estado":"Revisión automática","titulo":"Probar ciclo con perfil restringido"}' ;;
+  set) shift; printf '%s\n' "\$*" >>"$ciclo2_dir/set-llamadas" ;;
+esac
+FIN
+  chmod +x "$ciclo2_dir/notion-doble"
+  cat >"$ciclo2_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") echo '{"title":"DEVKIT-9401: probar ciclo con perfil restringido","body":"## Qué cambia\nProbar el perfil restringido.","state":"OPEN","headRefOid":"abc9401","headRefName":"feat/DEVKIT-9401","reviews":[],"comments":[]}' ;;
+  "pr review") cat >/dev/null; exit 0 ;;
+  "pr edit") cat >/dev/null; exit 0 ;;
+  "pr comment") cat >/dev/null; exit 0 ;;
+  "api "*) echo '{"login":"devkit-bot","owner":{"type":"User","login":"byroncz"}}' ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$ciclo2_dir/gh-doble"
+  cat >"$ciclo2_dir/review-prep-codigo" <<'FIN'
+#!/usr/bin/env bash
+echo "## Card
+PR simulado de código, perfil restringido.
+## Comprobaciones mecánicas
+Comprobaciones mecánicas (1 Verificado, 0 Falla):
+- **bash -n foo.sh**: Verificado"
+FIN
+  chmod +x "$ciclo2_dir/review-prep-codigo"
+  cat >"$ciclo2_dir/agente-doble" <<FIN
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$ciclo2_dir/claude-llamadas"
+cat >"$ciclo2_dir/ws/.devkit/review-9401.md" <<'INFORME'
+<!-- devkit-review sha=abc9401 verdict=OK -->
+Revisado con fable, esfuerzo high
+## Revisión independiente (commit abc9401)
+
+### Criterios de aceptación
+| Criterio | Estado | Cómo se comprobó |
+|---|---|---|
+| Todo | Verificado | bash -n foo.sh |
+
+### Lectura adversarial
+- Nada que objetar.
+
+### Veredicto
+**OK** todo bien.
+INFORME
+env DEVKIT_WS="$ciclo2_dir/ws" DEVKIT_GH_BIN="$ciclo2_dir/gh-doble" DEVKIT_NOTION_BIN="$ciclo2_dir/notion-doble" \
+  DEVKIT_REVIEW_WORKTREE_DIR="$ciclo2_dir/worktrees" DEVKIT_RUN_DIR="$ciclo2_dir/run" \
+  bash "$HERE/review-publish.sh" 9401 "$ciclo2_dir/ws/.devkit/review-9401.md" >/dev/null 2>&1
+printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
+FIN
+  chmod +x "$ciclo2_dir/agente-doble"
+  DEVKIT_CLAUDE_BIN="$ciclo2_dir/agente-doble" DEVKIT_REVIEW_PREP_BIN="$ciclo2_dir/review-prep-codigo" \
+    DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+    DEVKIT_RUN_DIR="$ciclo2_dir/run" DEVKIT_WS="$ciclo2_dir/ws" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 9401' >/dev/null 2>&1
+  check "ciclo real con perfil restringido: el doble recibe --permission-mode default" 1 \
+    "$(grep -c -- '--permission-mode default' "$ciclo2_dir/claude-llamadas")"
+  check "ciclo real con perfil restringido: el doble no recibe Edit ni Write" 0 \
+    "$(grep -c -E '(^| )(Edit|Write)( |$)' "$ciclo2_dir/claude-llamadas")"
+  check "ciclo real con perfil restringido: veredicto OK mueve la card a Lista para merge" 1 \
+    "$(grep -c 'card-9401 Estado=Lista para merge' "$ciclo2_dir/set-llamadas" 2>/dev/null)"
+  check "ciclo real con perfil restringido: el informe publicado no deja residuo" 1 \
+    "$([ -e "$ciclo2_dir/ws/.devkit/review-9401.md" ] && echo 0 || echo 1)"
+  check "ciclo real con perfil restringido: toca /run/devkit/poke" 1 \
+    "$([ -e "$ciclo2_dir/run/poke" ] && echo 1 || echo 0)"
 
   # --- run_claude no hereda la tubería de quien lo lanza (DEVKIT-102) --------
   # `watch.sh:1061` recorre los PRs abiertos con `gh pr list | while read -r
