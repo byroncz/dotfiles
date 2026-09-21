@@ -52,6 +52,10 @@
 #     origen cuando hay más de una Épica En progreso (DEVKIT-80). Una sola
 #     consulta a Notion por refresco (DEVKIT-82). `--seguir` la refresca
 #     cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+#   devkit-run --cola
+#     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
+#     origen o "(sin Épica)") y título, en el mismo orden que decide "la
+#     siguiente card" (`cola.sh`). No acepta `--seguir`.
 #   devkit-run --costos [<Clave>]
 #     Costo por card, leído de /workspace/.devkit/costos.log (DEVKIT-89), que
 #     sobrevive a `devkit recreate` a diferencia de watch.log. Con Clave: una
@@ -7368,7 +7372,7 @@ falta_valor() {  # falta_valor <valor>
 
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
-  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --costos [<Clave>] | --test" >&2
+  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --costos [<Clave>] | --test" >&2
 }
 
 modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
