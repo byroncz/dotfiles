@@ -42,7 +42,7 @@ function esPestañaDeChuleta(tab) {
 
 async function activate(context) {
   context.subscriptions.push(
-    vscode.commands.registerCommand('devkit.cheatsheet.show', mostrarChuleta)
+    vscode.commands.registerCommand('devkit.cheatsheet.show', () => mostrarChuleta())
   );
 
   // Sin este registro, restaurar una pestaña con este viewType falla con
