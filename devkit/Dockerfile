@@ -169,7 +169,10 @@ RUN uv python install "${TOOLS_PYTHON}" \
 # --- Configuración de shell y editor ---------------------------------------
 COPY --chown=${USER_UID}:${USER_GID} zsh/zshrc      /home/${USERNAME}/.zshrc
 COPY --chown=${USER_UID}:${USER_GID} zsh/starship.toml /home/${USERNAME}/.config/starship.toml
-COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/data/User/settings.json
+# vscode/settings.json ya no se copia a data/User/settings.json: openvscode-
+# server no lee esa ruta como ajustes de usuario del navegador, así que
+# nunca quedaba vigente (DEVKIT-116). Se copia más abajo junto a la
+# extensión devkit.cheatsheet, que es quien los aplica de verdad.
 
 COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
 COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
@@ -182,6 +185,12 @@ COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 # HTML lo sirve la imagen en vivo: el build corta si quedó viejo respecto a
 # comandos.txt.
 COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/
+# settings.json copiado junto a la extensión (DEVKIT-116): es la única forma
+# de dejar vigentes los ajustes del editor, porque openvscode-server no lee
+# ningún archivo de settings del lado del navegador. La extensión lo lee al
+# activarse y aplica cada clave por la API de configuración; settings.json
+# sigue siendo la única fuente, no se duplica en el código de la extensión.
+COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/settings.json
 # gen-cheatsheet.sh calcula SALIDA por defecto como <devkit>/vscode/cheatsheet/
 # cheatsheet.html, ruta que en la imagen no existe (solo entrypoint.sh y
 # scripts/ viven bajo /opt/devkit): --check tiene que comparar contra el HTML

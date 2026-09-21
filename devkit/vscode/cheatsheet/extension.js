@@ -13,9 +13,35 @@ const path = require('path');
 
 const VIEW_TYPE = 'devkit.cheatsheet';
 const TITULO = 'devkit: comandos';
+const RUTA_SETTINGS = path.join(__dirname, 'settings.json');
 
 function leerHtml() {
   return fs.readFileSync(path.join(__dirname, 'cheatsheet.html'), 'utf8');
+}
+
+// openvscode-server no lee ningún archivo como ajustes de usuario del
+// navegador (DEVKIT-116): la única forma de dejarlos vigentes es escribirlos
+// por la API de configuración. settings.json (copiado junto a esta extensión
+// por el Dockerfile) es la única fuente; aquí no se declara ningún valor
+// propio. Cada clave se aplica sola y se compara antes de escribir para no
+// pisar un cambio que el usuario haya hecho a mano en el mismo valor.
+async function aplicarSettings() {
+  let declarados;
+  try {
+    declarados = JSON.parse(fs.readFileSync(RUTA_SETTINGS, 'utf8'));
+  } catch (error) {
+    console.error('devkit: no se pudo leer settings.json', error);
+    return;
+  }
+  const config = vscode.workspace.getConfiguration();
+  for (const [clave, valor] of Object.entries(declarados)) {
+    if (config.inspect(clave)?.globalValue === valor) continue;
+    try {
+      await config.update(clave, valor, vscode.ConfigurationTarget.Global);
+    } catch (error) {
+      console.error(`devkit: no se pudo aplicar ${clave}`, error);
+    }
+  }
 }
 
 function mostrarChuleta(viewColumn = vscode.ViewColumn.One, preserveFocus = false) {
@@ -69,6 +95,8 @@ function esPestañaDeChuleta(tab) {
 }
 
 async function activate(context) {
+  await aplicarSettings();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('devkit.cheatsheet.show', () => mostrarChuleta())
   );
