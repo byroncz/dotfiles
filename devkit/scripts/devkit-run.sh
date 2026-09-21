@@ -786,8 +786,10 @@ perfil_de() {  # perfil_de <skill> [worktree de pr-review]
 # commit`, `git push` a las ramas de card, `gh pr merge --auto`, `uv`/`uvx`
 # (ejecutan cualquier cosa, incluido un `git push` como subproceso que el
 # motor de permisos no ve), `git checkout`/`switch`/`pull`/`worktree`
-# (reescriben `/workspace`), `find` (con `-delete` o `-exec`), `gh pr edit` y
-# `gh issue` para el perfil amplio. Sin negarlos aparte, pr-review y
+# (reescriben `/workspace`), `find` (con `-delete` o `-exec`), `gh pr edit`,
+# `gh issue`, `git branch` (incluido `-D` sobre ramas de card) y `git fetch`
+# para el perfil amplio (H10: el `fetch` que necesita pr-review ya lo hace
+# `review-prep.sh` por dentro). Sin negarlos aparte, pr-review y
 # task-document podrían usarlos igual pese a que el perfil restringido no los
 # incluye en su lista allow. `--disallowedTools` sí gana sobre cualquier
 # `allow`, sea de `--allowedTools` o de `settings.json`, así que aquí se
@@ -807,7 +809,8 @@ perfil_disallow_de() {  # perfil_disallow_de <skill>
         'Bash(uv:*)' 'Bash(uvx:*)' \
         'Bash(git checkout:*)' 'Bash(git switch:*)' 'Bash(git pull:*)' \
         'Bash(git worktree:*)' 'Bash(find:*)' \
-        'Bash(gh pr edit:*)' 'Bash(gh issue:*)'
+        'Bash(gh pr edit:*)' 'Bash(gh issue:*)' \
+        'Bash(git branch:*)' 'Bash(git fetch:*)'
       ;;
   esac
 }
@@ -3671,7 +3674,9 @@ Bash(git pull:*)
 Bash(git worktree:*)
 Bash(find:*)
 Bash(gh pr edit:*)
-Bash(gh issue:*)' \
+Bash(gh issue:*)
+Bash(git branch:*)
+Bash(git fetch:*)' \
     "$(perfil_disallow_de pr-review)"
   check "perfil_disallow_de: task-document recibe la misma lista de negados" \
     "$(perfil_disallow_de pr-review)" "$(perfil_disallow_de task-document)"
