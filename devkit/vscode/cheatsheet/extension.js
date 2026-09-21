@@ -43,6 +43,12 @@ async function activate(context) {
     vscode.commands.registerCommand('devkit.cheatsheet.show', mostrarChuleta)
   );
 
+  // Sin este registro, restaurar una pestaña con este viewType falla con
+  // "No serializer found for 'devkit.cheatsheet'". Esta build de
+  // openvscode-server no lo invoca para reparar el contenido -por eso la
+  // reparación real vive más abajo, buscando la pestaña por tipo- pero se
+  // deja registrado por si corre en un cliente estándar de VS Code que sí
+  // lo invoque.
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       deserializeWebviewPanel: async (panel) => {
