@@ -773,22 +773,34 @@ perfil_de() {  # perfil_de <skill> [worktree de pr-review]
   esac
 }
 
-# Complemento de `perfil_de` (DEVKIT-125, revisión del PR 92, H5):
+# Complemento de `perfil_de` (DEVKIT-125, revisión del PR 92, H5 y H9):
 # `--allowedTools` solo se suma a la lista `allow` de
 # `devkit/agents/settings.json`, que sigue autorizando `git add`, `git
-# commit`, `git push` a las ramas de card y `gh pr merge --auto` para el
-# perfil amplio. Sin negarlos aparte, pr-review y task-document podrían
-# usarlos igual pese a que el perfil restringido no los incluye en su lista
-# allow. `--disallowedTools` sí gana sobre cualquier `allow`, sea de
-# `--allowedTools` o de `settings.json`, así que aquí se niegan explícitos.
-# Vacío para el perfil amplio: task-start, task-fix y epic-plan sí necesitan
-# escribir la rama.
+# commit`, `git push` a las ramas de card, `gh pr merge --auto`, `uv`/`uvx`
+# (ejecutan cualquier cosa, incluido un `git push` como subproceso que el
+# motor de permisos no ve), `git checkout`/`switch`/`pull`/`worktree`
+# (reescriben `/workspace`), `find` (con `-delete` o `-exec`), `gh pr edit` y
+# `gh issue` para el perfil amplio. Sin negarlos aparte, pr-review y
+# task-document podrían usarlos igual pese a que el perfil restringido no los
+# incluye en su lista allow. `--disallowedTools` sí gana sobre cualquier
+# `allow`, sea de `--allowedTools` o de `settings.json`, así que aquí se
+# niegan explícitos. Vacío para el perfil amplio: task-start, task-fix y
+# epic-plan sí necesitan escribir la rama.
+#
+# Riesgo residual, sin cerrar aquí (H9): `gh api` sigue permitido para que
+# pr-review y task-document lean la API de GitHub, pero admite también un
+# `PUT /pulls/N/merge` u otra escritura. Queda para la entrada de
+# Documentación de esta card.
 perfil_disallow_de() {  # perfil_disallow_de <skill>
   case "$1" in
     pr-review|task-document)
       printf '%s\n' Edit Write NotebookEdit \
         'Bash(git add:*)' 'Bash(git commit:*)' 'Bash(git push:*)' \
-        'Bash(gh pr merge:*)'
+        'Bash(gh pr merge:*)' \
+        'Bash(uv:*)' 'Bash(uvx:*)' \
+        'Bash(git checkout:*)' 'Bash(git switch:*)' 'Bash(git pull:*)' \
+        'Bash(git worktree:*)' 'Bash(find:*)' \
+        'Bash(gh pr edit:*)' 'Bash(gh issue:*)'
       ;;
   esac
 }
@@ -3611,7 +3623,16 @@ NotebookEdit
 Bash(git add:*)
 Bash(git commit:*)
 Bash(git push:*)
-Bash(gh pr merge:*)' \
+Bash(gh pr merge:*)
+Bash(uv:*)
+Bash(uvx:*)
+Bash(git checkout:*)
+Bash(git switch:*)
+Bash(git pull:*)
+Bash(git worktree:*)
+Bash(find:*)
+Bash(gh pr edit:*)
+Bash(gh issue:*)' \
     "$(perfil_disallow_de pr-review)"
   check "perfil_disallow_de: task-document recibe la misma lista de negados" \
     "$(perfil_disallow_de pr-review)" "$(perfil_disallow_de task-document)"
