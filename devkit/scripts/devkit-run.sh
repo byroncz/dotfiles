@@ -4414,7 +4414,9 @@ FIN
 #!/usr/bin/env bash
 case "\$1" in
   card) cat "$tb_dir/ronda/card-\$2.json" 2>/dev/null ;;
-  set) shift 2; printf '%s\n' "\$*" >>"$tb_dir/ronda/set-llamadas" ;;
+  pagina) cat "$tb_dir/ronda/pagina-\$2.json" 2>/dev/null ;;
+  set) id2=\$2; shift 2; printf '%s %s\n' "\$id2" "\$*" >>"$tb_dir/ronda/set-llamadas" ;;
+  comentar) printf '%s %s\n' "\$2" "\$3" >>"$tb_dir/ronda/comentar-llamadas" ;;
   contenido) printf '## Objetivo\ncard de prueba\n' ;;
   comentarios) printf 'un comentario de prueba\n' ;;
 esac
@@ -4537,6 +4539,41 @@ FIN
   while [ ! -s "$tb_dir/run/task-start-6.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
   check "DEVKIT-100: título con acentos -> rama fix/DEVKIT-9099-depuracion-rapida-segun-pipeline" 1 \
     "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'fix/DEVKIT-9099-depuracion-rapida-segun-pipeline$')"
+
+  # DEVKIT-109: al arrancar la primera hija de una Épica en Lista, la Épica
+  # pasa a En progreso con un comentario de una línea; si ya estaba En
+  # progreso, o la hija no tiene Padre, no la toca.
+  printf '{"id":"pagina-epica-1","estado":"Lista"}' >"$tb_dir/ronda/pagina-epica-1.json"
+  printf '{"id":"pagina-9200","estado":"Lista","tipo":"feature","titulo":"Hija con épica en Lista","padre":["epica-1"]}' \
+    >"$tb_dir/ronda/card-DEVKIT-9200.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9200 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-7.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-109: hija con Padre en Lista deja la Épica En progreso" 1 \
+    "$(grep -c '^epica-1 Estado=En progreso$' "$tb_dir/ronda/set-llamadas" 2>/dev/null)"
+  check "DEVKIT-109: hija con Padre en Lista comenta en la Épica" 1 \
+    "$(grep -c '^epica-1 Arrancó su primera hija (DEVKIT-9200)' "$tb_dir/ronda/comentar-llamadas" 2>/dev/null)"
+
+  git -C "$tb_dir/ws" switch -q main
+  printf '{"id":"pagina-epica-2","estado":"En progreso"}' >"$tb_dir/ronda/pagina-epica-2.json"
+  printf '{"id":"pagina-9201","estado":"Lista","tipo":"feature","titulo":"Hija con épica ya en progreso","padre":["epica-2"]}' \
+    >"$tb_dir/ronda/card-DEVKIT-9201.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9201 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-8.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-109: hija con Padre ya En progreso no la toca" 0 \
+    "$(grep -c 'epica-2' "$tb_dir/ronda/set-llamadas" "$tb_dir/ronda/comentar-llamadas" 2>/dev/null | awk -F: '{s+=$2} END{print s+0}')"
+
+  comentarios_antes=$(wc -l <"$tb_dir/ronda/comentar-llamadas" 2>/dev/null || echo 0)
+  git -C "$tb_dir/ws" switch -q main
+  printf '{"id":"pagina-9202","estado":"Lista","tipo":"feature","titulo":"Hija sin épica"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9202.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9202 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-9.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-109: hija sin Padre no comenta en ninguna Épica" "$comentarios_antes" \
+    "$(wc -l <"$tb_dir/ronda/comentar-llamadas" 2>/dev/null || echo 0)"
+
   rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
