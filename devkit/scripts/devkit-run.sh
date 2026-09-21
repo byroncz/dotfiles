@@ -310,6 +310,15 @@ BLOQUEOS_LOCK="${DEVKIT_BLOQUEOS_LOCK:-$RUN_DIR/bloqueos.lock}"
 EPICAS_TTL="${DEVKIT_EPICAS_TTL:-30}"
 EPICAS_CACHE="${DEVKIT_EPICAS_CACHE:-$RUN_DIR/epicas.cache}"
 EPICAS_LOCK="${DEVKIT_EPICAS_LOCK:-$RUN_DIR/epicas.lock}"
+# DETALLE de la fila "(en espera)" (DEVKIT-133): mismo patrón de caché que
+# Bloqueos/Épicas, sobre `notion.sh activas` -ya la usa `--tablero`- para no
+# sumar una consulta nueva a Notion.sh. Aparte de BLOQUEOS_CACHE porque esa
+# solo trae una card "Lista para merge" si además bloquea a alguna en Lista
+# (columna "bloquea a"): una card "Lista para merge" que solo espera que el
+# humano apruebe el PR, sin frenar a nadie, no aparecería ahí.
+MERGE_TTL="${DEVKIT_MERGE_TTL:-30}"
+MERGE_CACHE="${DEVKIT_MERGE_CACHE:-$RUN_DIR/merge.cache}"
+MERGE_LOCK="${DEVKIT_MERGE_LOCK:-$RUN_DIR/merge.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -394,6 +403,21 @@ role_of() {  # role_of <prompt>
     pr-review|epic-plan) printf 'revision' ;;
     *) printf 'implementacion' ;;
   esac
+}
+
+# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
+# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
+# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
+# a partir del nombre del skill solo, para marcar filas ya cerradas en
+# `--costos`. Definida acá, junto a `role_field`/`role_of` de los que depende,
+# y no más abajo con el resto de `--costos` (DEVKIT-131 H3): ANCHO_TURNOS la
+# llama al cargar el script, antes de que existan las funciones que van
+# después en el archivo.
+presupuesto_de_skill() {  # presupuesto_de_skill <skill>
+  local skill=$1 valor
+  valor=$(role_field presupuesto "$skill")
+  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
+  printf '%s' "$valor"
 }
 
 # Si el modelo <alias> responde, con el resultado cacheado en
@@ -1251,6 +1275,43 @@ epica_de() {  # epica_de <Clave>
   [ "$edad" -lt "$EPICAS_TTL" ] || refrescar_epicas_bg
   linea=$(jq -r --arg c "$1" '.[] | select(.clave == $c) | "Épica \(.epica): \(.epica_titulo)"' <<<"$epicas" 2>/dev/null)
   printf '%s' "$linea"
+}
+
+# Trae `notion.sh activas` y escribe MERGE_CACHE; mismo patrón que
+# `_bloqueos_fetch_y_guardar`/`_epicas_fetch_y_guardar`, aparte de las dos
+# porque ninguna trae todas las cards "Lista para merge" del proyecto.
+_merge_fetch_y_guardar() {
+  local codigo activas
+  codigo=$(project_code)
+  [ -n "$codigo" ] || return 1
+  activas=$("$NOTION_BIN" activas "$codigo" 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$activas" >"$MERGE_CACHE.tmp" && mv -f "$MERGE_CACHE.tmp" "$MERGE_CACHE"
+}
+
+# Refresca MERGE_CACHE en segundo plano, mismo patrón que
+# `refrescar_bloqueos_bg`/`refrescar_epicas_bg`.
+refrescar_merge_bg() {
+  (
+    mkdir -p "$(dirname "$MERGE_CACHE")" 2>/dev/null
+    exec 8>"$MERGE_LOCK"
+    flock -n 8 || exit 0
+    _merge_fetch_y_guardar
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# Clave de la card "Lista para merge" más antigua del proyecto -la que el
+# humano tiene pendiente aprobar hace más tiempo-, o vacío si no hay caché
+# todavía o ninguna card está en ese Estado (DEVKIT-133, DETALLE de la fila
+# "(en espera)"). Mismo criterio de refresco en segundo plano que
+# `bloquea_a`/`epica_de`: nunca espera en línea a Notion.
+esperando_aprobacion() {
+  local ts activas edad
+  [ -s "$MERGE_CACHE" ] || { refrescar_merge_bg; return 0; }
+  IFS=$'\t' read -r ts activas <"$MERGE_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$MERGE_TTL" ] || refrescar_merge_bg
+  jq -r '[.[] | select(.estado == "Lista para merge")] | .[0].clave // empty' \
+    <<<"$activas" 2>/dev/null
 }
 
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
@@ -2111,9 +2172,12 @@ rellenar() {  # rellenar <texto> <ancho>
 # de watch.sh, esta autoprueba, todos sin tty pero a veces con `$TERM`
 # heredado): un tamaño grande a propósito, no uno chico. Un `tput` de respaldo
 # acá adentro devolvía 80/24 con `$TERM` definido pero sin tty -el caso más
-# común fuera de una terminal interactiva-, y esta tabla ya usa 77 columnas
-# fijas antes de DETALLE: quedaban 3 caracteres para DETALLE, mucho peor que
-# no recortar nada cuando no hay certeza real del tamaño.
+# común fuera de una terminal interactiva-, y esta tabla ya usa
+# `$ANCHO_COLUMNAS_FIJAS` columnas fijas antes de DETALLE (DEVKIT-131: se
+# calculan, no se fijan a mano; no repetir la cifra acá, que queda vieja en
+# cuanto un valor posible cambia): a 80 quedaban pocos caracteres para
+# DETALLE, mucho peor que no recortar nada cuando no hay certeza real del
+# tamaño.
 ancho_terminal() {
   local c=${COLUMNS:-}
   [ "$c" -gt 0 ] 2>/dev/null || c=200
@@ -2126,25 +2190,120 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho de cada columna fija antes de DETALLE (DEVKIT-97, ESTADO ensanchada a
-# 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en DEVKIT-107). Angostadas en
-# DEVKIT-107 H1 a lo que de verdad usan: SKILL 14 (task-document mide 13,
-# el nombre más largo), CARD 12 (DEVKIT-9999 mide 11, más un espacio de
-# separador -DEVKIT-107 H4: `rellenar` no lo agrega cuando el texto ya llena
-# el ancho, así que sin ese espacio de más "DEVKIT-1000" pegaba con LANZÓ),
-# LANZÓ 8 ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ
-# usan minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
-# ESTADO vuelve a ensancharse a 20 en DEVKIT-132: "✔ Lista para merge" (el
-# veredicto de pr-review, no solo "terminó") mide 18 con icono y espacio,
-# más el mismo margen de dos que ya usaba "⚠ sin registro" (14 + 2 = 16).
-ANCHO_SKILL=14
-ANCHO_CARD=12
-ANCHO_LANZO=8
-ANCHO_HACE=7
-ANCHO_DURO=7
-ANCHO_ESTADO=20
-ANCHO_MODELO=16
-ANCHO_TURNOS=9
+# Ancho de una columna fija: la longitud del valor posible más largo, más un
+# espacio de separación con la siguiente (DEVKIT-131). `rellenar` no agrega
+# ese espacio cuando el texto ya llena el ancho (DEVKIT-107 H4), así que tiene
+# que venir incluido acá. Sin este cálculo cada ANCHO_* se fijaba a mano
+# contra una foto de los valores del momento, y un valor nuevo la desbordaba
+# en silencio corriendo el resto de la fila -caso real: ANCHO_LANZO=8 no
+# alcanzaba para "task-close" (10).
+ancho_de() {  # ancho_de <valor>...
+  local max=0 v
+  for v in "$@"; do
+    [ "${#v}" -gt "$max" ] && max=${#v}
+  done
+  printf '%s' "$((max + 1))"
+}
+
+# SKILL: cualquier skill real que `devkit-run <skill> <arg>` pueda lanzar deja
+# línea "lanzando" en watch.log (autoprueba de /task-submit, línea ~6852);
+# task-close y task-block son bash, DEVKIT-55, y no aparecen aquí. Se leen los
+# directorios de skills instalados -$WS/.claude/skills, el símlink al
+# template (AGENTS.md)-, con $HERE/../agents/skills como alternativa en modo
+# dev (este mismo repo, antes de reinstalar la imagen); si ninguno de los dos
+# tiene skills, cae al listado fijo de siempre (DEVKIT-131 H1: una lista a
+# mano de cinco se quedó corta contra las 11 reales -template-propagate, la
+# más larga, desbordaba ANCHO_SKILL-). LANZÓ: quién pidió el lanzamiento
+# -"humano" es el respaldo de origen_de sin ancestro reconocido, "bucle" lo
+# pone run_skill de watch.sh, "task-close" lo exporta task-close.sh
+# (DEVKIT_ORIGEN) y también es el origen fijo que costos_filas asigna al
+# cierre bash del PR- o cualquiera de esas mismas skills como ancestro
+# (origen_de: un `claude -p /epic-plan` lanzando `task-start`, por ejemplo,
+# deja origen=epic-plan).
+skills_lanzables() {
+  local base dir encontrados=()
+  for base in "$WS/.claude/skills" "$HERE/../agents/skills"; do
+    encontrados=()
+    for dir in "$base"/*/; do
+      [ -f "${dir}SKILL.md" ] || continue
+      encontrados+=("$(basename "$dir")")
+    done
+    if [ "${#encontrados[@]}" -gt 0 ]; then
+      printf '%s\n' "${encontrados[@]}" | sort
+      return 0
+    fi
+  done
+  printf '%s\n' task-start pr-review task-fix task-document epic-plan
+}
+mapfile -t SKILLS_CON_LANZAMIENTO < <(skills_lanzables)
+ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
+
+# ESTADO: cada estado que arma estado_filas (comentario de esa función,
+# arriba: en curso, terminó, error, bloqueada, no arrancó, no lanzó, y "sin
+# registro" como único valor del caso por defecto) con su glifo -el de UTF-8
+# y el de respaldo ASCII (utf8_disponible), porque sin locale UTF-8 el
+# respaldo puede medir más que el icono real ("!! bloqueada" son 12, dos más
+# que "⊘ bloqueada"-. "Lista para merge" y "Bloqueada" (DEVKIT-132: el
+# veredicto de un pr-review terminado, no un paso del ciclo) entran acá
+# también, porque son los valores más anchos que de verdad puede mostrar
+# ESTADO -sin ellos, `ancho_de` los calcularía cortos y la fila desbordaría
+# en silencio en cuanto el bucle deje ese veredicto-.
+ESTADOS_CON_GLIFO=(
+  "⠿ en curso" "* en curso"
+  "✔ terminó" "ok terminó"
+  "✔ Lista para merge" "ok Lista para merge"
+  "✖ error" "x error"
+  "⊘ bloqueada" "!! bloqueada"
+  "⊘ Bloqueada" "!! Bloqueada"
+  "○ no arrancó" "o no arrancó"
+  "○ no lanzó" "o no lanzó"
+  "○ en espera" "o en espera"
+  "⚠ sin registro" "! sin registro"
+)
+
+# MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera` (roles.toml,
+# DEVKIT-131: el alias, no un número a mano) y también de `implementacion.rondas`/
+# `revision.rondas` -alias:esfuerzo por elemento, DEVKIT-61-, porque esos dos
+# también son alias reales de roles.toml y `frontera` no los repite (DEVKIT-131
+# H3: MODELO solo tomaba los de `frontera` y un alias más largo en `.rondas`
+# desbordaba la columna sin que nada lo notara). El resto en su forma más larga
+# real -"/medium r9": "medium" es el esfuerzo más largo que acepta `--esfuerzo`
+# (línea de uso, arriba) y una ronda de un dígito es la que se ve en la
+# práctica-.
+mapfile -t ALIAS_FRONTERA < <(frontera_list)
+[ "${#ALIAS_FRONTERA[@]}" -gt 0 ] || ALIAS_FRONTERA=(fable opus sonnet)
+mapfile -t ALIAS_RONDAS < <({ toml_lista implementacion.rondas; toml_lista revision.rondas; } | sed -E 's/:.*$//')
+MODELOS_CON_ESFUERZO=()
+for _alias_frontera in "${ALIAS_FRONTERA[@]}" "${ALIAS_RONDAS[@]}"; do
+  MODELOS_CON_ESFUERZO+=("$_alias_frontera/medium r9")
+done
+unset _alias_frontera
+
+ANCHO_SKILL=$(ancho_de "${SKILLS_CON_LANZAMIENTO[@]}")
+ANCHO_CARD=12  # sin cambios (DEVKIT-107 H4): DEVKIT-9999 mide 11, más el espacio de separación.
+ANCHO_LANZO=$(ancho_de "${ORIGENES_LANZAMIENTO[@]}")
+# HACE/DURÓ: la forma más larga que devuelve `hace()` es "23h59m" (6);
+# "59m59s" no ocurre, `hace()` no combina minutos y segundos.
+ANCHO_HACE=$(ancho_de "23h59m")
+ANCHO_DURO=$ANCHO_HACE
+ANCHO_ESTADO=$(ancho_de "${ESTADOS_CON_GLIFO[@]}")
+ANCHO_MODELO=$(ancho_de "${MODELOS_CON_ESFUERZO[@]}")
+# TURNOS: "<turnos_usados>/<presupuesto>[!]", con <presupuesto> el mayor
+# `presupuesto_de_skill` entre las skills reales -`presupuesto.<skill>` de
+# roles.toml, o el `max_turns` de su rol si esa skill no lo anula- (DEVKIT-131
+# H3: antes era el literal "125/120!", y un roles.toml de proyecto con un
+# presupuesto de más dígitos desbordaba la columna sin que nada lo detectara).
+# <turnos_usados> puede llevar un dígito más que <presupuesto> por un exceso
+# real; de ahí el "9" de más en PRESUPUESTO_MAX_MAS_UNO.
+PRESUPUESTO_MAX=0
+for _skill_presupuesto in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+  _v_presupuesto=$(presupuesto_de_skill "$_skill_presupuesto")
+  case "$_v_presupuesto" in '' | *[!0-9]*) continue ;; esac
+  [ "$_v_presupuesto" -gt "$PRESUPUESTO_MAX" ] && PRESUPUESTO_MAX=$_v_presupuesto
+done
+unset _skill_presupuesto _v_presupuesto
+PRESUPUESTO_MAX_MAS_UNO=$(printf '9%.0s' $(seq 1 $((${#PRESUPUESTO_MAX} + 1))))
+ANCHO_TURNOS=$(ancho_de "${PRESUPUESTO_MAX_MAS_UNO}/${PRESUPUESTO_MAX}!")
 ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
@@ -2250,7 +2409,7 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
     terminó|"Lista para merge") [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
     bloqueada|Bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
-    "no arrancó"|"no lanzó") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
+    "no arrancó"|"no lanzó"|"en espera") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
     *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
   esac
 }
@@ -2271,6 +2430,7 @@ color_de_estado_fila() {  # color_de_estado_fila <estado>
     error|falló|"falló ("*|bloqueada) printf rojo ;;
     Bloqueada) printf rojo-negrita ;;
     "no arrancó"|"no lanzó") printf gris ;;
+    "en espera") printf ambar ;;
     *) printf ambar ;;
   esac
 }
@@ -2329,11 +2489,12 @@ punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> 
 }
 
 encabezado_tabla() {
-  # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
-  # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
-  # pegado a la columna MODELO. DURÓ (junto a HACE) y TURNOS (antes de
-  # DETALLE) son de DEVKIT-107; sus anchos, angostados en DEVKIT-107 H1, están
-  # en las constantes `ANCHO_*` junto a `ANCHO_COLUMNAS_FIJAS`.
+  # Cada ANCHO_* sale de `ancho_de` contra los valores posibles reales de su
+  # columna (DEVKIT-131), no de una cifra fijada a mano: no repetir números
+  # acá, que quedan viejos en cuanto un valor posible cambia (caso real:
+  # "⚠ sin registro" ensanchó ESTADO en DEVKIT-106 H2, después de que
+  # DEVKIT-81 H7 ya la había ensanchado una vez). Las constantes `ANCHO_*`
+  # están junto a `ANCHO_COLUMNAS_FIJAS`, arriba.
   printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
     "$(rellenar LANZÓ "$ANCHO_LANZO")" "$(rellenar HACE "$ANCHO_HACE")" "$(rellenar DURÓ "$ANCHO_DURO")" \
     "$(rellenar ESTADO "$ANCHO_ESTADO")" "$(rellenar MODELO "$ANCHO_MODELO")" \
@@ -2349,18 +2510,19 @@ encabezado_tabla() {
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 # <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
 # el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
-# directas de la autoprueba (sin esos tres argumentos) no cambian. ESTADO
-# ensanchada a 16 (DEVKIT-106 H2): "⚠ sin registro" con icono y espacio mide
-# 14, y sin margen quedaba pegado a MODELO. <duracion> y <turnos> (DEVKIT-107)
+# directas de la autoprueba (sin esos tres argumentos) no cambian. ANCHO_ESTADO
+# sale de `ancho_de` sobre los estados posibles (DEVKIT-131): "⚠ sin registro"
+# fue el que la ensanchó (DEVKIT-106 H2), sin margen quedaba pegado a MODELO.
+# <duracion> y <turnos> (DEVKIT-107)
 # ya llegan formateados desde `estado_filas` (o de la autoprueba, directo):
 # esta función solo alinea y colorea, no vuelve a calcularlos.
 #
 # La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
 # entra en el ancho de la terminal, se recorta completa con `recortar` -no
 # solo DETALLE- y recién ahí se pintan los colores con `pintar_rango`
-# (DEVKIT-107 H1): angostar las columnas fijas (89, antes 97) no alcanza en
-# una terminal de menos de 90 columnas, y ahí hace falta comerse parte de las
-# columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
+# (DEVKIT-107 H1): angostar `ANCHO_COLUMNAS_FIJAS` (calculado, DEVKIT-131) no
+# alcanza en una terminal más angosta que eso, y ahí hace falta comerse parte
+# de las columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
 # antes de ese recorte final correría el corte, como ya cuidaba DEVKIT-106 H3
 # para DETALLE por separado.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=]
@@ -2404,6 +2566,65 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> 
   printf '%s\n' "$fila"
 }
 
+# Última vez que algún lanzamiento terminó, de cualquier skill (DEVKIT-133,
+# ancla de la fila "(en espera)"): la línea de cierre -éxito o error- más
+# reciente de watch.log, tanto de un lanzamiento directo de `run_skill`
+# (`$id terminado: `/`ALARMA: $id terminó con error (rc=N)`) como de uno
+# lanzado por `--worker` (`devkit-run "..." terminado [$id]:`/`devkit-run
+# "..." falló (rc=N) [$id]:`). "no lanzó"/"no arrancó" no cuentan: ninguno de
+# los dos deja trabajo real terminado, así que no deberían reiniciar el
+# tiempo ocioso. Vacío si watch.log no existe o no tiene ninguna.
+ultima_actividad_ts() {  # ultima_actividad_ts <watch.log>
+  local wlog=$1 linea
+  [ -f "$wlog" ] || return 1
+  linea=$(grep -E ' (terminado: |terminó con error \(rc=[0-9]+\)|terminado \[[^]]+\]:|falló \(rc=[0-9]+\) \[[^]]+\]:)' \
+    "$wlog" | tail -1)
+  [ -n "$linea" ] || return 1
+  date -d "$(awk '{print $1}' <<<"$linea")" +%s 2>/dev/null
+}
+
+# Arranque del bucle (DEVKIT-133): respaldo de `ultima_actividad_ts` cuando
+# watch.log todavía no tiene ningún cierre -un contenedor recién levantado-,
+# sobre la línea que `watch.sh` deja al arrancar ("vigilancia iniciada").
+arranque_bucle_ts() {  # arranque_bucle_ts <watch.log>
+  local wlog=$1 linea
+  [ -f "$wlog" ] || return 1
+  linea=$(grep -E ' vigilancia iniciada ' "$wlog" | tail -1)
+  [ -n "$linea" ] || return 1
+  date -d "$(awk '{print $1}' <<<"$linea")" +%s 2>/dev/null
+}
+
+# Fila sintética "(en espera)" (DEVKIT-133): cuando ninguna fila de
+# `estado_filas` está en curso, mide desde que terminó el último lanzamiento
+# del proyecto -o desde que arrancó el bucle si todavía no hay ninguno- y
+# explica qué espera. Devuelve vacío (rc=1) si no hay ningún punto de partida
+# -watch.log inexistente o sin ninguna línea reconocible, el caso que ya
+# cubre "sin lanzamientos registrados"- para no inventar una duración desde
+# `ahora`. Mismo formato de columnas que `estado_filas`, así fluye por el
+# mismo `formatear_fila` que el resto de la tabla.
+# <bucle_texto> (DEVKIT-133 H2) es la salida de `senal_bucle`: con el bucle
+# MUERTO o SIN SEÑAL nadie va a tomar la cola, así que DETALLE dice "bucle
+# parado" en vez de "cola vacía"/"esperando aprobación de ...", que daría a
+# entender que el sistema sigue esperando trabajo.
+fila_en_espera() {  # fila_en_espera <watch.log> <ahora epoch> [bucle_texto]
+  local wlog=$1 ahora=$2 bucle_texto=${3:-} t0 edad detalle clave_merge
+  t0=$(ultima_actividad_ts "$wlog") || t0=$(arranque_bucle_ts "$wlog") || return 1
+  [ -n "$t0" ] || return 1
+  edad=$((ahora - t0))
+  if grep -qE 'MUERTO|SIN SEÑAL' <<<"$bucle_texto"; then
+    detalle="bucle parado"
+  else
+    clave_merge=$(esperando_aprobacion)
+    if [ -n "$clave_merge" ]; then
+      detalle="esperando aprobación de $clave_merge"
+    else
+      detalle="cola vacía"
+    fi
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "(en espera)" - bucle "$(hace "$edad")" "en espera" "$detalle" - "$(hace "$edad")" -
+}
+
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
 # con las más recientes -las últimas del arreglo, porque `estado_filas` las
 # entrega en el orden del log, más viejas primero- y un resumen de cuántas
@@ -2428,7 +2649,7 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
   printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
-mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=]
+mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=] [bucle_texto=]
   local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
   local filas skill clave origen edad estado detalle modelo duracion turnos
   # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
@@ -2437,10 +2658,27 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   # veces por refresco y arriesgar que el punto y la tabla salgan de fotos
   # distintas. `$#` -ge 5, no el valor: una llamada sin filas activas de
   # verdad pasa una cadena vacía a propósito.
+  local ahora_estado=${DEVKIT_AHORA:-$(date +%s)}
   if [ $# -ge 5 ]; then
     filas=$5
   else
-    filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
+    filas=$(estado_filas "$WATCH_LOG" "$ahora_estado")
+  fi
+  # <bucle_texto> (DEVKIT-133 H2), sexto argumento: mismo <bucle> que ya
+  # calculó quien llama para la cabecera (`senal_bucle`), pasado tal cual a
+  # `fila_en_espera` para que DETALLE no diga "cola vacía" con el bucle
+  # parado.
+  local bucle_texto=${6:-}
+  # Fila "(en espera)" (DEVKIT-133): sin ninguna en curso, se agrega al final
+  # para medir el tiempo ocioso, con lo que el sistema espera en DETALLE.
+  # `fila_en_espera` sale vacía (rc=1) sin ningún cierre ni arranque de bucle
+  # que anclarla -watch.log inexistente o recién creado-, y la tabla queda
+  # igual que antes de esta card.
+  if ! printf '%s\n' "$filas" | awk -F'\t' '$5=="en curso"{f=1} END{exit !f}'; then
+    local fila_espera
+    if fila_espera=$(fila_en_espera "$WATCH_LOG" "$ahora_estado" "$bucle_texto"); then
+      if [ -n "$filas" ]; then filas="$filas"$'\n'"$fila_espera"; else filas=$fila_espera; fi
+    fi
   fi
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
@@ -2634,7 +2872,7 @@ seguir_estado() {
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -2687,7 +2925,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -3001,18 +3239,6 @@ costos_totales_card() {  # costos_totales_card <Clave>
   done < <(costos_filas "${COSTOS_LOG:-/dev/null}" "$clave")
   [ "$filas" = 1 ] || return 1
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
-}
-
-# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
-# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
-# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
-# a partir del nombre del skill solo, para marcar filas ya cerradas en
-# `--costos`.
-presupuesto_de_skill() {  # presupuesto_de_skill <skill>
-  local skill=$1 valor
-  valor=$(role_field presupuesto "$skill")
-  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
-  printf '%s' "$valor"
 }
 
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
@@ -5820,6 +6046,11 @@ FIN
   check "review-prep corta con rc=3: sin duracion=, DURÓ es un guion" "-" "$(campo DEVKIT-73 8)"
   check "icono: \"no lanzó\" también gris (mismo caso que \"no arrancó\")" gris \
     "$(color_de_estado_fila "no lanzó")"
+  # DEVKIT-133 H3: "en espera" listado a propósito en el case, no dependiendo
+  # del comodín `*)`, para que un case nuevo no lo pinte de otro color sin que
+  # nadie lo note.
+  check "icono: \"en espera\" (fila sintética de la card DEVKIT-133) color ámbar" ambar \
+    "$(color_de_estado_fila "en espera")"
   check "encabezado_tabla: orden nuevo, DURÓ junto a HACE y TURNOS antes de DETALLE" \
     "SKILL CARD LANZÓ HACE DURÓ ESTADO MODELO TURNOS DETALLE" \
     "$(encabezado_tabla | tr -s ' ')"
@@ -5867,6 +6098,44 @@ FIN
   check "columna CARD deja un espacio antes de LANZÓ con una Clave de 11 caracteres" si \
     "$(COLUMNS=200 formatear_fila task-start DEVKIT-9999 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0 \
         | grep -qF 'DEVKIT-9999 bucle' && echo si || echo no)"
+
+  # DEVKIT-131: ANCHO_LANZO se fijaba a mano (8) y no le entraba "task-close"
+  # (10) -la fila entera se corría dos columnas hacia la derecha, y con ella
+  # el resto de la tabla-. Ahora sale de ORIGENES_LANZAMIENTO (junto a los
+  # demás ANCHO_*, arriba). Esta fila prueba el caso real: task-close como
+  # LANZÓ (no como SKILL, que ya cubría la fila de "estado más largo" de
+  # abajo), comparando contra el mismo desplazamiento que usa `encabezado_tabla`.
+  off_hace_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO))
+  fila_lanzo_131=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 task-close 5m 5m terminó opus/high 3/60 - 0 1 0)
+  check "LANZÓ=task-close: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_lanzo_131} - 1))"
+  check "LANZÓ=task-close no corre la columna HACE, alineada con la cabecera" \
+    "$(rellenar 5m "$ANCHO_HACE")" "${fila_lanzo_131:$off_hace_131:$ANCHO_HACE}"
+
+  # Misma prueba de alineación para el otro extremo: el estado más largo
+  # ("⚠ sin registro", 14) tampoco debe correr la columna que sigue a ESTADO
+  # (MODELO).
+  off_modelo_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
+  fila_estado_131=$(COLUMNS=200 formatear_fila task-document DEVKIT-9 humano 8m 8m "sin registro" fable/max -/40 - 0 1 0)
+  check "ESTADO=sin registro no corre la columna MODELO, alineada con la cabecera" \
+    "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
+  unset off_hace_131 fila_lanzo_131 off_modelo_131 fila_estado_131
+
+  # DEVKIT-131 H1: SKILL salía de una lista fija de cinco nombres, y
+  # template-propagate (18) ya no entraba en ANCHO_SKILL=14. El skill más
+  # largo se toma de SKILLS_CON_LANZAMIENTO, la misma lista que arma
+  # ANCHO_SKILL -si crece con un nombre más largo, este caso lo sigue sin
+  # tocarlo a mano.
+  skill_mas_largo_131=""
+  for _skill_131 in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+    [ "${#_skill_131}" -gt "${#skill_mas_largo_131}" ] && skill_mas_largo_131=$_skill_131
+  done
+  fila_skill_131=$(COLUMNS=200 formatear_fila "$skill_mas_largo_131" DEVKIT-13 humano 1m 1m terminó sonnet/high -/40 - 0 1 0)
+  check "SKILL=<skill más largo> no corre la columna CARD, alineada con la cabecera" \
+    "$(rellenar "$skill_mas_largo_131" "$ANCHO_SKILL")" "${fila_skill_131:0:$ANCHO_SKILL}"
+  check "SKILL=<skill más largo>: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_skill_131} - 1))"
+  unset _skill_131 skill_mas_largo_131 fila_skill_131
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
@@ -6618,6 +6887,93 @@ $(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-57 ')"
         CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-epica-sola/cuota.cache" CUOTA_LOCK="$tmp/cuota-epica-sola/cuota.lock" \
         PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
         WATCH_LOG="$est/watch.log" mostrar_estado | grep -c '^Épica ')"
+
+  # --- DEVKIT-133: fila "(en espera)" cuando nada está en curso -----------
+  # watch.log aparte del de arriba (`$est`, que sí tiene DEVKIT-57 en curso):
+  # sin ningún "en curso", solo un cierre "terminado" y, antes, la línea de
+  # arranque del bucle.
+  local espera_est espera_ahora salida_espera pslist_espera
+  espera_est="$tmp/en-espera"
+  mkdir -p "$espera_est"
+  cat >"$espera_est/watch.log" <<FIN
+2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)
+2026-09-20T09:05:00Z task-fix-1 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-70" log=$espera_est/task-fix-1.log
+2026-09-20T09:10:00Z task-fix-1 terminado: modelo=opus esfuerzo=high ronda=1 costo=0.10 turnos=5 duracion=300s :: OK
+FIN
+  espera_ahora=$(date -d '2026-09-20T09:25:00Z' +%s)
+  check "ultima_actividad_ts: la última línea terminado, no la de lanzando" \
+    "$(date -d '2026-09-20T09:10:00Z' +%s)" "$(ultima_actividad_ts "$espera_est/watch.log")"
+  check "arranque_bucle_ts: la línea de vigilancia iniciada" \
+    "$(date -d '2026-09-20T09:00:00Z' +%s)" "$(arranque_bucle_ts "$espera_est/watch.log")"
+
+  local espera_solo_arranque
+  espera_solo_arranque="$tmp/en-espera-arranque"
+  mkdir -p "$espera_solo_arranque"
+  printf '2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)\n' \
+    >"$espera_solo_arranque/watch.log"
+  check "ultima_actividad_ts: sin ningún cierre todavía, vacío (rc=1)" 1 \
+    "$(ultima_actividad_ts "$espera_solo_arranque/watch.log" >/dev/null 2>&1; echo $?)"
+
+  local merge_vacio merge_con merge_digitos
+  merge_vacio="$tmp/merge-vacio"
+  mkdir -p "$merge_vacio"
+  printf '%s\t%s\n' "$(date +%s)" '[]' >"$merge_vacio/merge.cache"
+  check "esperando_aprobacion: sin cards Lista para merge, vacío" "" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" esperando_aprobacion)"
+  merge_con="$tmp/merge-con"
+  mkdir -p "$merge_con"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-40","estado":"En progreso","tipo":"feature","nivel":"Tarea","pr":""},{"clave":"DEVKIT-30","estado":"Lista para merge","tipo":"bug","nivel":"Tarea","pr":"https://github.com/o/r/pull/3"}]' \
+    >"$merge_con/merge.cache"
+  check "esperando_aprobacion: la Clave en Lista para merge" "DEVKIT-30" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" esperando_aprobacion)"
+
+  merge_digitos="$tmp/merge-digitos"
+  mkdir -p "$merge_digitos"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-97","estado":"Lista para merge","tipo":"bug","nivel":"Tarea","pr":""},{"clave":"DEVKIT-133","estado":"Lista para merge","tipo":"feature","nivel":"Tarea","pr":""}]' \
+    >"$merge_digitos/merge.cache"
+  check "esperando_aprobacion: la más antigua, no la que ordena antes como texto" "DEVKIT-97" \
+    "$(MERGE_CACHE="$merge_digitos/merge.cache" MERGE_LOCK="$merge_digitos/merge.lock" esperando_aprobacion)"
+
+  check "fila_en_espera: HACE y DURÓ iguales, desde el último terminado (15m)" "15m|15m|en espera|cola vacía" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $4"|"$8"|"$5"|"$6}')"
+  check "fila_en_espera: DETALLE con la Clave que espera aprobación" "esperando aprobación de DEVKIT-30" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: sin watch.log, vacío (rc=1)" 1 \
+    "$(fila_en_espera "$tmp/en-espera-inexistente/watch.log" "$espera_ahora" >/dev/null 2>&1; echo $?)"
+  check "fila_en_espera: DETALLE bucle parado con el bucle MUERTO, no cola vacía" "bucle parado" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" 'bucle: MUERTO, no encuentro watch.sh en ps' \
+        | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: DETALLE bucle parado con SIN SEÑAL, ni con card esperando aprobación" "bucle parado" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" 'bucle: SIN SEÑAL hace 10m' \
+        | awk -F'\t' '{print $6}')"
+
+  pslist_espera="$tmp/ps-en-espera"
+  printf '#!/usr/bin/env bash\n' >"$pslist_espera"
+  chmod +x "$pslist_espera"
+  salida_espera=$(PS_BIN="$pslist_espera" LOCK="$espera_est/skill.lock" CLAUDE_BIN="$doble" \
+      CUOTA_CACHE="$tmp/cuota-espera/cuota.cache" CUOTA_LOCK="$tmp/cuota-espera/cuota.lock" \
+      MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+      DEVKIT_AHORA="$espera_ahora" WATCH_LOG="$espera_est/watch.log" mostrar_estado)
+  # Última línea de la tabla, antes del bloque Consumo que `mostrar_estado`
+  # agrega siempre después de una línea en blanco (DEVKIT-62).
+  check "--estado sin nada en curso: agrega la fila (en espera) al final de la tabla" si \
+    "$(printf '%s\n' "$salida_espera" | awk '/^$/{exit} {l=$0} END{print l}' | grep -qF '(en espera)' && echo si || echo no)"
+  check "--estado sin nada en curso: HACE y DURÓ, ambos 15m" si \
+    "$(printf '%s\n' "$salida_espera" | grep '(en espera)' | grep -qE '15m +15m' && echo si || echo no)"
+  check "--estado sin nada en curso: DETALLE cola vacía" si \
+    "$(printf '%s\n' "$salida_espera" | grep '(en espera)' | grep -qF 'cola vacía' && echo si || echo no)"
+  check "--estado con una skill en curso: sin fila (en espera)" no \
+    "$(PS_BIN="$pslist" LOCK="$est/skill.lock" CLAUDE_BIN="$doble" \
+        CUOTA_CACHE="$tmp/cuota-con-curso/cuota.cache" CUOTA_LOCK="$tmp/cuota-con-curso/cuota.lock" \
+        MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        DEVKIT_AHORA="$ahora" WATCH_LOG="$est/watch.log" mostrar_estado \
+        | grep -qF '(en espera)' && echo si || echo no)"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
@@ -7893,7 +8249,7 @@ $card_md"
     printf 'devkit-run --estado  %s %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
       "$estado_bucle_una"
-    mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una"
+    mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una" "$estado_bucle_una"
     exit 0
     ;;
   --tablero)
