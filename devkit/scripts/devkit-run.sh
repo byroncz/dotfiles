@@ -2480,27 +2480,39 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> 
 }
 
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
-# con las más recientes -las últimas del arreglo, porque `estado_filas` las
-# entrega en el orden del log, más viejas primero- y un resumen de cuántas
-# quedaron afuera. Sin esto, muchos lanzamientos desbordan `--seguir` y el
-# redibujo en el sitio (`\033[H` en `cuadro_sin_parpadeo`) apila cuadros en
-# vez de refrescar uno solo. `devkit-run --estado --todo` (`DEVKIT_ESTADO_TODO`)
-# lo desactiva para verlas todas.
+# con las más recientes al final del arreglo, y un resumen de cuántas
+# quedaron afuera. Desde DEVKIT-135, el orden ya no es el cronológico puro de
+# `estado_filas`: quien llama agrupó antes por CARD (`filas_agrupadas`), así
+# que "las más recientes" son los grupos cuya fila más nueva quedó más abajo,
+# no las filas más nuevas del log una por una. Sin esto, muchos lanzamientos
+# desbordan `--seguir` y el redibujo en el sitio (`\033[H` en
+# `cuadro_sin_parpadeo`) apila cuadros en vez de refrescar uno solo.
+# `devkit-run --estado --todo` (`DEVKIT_ESTADO_TODO`) lo desactiva para verlas
+# todas.
 imprimir_tabla() {  # imprimir_tabla <fila formateada>...
-  local total=$# max inicio
+  local -a filas=("$@")
+  local total=${#filas[@]} max ini i restantes=0
   if [ -n "${DEVKIT_ESTADO_TODO:-}" ] || [ "$total" -eq 0 ]; then
-    [ "$total" -eq 0 ] || printf '%s\n' "$@"
+    [ "$total" -eq 0 ] || printf '%s\n' "${filas[@]}"
     return 0
   fi
   max=$(( $(alto_terminal) - RESERVA_LINEAS_TABLA ))
   [ "$max" -ge 1 ] 2>/dev/null || max=1
   if [ "$total" -le "$max" ]; then
-    printf '%s\n' "$@"
+    printf '%s\n' "${filas[@]}"
     return 0
   fi
-  inicio=$(( total - max + 1 ))
-  printf '%s\n' "${@:inicio}"
-  printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
+  ini=$(( total - max ))
+  # Un separador de `agrupar_por_card` (`separador_grupo`, todo guiones) no
+  # es una fila real (DEVKIT-135 H2): si el recorte lo deja como primera
+  # línea visible, se descarta -sin la fila anterior que marcaba el cambio de
+  # card, no explica nada ahí- y no cuenta para "quedaron afuera".
+  [[ "${filas[ini]}" =~ ^-+$ ]] && ini=$((ini + 1))
+  for ((i = 0; i < ini; i++)); do
+    [[ "${filas[i]}" =~ ^-+$ ]] || restantes=$((restantes + 1))
+  done
+  printf '%s\n' "${filas[@]:ini}"
+  printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$restantes"
 }
 
 # Reordena <filas> (formato de `estado_filas`) agrupando por CARD -columna
