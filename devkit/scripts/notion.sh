@@ -73,6 +73,22 @@
 #                                             hijas), como lista JSON
 #                                             (arrastre de hijas de Backlog a
 #                                             Lista de `watch.sh`, DEVKIT-121)
+#   notion.sh epicas-backlog <código>         Épicas del proyecto en Backlog,
+#                                             normalizadas (con id), como
+#                                             lista JSON (grupo 3 de
+#                                             `cola.sh` con la bandera
+#                                             `cola.backlog`, DEVKIT-122;
+#                                             misma forma que
+#                                             `epicas-abiertas`, con Estado
+#                                             Backlog en vez de Lista/En
+#                                             progreso)
+#   notion.sh sueltas-backlog <código>        Tareas del proyecto en Backlog
+#                                             sin Padre, como lista JSON
+#                                             (grupo 4 de `cola.sh` con la
+#                                             bandera `cola.backlog`,
+#                                             DEVKIT-122; misma forma que
+#                                             `sueltas`, con Estado Backlog
+#                                             en vez de Lista)
 #   notion.sh --test                          autoprueba, sin red
 #
 # Las cuatro primeras operaciones son las del criterio de aceptación (leer una
@@ -472,6 +488,21 @@ cmd_sueltas() {  # cmd_sueltas <código>
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
+# Tareas sueltas en Backlog (DEVKIT-122, grupo 4 de `cola.sh` con la bandera
+# `cola.backlog`): misma consulta que `sueltas`, acotada a Backlog en vez de
+# Lista.
+cmd_sueltas_backlog() {  # cmd_sueltas_backlog <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {property: "Nivel", select: {equals: "Tarea"}},
+            {property: "Estado", select: {equals: "Backlog"}},
+            {property: "Padre", relation: {is_empty: true}}]}')") || return
+  jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
+}
+
 # Quién frena a quién (DEVKIT-63, ampliación de la card): una sola consulta
 # por refresco (el proyecto entero, Lista y Lista para merge juntas) para que
 # `devkit-run --estado` no pague una llamada a Notion por fila. El cruce
@@ -593,6 +624,20 @@ cmd_epicas_abiertas() {  # cmd_epicas_abiertas <código>
             {property: "Nivel", select: {equals: "Épica"}},
             {or: [{property: "Estado", select: {equals: "Lista"}},
                   {property: "Estado", select: {equals: "En progreso"}}]}]}')") || return
+  jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
+}
+
+# Épicas en Backlog (DEVKIT-122, grupo 3 de `cola.sh` con la bandera
+# `cola.backlog`): misma forma que `epicas-abiertas`, acotada a Backlog en
+# vez de Lista/En progreso.
+cmd_epicas_backlog() {  # cmd_epicas_backlog <código>
+  local codigo=$1 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {property: "Nivel", select: {equals: "Épica"}},
+            {property: "Estado", select: {equals: "Backlog"}}]}')") || return
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
@@ -1064,6 +1109,31 @@ $(epica epica-51 51 Lista)],\"has_more\":false}"
     '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"equals":"Lista"}},{"property":"Padre","relation":{"is_empty":true}}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
+  # epicas-backlog / sueltas-backlog (DEVKIT-122): grupos 3 y 4 de `cola.sh`
+  # con la bandera `cola.backlog`, misma forma que `epicas-abiertas` y
+  # `sueltas` pero acotadas a Estado Backlog.
+  resp POST__databases_dbtareas_query "{\"results\":[$(epica epica-50 50 Backlog)],\"has_more\":false}"
+  check "epicas-backlog: las Épicas en Backlog, con id" \
+    '[{"id":"epica-50","clave":"DEVKIT-50","estado":"Backlog"}]' \
+    "$(env "${entorno[@]}" bash "$HERE/notion.sh" epicas-backlog DEVKIT | jq -c '[.[] | {id, clave, estado}]')"
+  check "epicas-backlog: el filtro es Nivel Épica y Estado Backlog" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Épica"}},{"property":"Estado","select":{"equals":"Backlog"}}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+
+  resp POST__databases_dbtareas_query '{"results":[{"id":"card-71","created_time":"2026-01-02T00:00:00.000Z",
+    "properties":{"ID":{"unique_id":{"number":71}},"Título":{"title":[{"plain_text":"suelta backlog"}]},
+    "Estado":{"select":{"name":"Backlog"}},"Nivel":{"select":{"name":"Tarea"}},
+    "Prioridad":{"select":{"name":"alta"}},"Orden":{"number":1},
+    "Agente":{"select":{"name":"claude"}},"Padre":{"relation":[]},
+    "Depende de":{"relation":[]}}}],"has_more":false}'
+  got=$(env "${entorno[@]}" bash "$HERE/notion.sh" sueltas-backlog DEVKIT)
+  check "sueltas-backlog: Clave, Prioridad, Orden, Agente y Creado de una tarea sin Padre" \
+    '{"clave":"DEVKIT-71","prioridad":"alta","orden":1,"agente":"claude","creado":"2026-01-02T00:00:00.000Z"}' \
+    "$(jq -c '.[0] | {clave,prioridad,orden,agente,creado}' <<<"$got")"
+  check "sueltas-backlog: el filtro es Estado Backlog, Padre por is_empty" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"equals":"Backlog"}},{"property":"Padre","relation":{"is_empty":true}}]}' \
+    "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+
   # El uso calcula su rango buscando la línea de --test en vez de un rango
   # fijo (DEVKIT-80: un rango fijo cortaba la ayuda a media frase cada vez
   # que el bloque crecía, hallazgo H1 de `pr-review` sobre el PR #57, que
@@ -1092,6 +1162,8 @@ case "${1:-}" in
   epicas) cmd_epicas "${2:?código}" ;;
   activas) cmd_activas "${2:?código}" ;;
   epicas-abiertas) cmd_epicas_abiertas "${2:?código}" ;;
+  epicas-backlog) cmd_epicas_backlog "${2:?código}" ;;
+  sueltas-backlog) cmd_sueltas_backlog "${2:?código}" ;;
   --test) run_tests ;;
   *)
     fin=$(grep -n '^#   notion.sh --test' "$0" | head -1 | cut -d: -f1)
