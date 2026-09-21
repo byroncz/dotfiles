@@ -700,6 +700,39 @@ FIN
   got=$(env DEVKIT_NOTION_BIN="$notion_orden_pendiente" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
   check "cola.backlog: hija en Orden 1 con Criterios pendientes se salta, elige la de Orden 2" "DEVKIT-322" "$got"
 
+  # H3 de pr-review (DEVKIT-122): tomar una suelta del grupo 4 (sin Épica,
+  # grupo 3 vacío) también la mueve a Lista y la comenta, sin tocar ninguna
+  # Épica.
+  local llamadas_grupo4="$tmp/llamadas-grupo4"
+  local notion_grupo4="$tmp/notion-grupo4"
+  cat >"$notion_grupo4" <<FIN
+#!/usr/bin/env bash
+echo "\$*" >>"$llamadas_grupo4"
+case "\$1 \$2" in
+  "activas DEVKIT")
+    echo '[]' ;;
+  "epicas-backlog DEVKIT")
+    echo '[]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[{"id":"card-310","clave":"DEVKIT-310","estado":"Backlog","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"suelta backlog"}]' ;;
+  "criterios card-310")
+    echo "criterio definido" ;;
+  "set card-310")
+    echo ok ;;
+  "comentar card-310")
+    echo ok ;;
+esac
+FIN
+  chmod +x "$notion_grupo4"
+  got=$(env DEVKIT_NOTION_BIN="$notion_grupo4" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "cola.backlog: grupo 3 vacío, toma la suelta del grupo 4" "DEVKIT-310" "$got"
+  check "cola.backlog: grupo 4 mueve la suelta elegida a Lista" 1 \
+    "$(grep -c '^set card-310 Estado=Lista$' "$llamadas_grupo4")"
+  check "cola.backlog: grupo 4 comenta \"tomada por la cola\" en la suelta" 1 \
+    "$(grep -c '^comentar card-310 tomada por la cola$' "$llamadas_grupo4")"
+  check "cola.backlog: grupo 4 no comenta en ninguna Épica" 0 \
+    "$(grep -c '^comentar epica-' "$llamadas_grupo4")"
+
   return $fail
 }
 
