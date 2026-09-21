@@ -276,12 +276,16 @@ if [ -s "$VSCODE_TOKEN" ]; then
   # bytes al no ser una terminal, y la salida del servidor nunca llena el
   # buffer, así que el log queda vacío toda la vida del contenedor.
   : > "$RUN_DIR/vscode.log"; chmod 600 "$RUN_DIR/vscode.log"
+  # --disable-workspace-trust: el contenedor es de una sola persona, la
+  # confianza por carpeta no protege nada aquí. Sin esto, /workspace abre en
+  # modo restringido y la extensión devkit.cheatsheet nunca activa (DEVKIT-139).
   nohup bash -c "openvscode-server \
     --host 127.0.0.1 --port 3000 \
     --connection-token-file '$VSCODE_TOKEN' \
     --server-data-dir '$HOME/.openvscode-server/data' \
     --extensions-dir '$HOME/.openvscode-server/extensions' \
-    --default-folder /workspace 2>&1 | grep --line-buffered -v 'tkn='" \
+    --default-folder /workspace \
+    --disable-workspace-trust 2>&1 | grep --line-buffered -v 'tkn='" \
     >"$RUN_DIR/vscode.log" &
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.

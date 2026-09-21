@@ -8,6 +8,11 @@
     "vscode": "^1.85.0"
   },
   "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "activationEvents": [
     "onStartupFinished",
     "onWebviewPanel:devkit.cheatsheet"
