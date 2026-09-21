@@ -24,7 +24,9 @@ function leerHtml() {
 // por la API de configuración. settings.json (copiado junto a esta extensión
 // por el Dockerfile) es la única fuente; aquí no se declara ningún valor
 // propio. Cada clave se aplica sola y se compara antes de escribir para no
-// pisar un cambio que el usuario haya hecho a mano en el mismo valor.
+// reescribir en cada arranque lo que ya está aplicado; no protege un
+// cambio manual del usuario en esa misma clave, que vuelve al valor
+// declarado aquí en el próximo arranque del editor.
 async function aplicarSettings() {
   let declarados;
   try {
