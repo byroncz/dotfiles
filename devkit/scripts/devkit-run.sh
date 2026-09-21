@@ -2561,6 +2561,30 @@ separador_grupo() {
   printf '%*s' "$(ancho_terminal)" '' | tr ' ' -
 }
 
+# Formatea <filas> agrupadas por CARD, alternando `FONDO_GRUPO` -o, sin
+# color, el separador de guiones- en cada cambio de Clave (DEVKIT-135 H1):
+# la misma función para la tabla plana y para cada bloque de Épica y el
+# bloque "(sin Épica)" de `mostrar_estado`, que antes de este hallazgo
+# imprimían sin pasar por `agrupar_por_card` y por eso no agrupaban ni
+# alternaban fondo cuando había dos o más Épicas `En progreso`.
+filas_agrupadas() {  # filas_agrupadas <filas> <idx> <fijo> <color>
+  local filas=$1 idx=$2 fijo=$3 color_habilitado=$4
+  local skill clave origen edad estado detalle modelo duracion turnos
+  local grupo_idx=-1 clave_grupo_previa="" fondo_grupo
+  while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
+    fondo_grupo=0
+    if [ "$clave" != - ]; then
+      if [ "$clave" != "$clave_grupo_previa" ]; then
+        grupo_idx=$((grupo_idx + 1))
+        [ "$grupo_idx" -eq 0 ] || [ "$color_habilitado" = 1 ] || printf '%s\n' "$(separador_grupo)"
+        clave_grupo_previa=$clave
+      fi
+      [ $((grupo_idx % 2)) -eq 1 ] && fondo_grupo=1
+    fi
+    formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado" "$fondo_grupo"
+  done < <(agrupar_por_card "$filas")
+}
+
 mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=]
   local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
   local filas skill clave origen edad estado detalle modelo duracion turnos
@@ -2607,19 +2631,27 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
     # Épica es harina de otro costal. Si esto empieza a desbordar `--seguir`
     # en la práctica, se resuelve aparte.
     if [ "${#orden_epicas[@]}" -ge 2 ]; then
-      local primero=1
+      local primero=1 subset
       for e in "${orden_epicas[@]}"; do
         [ "$primero" = 1 ] || echo
         primero=0
         printf '%s\n' "$e"
         encabezado_tabla
+        subset=""
         while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
-          [ "${epica_de_clave[$clave]:-}" = "$e" ] && formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado"
+          [ "${epica_de_clave[$clave]:-}" = "$e" ] || continue
+          subset+="$skill"$'\t'"$clave"$'\t'"$origen"$'\t'"$edad"$'\t'"$estado"$'\t'"$detalle"$'\t'"$modelo"$'\t'"$duracion"$'\t'"$turnos"$'\n'
         done <<<"$filas"
+        # Agrupadas por CARD dentro de esta Épica, con `filas_agrupadas`
+        # (DEVKIT-135 H1): antes de este hallazgo este bloque imprimía en
+        # orden cronológico, sin agrupar ni alternar fondo.
+        [ -z "$subset" ] || filas_agrupadas "${subset%$'\n'}" "$idx" "$fijo" "$color_habilitado"
       done
       # Filas sin Épica activa (sin Padre En progreso, o sin Clave): quedan
-      # en un bloque aparte al final, no se pierden.
+      # en un bloque aparte al final, no se pierden, también agrupadas por
+      # CARD (DEVKIT-135 H1).
       local hay_sin=0
+      subset=""
       while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
         [ "$clave" != - ] && [ -n "${epica_de_clave[$clave]:-}" ] && continue
         if [ "$hay_sin" = 0 ]; then
@@ -2628,8 +2660,9 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
           encabezado_tabla
           hay_sin=1
         fi
-        formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado"
+        subset+="$skill"$'\t'"$clave"$'\t'"$origen"$'\t'"$edad"$'\t'"$estado"$'\t'"$detalle"$'\t'"$modelo"$'\t'"$duracion"$'\t'"$turnos"$'\n'
       done <<<"$filas"
+      [ -z "$subset" ] || filas_agrupadas "${subset%$'\n'}" "$idx" "$fijo" "$color_habilitado"
     else
       encabezado_tabla
       # Agrupadas por CARD (DEVKIT-135), no en el orden cronológico puro de
@@ -2638,21 +2671,11 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
       # Clave. Las filas sin Clave (la "(en espera)" de DEVKIT-133 y las "sin
       # registro" de DEVKIT-81) ya llegan al final por `agrupar_por_card` y no
       # alternan fondo ni separan nada: no son un grupo, y "al final" ya las
-      # distingue de la tabla agrupada de arriba.
+      # distingue de la tabla agrupada de arriba. `filas_agrupadas` (DEVKIT-135
+      # H1) es la misma función que usan los bloques por Épica de arriba.
       local -a filas_fmt=()
-      local grupo_idx=-1 clave_grupo_previa="" fondo_grupo
-      while IFS=$'\t' read -r skill clave origen edad estado detalle modelo duracion turnos; do
-        fondo_grupo=0
-        if [ "$clave" != - ]; then
-          if [ "$clave" != "$clave_grupo_previa" ]; then
-            grupo_idx=$((grupo_idx + 1))
-            [ "$grupo_idx" -eq 0 ] || [ "$color_habilitado" = 1 ] || filas_fmt+=("$(separador_grupo)")
-            clave_grupo_previa=$clave
-          fi
-          [ $((grupo_idx % 2)) -eq 1 ] && fondo_grupo=1
-        fi
-        filas_fmt+=("$(formatear_fila "$skill" "$clave" "$origen" "$edad" "$duracion" "$estado" "$modelo" "$turnos" "$detalle" "$idx" "$fijo" "$color_habilitado" "$fondo_grupo")")
-      done < <(agrupar_por_card "$filas")
+      while IFS= read -r linea; do filas_fmt+=("$linea"); done \
+        < <(filas_agrupadas "$filas" "$idx" "$fijo" "$color_habilitado")
       imprimir_tabla "${filas_fmt[@]}"
     fi
   fi
@@ -6815,6 +6838,51 @@ DEVKIT-901
         /^-{20,}$/ { g = NR }
         /DEVKIT-901/ && !b { b = NR }
         END { print (g - a - 1), (b - g - 1) }')"
+
+  # DEVKIT-135 H1: con dos Épicas `En progreso`, el bloque de cada Épica
+  # también agrupa sus filas por CARD y alterna fondo -antes de este
+  # hallazgo, esos bloques imprimían en el orden cronológico del log (A1 B1
+  # A2 B2), sin pasar por `agrupar_por_card`. Mismas cards DEVKIT-900/901 de
+  # arriba, ambas en la Épica DEVKIT-950, más una tercera card (DEVKIT-902,
+  # una sola fila) en la Épica DEVKIT-951 para forzar el camino de "dos
+  # Épicas" (orden_epicas >= 2) sin tocar la agrupación dentro del bloque.
+  local grupo_epic_log grupo_epic salida_grupo_epic bloque_950
+  grupo_epic_log="$tmp/grupo-card-epicas-watch.log"
+  cat >"$grupo_epic_log" <<FIN
+2026-09-16T10:00:00Z task-start-900 lanzando (origen=humano): "/task-start DEVKIT-900" log=$grupo_dir/task-start-900.log
+2026-09-16T10:01:00Z devkit-run "/task-start DEVKIT-900" terminado [task-start-900]: modelo=opus esfuerzo=high ronda=1 :: OK
+2026-09-16T10:02:00Z task-start-901 lanzando (origen=humano): "/task-start DEVKIT-901" log=$grupo_dir/task-start-901.log
+2026-09-16T10:03:00Z devkit-run "/task-start DEVKIT-901" terminado [task-start-901]: modelo=opus esfuerzo=high ronda=1 :: OK
+2026-09-16T10:04:00Z PR #900 (DEVKIT-900) head aaa1111 sin informe: lanzando pr-review
+2026-09-16T10:04:00Z pr-review-900-aaa1111 lanzando (origen=bucle): "/pr-review 900" log=$grupo_dir/pr-review-900.log
+2026-09-16T10:05:00Z pr-review-900-aaa1111 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T10:06:00Z PR #901 (DEVKIT-901) head bbb2222 sin informe: lanzando pr-review
+2026-09-16T10:06:00Z pr-review-901-bbb2222 lanzando (origen=bucle): "/pr-review 901" log=$grupo_dir/pr-review-901.log
+2026-09-16T10:07:00Z pr-review-901-bbb2222 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T10:08:00Z task-start-902 lanzando (origen=humano): "/task-start DEVKIT-902" log=$grupo_dir/task-start-902.log
+2026-09-16T10:09:00Z devkit-run "/task-start DEVKIT-902" terminado [task-start-902]: modelo=opus esfuerzo=high ronda=1 :: OK
+FIN
+  grupo_epic="$tmp/grupo-card-epicas"
+  mkdir -p "$grupo_epic"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-900","epica":"DEVKIT-950","epica_titulo":"Gama"},{"clave":"DEVKIT-901","epica":"DEVKIT-950","epica_titulo":"Gama"},{"clave":"DEVKIT-902","epica":"DEVKIT-951","epica_titulo":"Delta"}]' \
+    >"$grupo_epic/epicas.cache"
+  salida_grupo_epic=$(EPICAS_CACHE="$grupo_epic/epicas.cache" EPICAS_LOCK="$grupo_epic/epicas.lock" \
+      BLOQUEOS_CACHE="$tmp/cache-vacia-bloqueos" BLOQUEOS_LOCK="$tmp/cache-vacia-bloqueos.lock" \
+      CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-grupo-epic/cuota.cache" CUOTA_LOCK="$tmp/cuota-grupo-epic/cuota.lock" \
+      PS_BIN="$pslist_grupo" LOCK="$grupo_dir/skill.lock" DEVKIT_AHORA="$grupo_ahora" \
+      WATCH_LOG="$grupo_epic_log" mostrar_estado 1 0 1 1)
+  bloque_950=$(printf '%s\n' "$salida_grupo_epic" | sed -n '/^Épica DEVKIT-950:/,/^$/p')
+  check "H1: dentro del bloque de Épica DEVKIT-950, DEVKIT-900 y DEVKIT-901 quedan agrupados (A1 A2 B1 B2)" \
+    "DEVKIT-900
+DEVKIT-900
+DEVKIT-901
+DEVKIT-901" \
+    "$(printf '%s' "$bloque_950" | grep -oE 'DEVKIT-90[01]')"
+  check "H1: dentro del bloque de Épica DEVKIT-950, el grupo DEVKIT-900 no lleva fondo alterno" 0 \
+    "$(printf '%s' "$bloque_950" | grep 'DEVKIT-900' | grep -cF "$FONDO_GRUPO")"
+  check "H1: dentro del bloque de Épica DEVKIT-950, el grupo DEVKIT-901 alterna fondo, sus dos filas" 2 \
+    "$(printf '%s' "$bloque_950" | grep 'DEVKIT-901' | grep -cF "$FONDO_GRUPO")"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
