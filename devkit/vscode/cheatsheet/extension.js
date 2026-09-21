@@ -66,13 +66,21 @@ async function activate(context) {
   // no se repara cuando hay un archivo abierto, un reload normal (chuleta
   // abierta, se abre un archivo, Reload Window) la deja en blanco para
   // siempre-. Se cierran todas las coincidencias (pudo quedar restaurada en
-  // más de un grupo) y se reabre en la misma columna, sin robar el foco si
-  // hay un archivo abierto.
+  // más de un grupo) y se reabre en la misma columna; si había un archivo
+  // activo en ese grupo, se vuelve a revelar después para no taparlo.
   const restauradas = pestañas.filter(esPestañaDeChuleta);
   if (restauradas.length > 0) {
     const columna = restauradas[0].group.viewColumn;
+    const activa = pestañas.find((t) => t.isActive && esPestañaDeArchivo(t));
     await vscode.window.tabGroups.close(restauradas);
-    mostrarChuleta(columna, hayArchivo);
+    mostrarChuleta(columna, true);
+    if (activa) {
+      await vscode.window.showTextDocument(activa.input.uri, {
+        viewColumn: activa.group.viewColumn,
+        preserveFocus: false,
+        preview: false,
+      });
+    }
     return;
   }
 
