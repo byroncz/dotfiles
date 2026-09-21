@@ -3,8 +3,9 @@
 # task-close a la que reemplaza, en bash y en segundos: `Hecha`, `Cierre`,
 # comentario con el enlace a la entrada de Documentación, marcador
 # `devkit-closed` en el PR, cierre de la Épica si era la última hija y
-# lanzamiento de la siguiente hija con `task-next.sh` (DEVKIT-56), que también
-# llama watch.sh cuando el revisor da OK.
+# lanzamiento de la siguiente card de la cola con `cola.sh` (DEVKIT-56,
+# generalizado por DEVKIT-120), que también llama watch.sh al OK del
+# revisor y en cada pasada del sondeo sin nada en curso.
 #
 # Uso:
 #   task-close.sh <Clave> [URL o número del PR]
@@ -16,26 +17,53 @@
 # escriba igual.
 #
 # Idempotente: una card ya `Hecha` solo recibe el marcador en el PR si le
-# falta. La Épica y la siguiente hija se atienden solo en la ejecución que
-# pasa la card a `Hecha`, igual que la skill: repetirlas podría lanzar dos
-# veces la misma hija.
+# falta. La Épica se cierra solo en la ejecución que pasa la card a `Hecha`,
+# igual que la skill: repetirlo podría cerrarla dos veces. La siguiente
+# card de la cola no necesita esa guarda aparte: `cola.sh` ya trae la suya
+# (ver `lanzar_cola`).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
 NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 DEVKIT_RUN="${DEVKIT_RUN_BIN:-$HERE/devkit-run.sh}"
-TASK_NEXT="${DEVKIT_TASK_NEXT_BIN:-$HERE/task-next.sh}"
+COLA="${DEVKIT_COLA_BIN:-$HERE/cola.sh}"
 TASK_DOCUMENT="${DEVKIT_TASK_DOCUMENT_BIN:-$HERE/task-document.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
-# Lo que este script lance (task-document, la siguiente hija vía task-next.sh)
+# Lo que este script lance (task-document, la siguiente card vía cola.sh)
 # aparece en `devkit-run --estado` con origen `task-close` (DEVKIT-57).
 export DEVKIT_ORIGEN=task-close
 
 say() { printf 'task-close: %s\n' "$*"; }
+
+# La siguiente card de la cola del proyecto, en bash (DEVKIT-120). Misma
+# función que `lanzar_cola` en watch.sh, duplicada porque los scripts no se
+# importan entre sí (mismo patrón que `costos_log_candidata`, DEVKIT-89): se
+# llama siempre que esta card pasa a Hecha, tenga o no Épica, cierre o no la
+# Épica -cola.sh mira el proyecto entero, no solo las hermanas de una Épica.
+# Idempotente: `cola.sh` (sin argumento) no devuelve nada si ya hay una card
+# `En progreso` o `Revisión automática` en el proyecto, o un `task-start`
+# vivo para una card en `Lista` -la guarda vive en cola.sh, no aquí.
+lanzar_cola() {  # lanzar_cola <n>
+  local n=$1 siguiente out rc estado
+  siguiente=$("$COLA" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s ALARMA: cola-%s no pudo leer la cola (rc=%s): %s\n' \
+      "$(date +%FT%T%:z)" "$n" "$rc" "$(printf '%s' "$siguiente" | tail -1 | cut -c1-160)" >>"$WATCH_LOG"
+    return
+  fi
+  [ -n "$siguiente" ] || return 0
+  out=$("$DEVKIT_RUN" task-start "$siguiente" 2>&1)
+  rc=$?
+  estado=terminado
+  [ "$rc" -eq 0 ] || estado="falló (rc=$rc)"
+  printf '%s cola-%s %s: bash, lanzada la siguiente card: task-start %s :: %s\n' \
+    "$(date +%FT%T%:z)" "$n" "$estado" "$siguiente" "$(printf '%s' "$out" | tail -1 | cut -c1-160)" >>"$WATCH_LOG"
+}
 
 clave="${1:-}"
 pr_arg="${2:-}"
@@ -223,18 +251,24 @@ exec 9>&-
 
 [ "$transicion" = 1 ] || exit 0
 
-# --- Épica y siguiente hija ------------------------------------------------
+# --- Épica, si la card pertenece a una --------------------------------------
 padre=$(jq -r '.padre[0] // ""' <<<"$card")
-[ -n "$padre" ] || exit 0
-hijas=$("$NOTION" hijas "$padre") || { say "no pude leer las hijas de la Épica"; exit 1; }
-
-if [ "$(jq '[.[] | select(.estado != "Hecha")] | length' <<<"$hijas")" -eq 0 ]; then
-  epica=$("$NOTION" pagina "$padre") || { say "no pude leer la Épica"; exit 1; }
-  cerrar_epica "$padre" "$(clave_de "$epica")"
-  exit $?
+epica_rc=0
+if [ -n "$padre" ]; then
+  hijas=$("$NOTION" hijas "$padre") || { say "no pude leer las hijas de la Épica"; exit 1; }
+  if [ "$(jq '[.[] | select(.estado != "Hecha")] | length' <<<"$hijas")" -eq 0 ]; then
+    epica=$("$NOTION" pagina "$padre") || { say "no pude leer la Épica"; exit 1; }
+    cerrar_epica "$padre" "$(clave_de "$epica")"
+    epica_rc=$?
+    [ "$epica_rc" -eq 2 ] && epica_rc=0
+  fi
 fi
 
-# La siguiente hija la elige task-next.sh, el mismo que llama watch.sh al OK
-# del revisor (DEVKIT-56). Su última línea es la de este cierre.
-"$TASK_NEXT" "$clave" | sed 's/^task-next: /task-close: /'
-exit "${PIPESTATUS[0]}"
+# --- La siguiente card de la cola (DEVKIT-119/DEVKIT-120) -------------------
+# cola.sh mira el proyecto entero, no solo las hermanas de la Épica de esta
+# card: se llama siempre que una card pasa a Hecha, cierre o no una Épica y
+# tenga o no una. Antes de DEVKIT-120 esto se saltaba sin Épica (`exit 0`) y
+# dejaba de intentarlo si la Épica ya cerraba: con la cola del proyecto
+# entero, en los dos casos puede haber otra card lista para arrancar.
+lanzar_cola "$pr_num"
+exit "$epica_rc"

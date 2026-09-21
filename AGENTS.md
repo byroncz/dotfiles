@@ -57,9 +57,10 @@ Diseño y decisiones en la base Documentación de Notion (proyecto `DEVKIT`).
   `devkit/agents/skills/<skill>/SKILL.md`, nunca por `.claude/skills/`: ese
   directorio es un enlace al template y Claude Code no acepta escrituras bajo
   `.claude/` sin confirmación del humano, que en headless nadie da.
-- El humano decide dos cosas: mover cards de Por refinar a Backlog o Lista
-  (y Épicas de Backlog a Lista) y aprobar el PR. Todo lo demás lo haces tú,
-  sin preguntar, siguiendo las skills.
+- El humano decide qué entra a Lista (mover cards de Por refinar a Backlog o
+  Lista, y Épicas de Backlog a Lista) y aprobar el PR; el bucle toma las
+  cards en el orden de `devkit-run --cola`. Todo lo demás lo haces tú, sin
+  preguntar, siguiendo las skills.
 - En modo headless (`claude -p`) no hay quien responda: una pregunta al
   humano equivale a bloquear la card. Nunca termines con una pregunta
   abierta. Si falta algo, ejecuta `task-block.sh` con el motivo "Qué intenté:
