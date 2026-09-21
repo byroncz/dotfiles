@@ -878,25 +878,54 @@ $material"
   mapfile -t perfil < <(perfil_de "$skill" "$worktree")
   mapfile -t perfil_disallow < <(perfil_disallow_de "$skill")
 
-  # Cabecera de metadatos (DEVKIT-125, revisión del PR 92, H1 y H3): pr-review
-  # y task-document arman comandos con la ruta de los scripts y con la marca
-  # "Revisado/Documentado con <modelo>, esfuerzo <x>". Antes lo hacían con
-  # `${DEVKIT_SCRIPTS_DIR:-...}` y `echo "...${DEVKIT_MODEL:-?}..."`, pero
-  # Claude Code rechaza con "Contains expansion" cualquier comando de Bash que
-  # traiga una expansión de variable, sea o no el patrón allow correcto (H1,
-  # H3). La variable sigue exportada (extra[], abajo) para las skills de
-  # perfil amplio que ya la usan así sin problema bajo `acceptEdits`; esta
-  # línea es solo para las que corren en `default` y no pueden depender de
-  # que el shell expanda nada. Una sola línea de texto plano, sin `$`: la
-  # skill copia el valor tal cual, no lo evalúa.
+  # Cabecera de metadatos (DEVKIT-125, revisión del PR 92, H1, H3 y H8):
+  # pr-review y task-document arman comandos con la ruta de los scripts y con
+  # la marca "Revisado/Documentado con <modelo>, esfuerzo <x>". Antes lo
+  # hacían con `${DEVKIT_SCRIPTS_DIR:-...}` y `echo "...${DEVKIT_MODEL:-?}..."`,
+  # pero Claude Code rechaza con "Contains expansion" cualquier comando de
+  # Bash que traiga una expansión de variable, sea o no el patrón allow
+  # correcto (H1, H3). La variable sigue exportada (extra[], abajo) para las
+  # skills de perfil amplio que ya la usan así sin problema bajo
+  # `acceptEdits`; esta cabecera es solo para las que corren en `default` y
+  # no pueden depender de que el shell expanda nada. Una sola línea de texto
+  # plano, sin `$`: la skill copia el valor tal cual, no lo evalúa.
+  #
+  # Va como segunda línea del prompt, después de la línea `/skill ...`, no
+  # antes (H8): Claude Code solo interpreta un slash command cuando es lo
+  # primero que trae el mensaje, así que anteponer la cabecera dejaba el
+  # prompt entero como texto plano y la skill solo se cargaba si el modelo
+  # decidía invocarla por su cuenta. Limitado a pr-review/task-document: son
+  # las únicas que la necesitan (H8); task-start, task-fix y epic-plan corren
+  # con `acceptEdits` y ya usan `$DEVKIT_MODEL`/`$DEVKIT_EFFORT` sin problema.
+  case "$skill" in
+    pr-review|task-document)
+      local cabecera="(DEVKIT_SCRIPTS_DIR=$HERE DEVKIT_MODEL=$2 DEVKIT_EFFORT=$3)"
+      if [[ $prompt == *$'\n'* ]]; then
+        prompt="${prompt%%$'\n'*}
+$cabecera
+${prompt#*$'\n'}"
+      else
+        prompt="$prompt
+$cabecera"
+      fi
+      ;;
+  esac
   local -a claude_args=(
-    -p "(DEVKIT_SCRIPTS_DIR=$HERE DEVKIT_MODEL=$2 DEVKIT_EFFORT=$3)
-$prompt"
+    -p "$prompt"
     --model "$2" --effort "$3" --output-format json
     --permission-mode "${perfil[0]}"
     --allowedTools "${perfil[@]:1}"
   )
   [ "${#perfil_disallow[@]}" -eq 0 ] || claude_args+=(--disallowedTools "${perfil_disallow[@]}")
+  # DEVKIT-125, revisión del PR 92, H7 reabierto: Claude Code solo deja leer
+  # archivos con `git`/`bash -n`/`ruff`/`pytest` dentro de los directorios de
+  # trabajo de la sesión, y por defecto esa lista trae únicamente `/workspace`.
+  # Los patrones de `perfil_de` que apuntan al worktree de `review-prep.sh`
+  # (DEVKIT-93) nunca hacían match sin esto: `git -C <worktree> diff/log/show`
+  # salía con "was blocked ... only access files ... allowed working
+  # directories: /workspace". `--add-dir` es justo la vía que Claude Code
+  # documenta para sumar un directorio a esa lista.
+  [ "$skill" = pr-review ] && [ -n "$worktree" ] && claude_args+=(--add-dir "$worktree")
   "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" </dev/null
 }
 
@@ -3664,9 +3693,11 @@ Bash(gh issue:*)' \
   # reconstruida con `perfil_de`/`perfil_disallow_de` para no repetir la
   # lista a mano y quedar desincronizada si cambia (la integración con
   # `run_claude` -el slice `perfil[@]:1`, sobre todo- es lo que esto prueba;
-  # la lista en sí ya quedó cubierta arriba). También comprueba que la
-  # cabecera de metadatos (`DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=...
-  # DEVKIT_EFFORT=...`) llega como primera línea del prompt.
+  # la lista en sí ya quedó cubierta arriba). También comprueba que el
+  # argumento de `-p` siga empezando por el slash command (H8: Claude Code
+  # solo lo interpreta si es lo primero del mensaje) y que la cabecera de
+  # metadatos (`DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...`)
+  # llegue como segunda línea, solo para pr-review/task-document.
   local perfil_prompt perfil_skill perfil_extra
   for perfil_prompt in '/pr-review 30' '/task-document DEVKIT-1 5' \
       '/task-start DEVKIT-1' '/task-fix DEVKIT-1' '/epic-plan DEVKIT-1'; do
@@ -3687,8 +3718,28 @@ Bash(gh issue:*)' \
       bash "$HERE/devkit-run.sh" --sync "$perfil_prompt" >/dev/null 2>&1
     check "el claude -p de $perfil_skill recibe exactamente su perfil" 1 \
       "$(grep -c -F -- "$linea_esperada" "$tmp/claude-llamadas")"
-    check "el claude -p de $perfil_skill recibe la cabecera de metadatos" 1 \
-      "$(grep -c -F -- "DEVKIT_SCRIPTS_DIR=$HERE" "$tmp/claude-llamadas")"
+    check "el claude -p de $perfil_skill empieza por el slash command" 1 \
+      "$(grep -c -F -- "-p $perfil_prompt" "$tmp/claude-llamadas")"
+    case "$perfil_skill" in
+      pr-review|task-document)
+        check "el claude -p de $perfil_skill recibe la cabecera de metadatos" 1 \
+          "$(grep -c -F -- "DEVKIT_SCRIPTS_DIR=$HERE" "$tmp/claude-llamadas")"
+        ;;
+      *)
+        check "el claude -p de $perfil_skill no recibe la cabecera de metadatos (H8)" 0 \
+          "$(grep -c -F -- "DEVKIT_SCRIPTS_DIR=$HERE" "$tmp/claude-llamadas")"
+        ;;
+    esac
+    # H7 reabierto de la revisión del PR 92: sin `--add-dir`, `git -C
+    # <worktree>` queda fuera de los directorios de trabajo permitidos y la
+    # lectura del worktree de pr-review se bloquea entera.
+    if [ "$perfil_skill" = pr-review ]; then
+      check "el claude -p de pr-review recibe --add-dir con el worktree" 1 \
+        "$(grep -c -F -- "--add-dir $perfil_extra" "$tmp/claude-llamadas")"
+    else
+      check "el claude -p de $perfil_skill no recibe --add-dir" 0 \
+        "$(grep -c -F -- '--add-dir' "$tmp/claude-llamadas")"
+    fi
   done
 
   # --- Ciclo real de pr-review con el perfil restringido (DEVKIT-125, AC2) ---

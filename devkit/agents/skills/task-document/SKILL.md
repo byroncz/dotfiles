@@ -46,16 +46,19 @@ sus alternativas.
    <ruta>/notion.sh documentacion <page_id de la card> <Clave>
    ```
 
-   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la primera línea de este
-   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`),
-   copiado tal cual, como texto plano y sin `$`: por ejemplo
-   `/opt/devkit/scripts/notion.sh`. Un comando armado con
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve aquí: Claude
-   Code rechaza con "Contains expansion" cualquier Bash que traiga una
-   expansión de variable, sin mirar siquiera la lista allow (DEVKIT-125). Si
-   esta sesión es interactiva y esa primera línea no está, usa
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí corre
-   bajo un perfil que lo permite.
+   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la segunda línea de este
+   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`,
+   justo debajo de `/task-document ...`), copiado tal cual, como texto plano
+   y sin `$`: por ejemplo `/opt/devkit/scripts/notion.sh`. Va en la segunda
+   línea y no en la primera para que Claude Code siga reconociendo
+   `/task-document` como slash command: solo lo interpreta así cuando es lo
+   primero del mensaje (DEVKIT-125, revisión del PR 92, H8). Un comando
+   armado con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve
+   aquí: Claude Code rechaza con "Contains expansion" cualquier Bash que
+   traiga una expansión de variable, sin mirar siquiera la lista allow
+   (DEVKIT-125). Si esta sesión es interactiva y esa segunda línea no está,
+   usa `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí
+   corre bajo un perfil que lo permite.
 
    Devuelve `{id, url}` si existe una entrada cuyo `Título` empieza por
    `<Clave>:` y sale con 1 si no.
@@ -105,13 +108,14 @@ sus alternativas.
    línea "Implementado con ..." del cuerpo del PR, la línea "Revisado con
    ..." de cada informe `devkit-review` en orden (una por informe, con su
    `sha` y veredicto) y, al final, la tuya: "Documentado con `<modelo>`,
-   esfuerzo `<esfuerzo>`", con el `<modelo>` y el `<esfuerzo>` de la primera
-   línea de este prompt (`DEVKIT_MODEL=... DEVKIT_EFFORT=...`), copiados tal
-   cual, sin correr `echo` ni `printenv`: bajo este perfil, Claude Code
-   rechaza con "Contains expansion" cualquier Bash que expanda una variable
-   (DEVKIT-125). Si una marca falta en el PR o en un informe, escribe "sin
-   marca" en su lugar. Si esa primera línea no está (sesión interactiva),
-   escribe el alias del modelo que te ejecuta y `esfuerzo sin registrar`.
+   esfuerzo `<esfuerzo>`", con el `<modelo>` y el `<esfuerzo>` de la segunda
+   línea de este prompt, justo debajo de `/task-document ...`
+   (`DEVKIT_MODEL=... DEVKIT_EFFORT=...`), copiados tal cual, sin correr
+   `echo` ni `printenv`: bajo este perfil, Claude Code rechaza con "Contains
+   expansion" cualquier Bash que expanda una variable (DEVKIT-125). Si una
+   marca falta en el PR o en un informe, escribe "sin marca" en su lugar. Si
+   esa segunda línea no está (sesión interactiva), escribe el alias del
+   modelo que te ejecuta y `esfuerzo sin registrar`.
 
 6. Marcador en el PR, solo si sigue abierto. Es lo que le dice a `watch.sh`
    que ese head ya está documentado; sin él, el bucle te relanza en cada

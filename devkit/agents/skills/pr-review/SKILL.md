@@ -101,19 +101,22 @@ turnos que esta card elimina.
    INFORME
    ```
 
-   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la primera línea de este
-   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`),
-   copiado tal cual, como texto plano y sin `$`: por ejemplo
-   `/opt/devkit/scripts/review-publish.sh`. Un comando armado con
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve aquí: Claude
-   Code rechaza con "Contains expansion" cualquier Bash que traiga una
-   expansión de variable, sin mirar siquiera la lista allow (DEVKIT-125). Si
-   esta sesión es interactiva y esa primera línea no está, usa
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí corre
-   bajo un perfil que lo permite.
+   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la segunda línea de este
+   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`,
+   justo debajo de `/pr-review ...`), copiado tal cual, como texto plano y
+   sin `$`: por ejemplo `/opt/devkit/scripts/review-publish.sh`. Va en la
+   segunda línea y no en la primera para que Claude Code siga reconociendo
+   `/pr-review` como slash command: solo lo interpreta así cuando es lo
+   primero del mensaje (DEVKIT-125, revisión del PR 92, H8). Un comando
+   armado con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve
+   aquí: Claude Code rechaza con "Contains expansion" cualquier Bash que
+   traiga una expansión de variable, sin mirar siquiera la lista allow
+   (DEVKIT-125). Si esta sesión es interactiva y esa segunda línea no está,
+   usa `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí
+   corre bajo un perfil que lo permite.
 
    La línea "Revisado con ..." va justo debajo del marcador, con el
-   `<modelo>` y el `<esfuerzo>` de esa misma primera línea, copiados tal
+   `<modelo>` y el `<esfuerzo>` de esa misma segunda línea, copiados tal
    cual, sin formato. Si esa línea no está (sesión interactiva), escribe el
    alias del modelo que te ejecuta y `esfuerzo sin registrar`; nunca
    inventes un esfuerzo.
