@@ -59,6 +59,16 @@
 # lo anota, espera a que la ventana se reinicie y relanza la misma skill con el
 # mismo prompt, en segundo plano. Ver "Cuota agotada" más abajo.
 #
+# Si en cambio muere por un error transitorio del proveedor antes de que el
+# agente alcance a trabajar -529 Overloaded, otro 5xx, "overloaded" o
+# timeout, con turnos <= 1 y costo = 0 en la respuesta-, el bucle reintenta
+# hasta tres veces con espera creciente (2, 5 y 15 min) y, a diferencia de la
+# cuota, no deja el sha marcado como lanzado mientras reintenta: la
+# ejecución no llegó a trabajar de verdad. Al cuarto fallo seguido deja la
+# ALARMA de siempre y no reintenta más (DEVKIT-124: un 529 en el turno 1
+# dejaba la card en Revisión automática sin que nadie la retomara). Ver
+# "Error transitorio de la API" más abajo.
+#
 # /run/devkit/poke: `task-submit.sh`, `review-publish.sh` y `devkit-run.sh
 # --worker` lo tocan (`touch`) como último paso de cualquier lanzamiento
 # humano (task-fix ya lo hacía a mano, en el paso final de su SKILL.md). Con
@@ -74,7 +84,8 @@
 # el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
 # `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
 # de `gh pr view <N> --json comments`. Los hooks `--quota-hit`, `--quota-reset`
-# y `--run-skill` prueban el relanzamiento por cuota agotada; ver watch-test.sh.
+# y `--run-skill` prueban el relanzamiento por cuota agotada y por error
+# transitorio; ver watch-test.sh.
 #
 # Monitoreo mínimo sin modelo (DEVKIT-46): cinco alarmas en bash, todas como
 # líneas "ALARMA: ..." en watch.log, sin costo de tokens. Las cuatro primeras
@@ -125,6 +136,12 @@ QUOTA_RETRIES="${DEVKIT_WATCH_QUOTA_RETRIES:-3}"
 QUOTA_WAIT="${DEVKIT_WATCH_QUOTA_WAIT:-1800}"
 QUOTA_MIN_WAIT="${DEVKIT_WATCH_QUOTA_MIN_WAIT:-60}"
 QUOTA_MAX_WAIT="${DEVKIT_WATCH_QUOTA_MAX_WAIT:-86400}"
+# Error transitorio de la API antes del primer turno (DEVKIT-124): espera
+# creciente por intento, en segundos (2, 5 y 15 min por defecto). El tope de
+# intentos es el tamaño de la lista, no un número aparte: tres esperas, tres
+# reintentos.
+IFS=',' read -r -a TRANSIENT_WAITS <<<"${DEVKIT_WATCH_TRANSIENT_WAITS:-120,300,900}"
+TRANSIENT_RETRIES=${#TRANSIENT_WAITS[@]}
 # Monitoreo mínimo sin modelo (DEVKIT-46): cinco alarmas en bash, todas como
 # líneas "ALARMA: ..." en watch.log. `SKILL_TIMEOUT`/`SKILL_POLL` gobiernan la
 # alarma de skill lenta; `ORPHAN_MAX_AGE`, la de rama huérfana.
@@ -504,6 +521,54 @@ quota_pause() {  # quota_pause <nombre> <prompt> <clave de launched o -> <intent
   ) &
 }
 
+# --- Error transitorio de la API antes del primer turno (DEVKIT-124) --------
+# Un `claude -p` puede morir con un 529 Overloaded, otro 5xx, un "overloaded"
+# genérico o un timeout de conexión antes de que el agente alcance a hacer
+# nada: la evidencia es la misma respuesta de siempre (JSON con `result`,
+# `num_turns` y `total_cost_usd`), pero con turnos <= 1 y costo = 0 -no llegó
+# a trabajar-. Un turno con más trabajo o algún costo ya no cuenta: ahí el
+# agente sí llegó a hacer algo y un reintento automático pisaría ese trabajo.
+
+TRANSIENT_RE='API [Ee]rror:[[:space:]]*5[0-9]{2}|[Oo]verloaded|[Tt]ime ?out'
+
+# ¿La respuesta de <logf> es un error transitorio de la API? Turnos y costo
+# se leen del mismo JSON que ya usa `--resumen`.
+transient_hit() {  # transient_hit <logf>
+  local logf=$1 resultado turnos costo
+  resultado=$(tail -1 "$logf" 2>/dev/null | jq -r '.result // ""' 2>/dev/null)
+  printf '%s' "$resultado" | grep -qE "$TRANSIENT_RE" || return 1
+  turnos=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
+  [ -n "$turnos" ] || return 1
+  [ "$turnos" -le 1 ] 2>/dev/null || return 1
+  costo=$(tail -1 "$logf" 2>/dev/null | jq -r '.total_cost_usd // empty' 2>/dev/null)
+  [ -n "$costo" ] || return 1
+  awk -v c="$costo" 'BEGIN { exit !(c == 0) }'
+}
+
+# Reintento con espera creciente (DEVKIT_WATCH_TRANSIENT_WAITS, 2/5/15 min por
+# defecto) y tope de $TRANSIENT_RETRIES intentos. A diferencia de
+# quota_pause, no deja ninguna marca de "en pausa": el sha nunca llegó a
+# lanzarse de verdad -la respuesta no tiene turnos ni costo-, así que
+# `launched()` debe seguir viéndolo libre mientras se reintenta o si se
+# agotan los intentos. Al cuarto fallo seguido no hace nada más: la ALARMA ya
+# quedó en watch.log (la registra `run_skill`, igual que cualquier otro
+# error) y el sha queda como hoy, sin marca.
+transient_retry() {  # transient_retry <nombre> <prompt> <clave de launched o -> <intento> <log> [modelo forzado] [Clave]
+  local name=$1 prompt=$2 key=$3 attempt=$4 logf=$5 forzado=${6:-} clave=${7:-} wait idx
+  [ "$key" = "-" ] || unmark "$key"
+  if [ "$attempt" -gt "$TRANSIENT_RETRIES" ]; then
+    log "$name sin más reintentos por error transitorio de la API (tope de $TRANSIENT_RETRIES); ver $logf"
+    return
+  fi
+  idx=$((attempt - 1))
+  wait=${TRANSIENT_WAITS[$idx]}
+  log "$name reintento $attempt/$TRANSIENT_RETRIES por error transitorio de la API, en ${wait}s: ver $logf"
+  (
+    sleep "$wait"
+    run_skill "$name" "$prompt" "$key" "$((attempt + 1))" "$forzado" "$clave"
+  ) &
+}
+
 # Alarma 1 de 4 (DEVKIT-46): mientras el `claude -p` de un skill corre en
 # segundo plano, avisa una sola vez si supera SKILL_TIMEOUT segundos. Sondea
 # cada SKILL_POLL segundos con `kill -0`; ambos son configurables para que la
@@ -616,8 +681,12 @@ run_skill() {
     "$DEVKIT_RUN" --presupuesto-corte "$prompt" "$logf" "$presupuesto" "$turnos_reales" "$clave"
   fi
   work_state
-  if [ $rc -ne 0 ] && [ $rc -ne 3 ] && quota_hit "$logf"; then
-    quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
+  if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then
+    if quota_hit "$logf"; then
+      quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
+    elif transient_hit "$logf"; then
+      transient_retry "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
+    fi
   fi
   return $rc
 }
