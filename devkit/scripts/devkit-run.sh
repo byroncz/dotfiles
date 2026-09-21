@@ -310,6 +310,15 @@ BLOQUEOS_LOCK="${DEVKIT_BLOQUEOS_LOCK:-$RUN_DIR/bloqueos.lock}"
 EPICAS_TTL="${DEVKIT_EPICAS_TTL:-30}"
 EPICAS_CACHE="${DEVKIT_EPICAS_CACHE:-$RUN_DIR/epicas.cache}"
 EPICAS_LOCK="${DEVKIT_EPICAS_LOCK:-$RUN_DIR/epicas.lock}"
+# DETALLE de la fila "(en espera)" (DEVKIT-133): mismo patrón de caché que
+# Bloqueos/Épicas, sobre `notion.sh activas` -ya la usa `--tablero`- para no
+# sumar una consulta nueva a Notion.sh. Aparte de BLOQUEOS_CACHE porque esa
+# solo trae una card "Lista para merge" si además bloquea a alguna en Lista
+# (columna "bloquea a"): una card "Lista para merge" que solo espera que el
+# humano apruebe el PR, sin frenar a nadie, no aparecería ahí.
+MERGE_TTL="${DEVKIT_MERGE_TTL:-30}"
+MERGE_CACHE="${DEVKIT_MERGE_CACHE:-$RUN_DIR/merge.cache}"
+MERGE_LOCK="${DEVKIT_MERGE_LOCK:-$RUN_DIR/merge.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -1268,6 +1277,43 @@ epica_de() {  # epica_de <Clave>
   printf '%s' "$linea"
 }
 
+# Trae `notion.sh activas` y escribe MERGE_CACHE; mismo patrón que
+# `_bloqueos_fetch_y_guardar`/`_epicas_fetch_y_guardar`, aparte de las dos
+# porque ninguna trae todas las cards "Lista para merge" del proyecto.
+_merge_fetch_y_guardar() {
+  local codigo activas
+  codigo=$(project_code)
+  [ -n "$codigo" ] || return 1
+  activas=$("$NOTION_BIN" activas "$codigo" 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$activas" >"$MERGE_CACHE.tmp" && mv -f "$MERGE_CACHE.tmp" "$MERGE_CACHE"
+}
+
+# Refresca MERGE_CACHE en segundo plano, mismo patrón que
+# `refrescar_bloqueos_bg`/`refrescar_epicas_bg`.
+refrescar_merge_bg() {
+  (
+    mkdir -p "$(dirname "$MERGE_CACHE")" 2>/dev/null
+    exec 8>"$MERGE_LOCK"
+    flock -n 8 || exit 0
+    _merge_fetch_y_guardar
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# Clave de la card "Lista para merge" más antigua del proyecto -la que el
+# humano tiene pendiente aprobar hace más tiempo-, o vacío si no hay caché
+# todavía o ninguna card está en ese Estado (DEVKIT-133, DETALLE de la fila
+# "(en espera)"). Mismo criterio de refresco en segundo plano que
+# `bloquea_a`/`epica_de`: nunca espera en línea a Notion.
+esperando_aprobacion() {
+  local ts activas edad
+  [ -s "$MERGE_CACHE" ] || { refrescar_merge_bg; return 0; }
+  IFS=$'\t' read -r ts activas <"$MERGE_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$MERGE_TTL" ] || refrescar_merge_bg
+  jq -r '[.[] | select(.estado == "Lista para merge")] | sort_by(.clave) | .[0].clave // empty' \
+    <<<"$activas" 2>/dev/null
+}
+
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
 # watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
 # proceso con el bucle, así que no puede reusar su función.
@@ -2175,6 +2221,7 @@ ESTADOS_CON_GLIFO=(
   "⊘ bloqueada" "!! bloqueada"
   "○ no arrancó" "o no arrancó"
   "○ no lanzó" "o no lanzó"
+  "○ en espera" "o en espera"
   "⚠ sin registro" "! sin registro"
 )
 
@@ -2312,7 +2359,7 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
     terminó) [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
     bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
-    "no arrancó"|"no lanzó") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
+    "no arrancó"|"no lanzó"|"en espera") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
     *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
   esac
 }
@@ -2460,6 +2507,57 @@ formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> 
   printf '%s\n' "$fila"
 }
 
+# Última vez que algún lanzamiento terminó, de cualquier skill (DEVKIT-133,
+# ancla de la fila "(en espera)"): la línea de cierre -éxito o error- más
+# reciente de watch.log, tanto de un lanzamiento directo de `run_skill`
+# (`$id terminado: `/`ALARMA: $id terminó con error (rc=N)`) como de uno
+# lanzado por `--worker` (`devkit-run "..." terminado [$id]:`/`devkit-run
+# "..." falló (rc=N) [$id]:`). "no lanzó"/"no arrancó" no cuentan: ninguno de
+# los dos deja trabajo real terminado, así que no deberían reiniciar el
+# tiempo ocioso. Vacío si watch.log no existe o no tiene ninguna.
+ultima_actividad_ts() {  # ultima_actividad_ts <watch.log>
+  local wlog=$1 linea
+  [ -f "$wlog" ] || return 1
+  linea=$(grep -E ' (terminado: |terminó con error \(rc=[0-9]+\)|terminado \[[^]]+\]:|falló \(rc=[0-9]+\) \[[^]]+\]:)' \
+    "$wlog" | tail -1)
+  [ -n "$linea" ] || return 1
+  date -d "$(awk '{print $1}' <<<"$linea")" +%s 2>/dev/null
+}
+
+# Arranque del bucle (DEVKIT-133): respaldo de `ultima_actividad_ts` cuando
+# watch.log todavía no tiene ningún cierre -un contenedor recién levantado-,
+# sobre la línea que `watch.sh` deja al arrancar ("vigilancia iniciada").
+arranque_bucle_ts() {  # arranque_bucle_ts <watch.log>
+  local wlog=$1 linea
+  [ -f "$wlog" ] || return 1
+  linea=$(grep -E ' vigilancia iniciada ' "$wlog" | tail -1)
+  [ -n "$linea" ] || return 1
+  date -d "$(awk '{print $1}' <<<"$linea")" +%s 2>/dev/null
+}
+
+# Fila sintética "(en espera)" (DEVKIT-133): cuando ninguna fila de
+# `estado_filas` está en curso, mide desde que terminó el último lanzamiento
+# del proyecto -o desde que arrancó el bucle si todavía no hay ninguno- y
+# explica qué espera. Devuelve vacío (rc=1) si no hay ningún punto de partida
+# -watch.log inexistente o sin ninguna línea reconocible, el caso que ya
+# cubre "sin lanzamientos registrados"- para no inventar una duración desde
+# `ahora`. Mismo formato de columnas que `estado_filas`, así fluye por el
+# mismo `formatear_fila` que el resto de la tabla.
+fila_en_espera() {  # fila_en_espera <watch.log> <ahora epoch>
+  local wlog=$1 ahora=$2 t0 edad detalle clave_merge
+  t0=$(ultima_actividad_ts "$wlog") || t0=$(arranque_bucle_ts "$wlog") || return 1
+  [ -n "$t0" ] || return 1
+  edad=$((ahora - t0))
+  clave_merge=$(esperando_aprobacion)
+  if [ -n "$clave_merge" ]; then
+    detalle="esperando aprobación de $clave_merge"
+  else
+    detalle="cola vacía"
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "(en espera)" - bucle "$(hace "$edad")" "en espera" "$detalle" - "$(hace "$edad")" -
+}
+
 # Imprime filas ya formateadas, recortadas al alto de la terminal (DEVKIT-97)
 # con las más recientes -las últimas del arreglo, porque `estado_filas` las
 # entrega en el orden del log, más viejas primero- y un resumen de cuántas
@@ -2493,10 +2591,22 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   # veces por refresco y arriesgar que el punto y la tabla salgan de fotos
   # distintas. `$#` -ge 5, no el valor: una llamada sin filas activas de
   # verdad pasa una cadena vacía a propósito.
+  local ahora_estado=${DEVKIT_AHORA:-$(date +%s)}
   if [ $# -ge 5 ]; then
     filas=$5
   else
-    filas=$(estado_filas "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}")
+    filas=$(estado_filas "$WATCH_LOG" "$ahora_estado")
+  fi
+  # Fila "(en espera)" (DEVKIT-133): sin ninguna en curso, se agrega al final
+  # para medir el tiempo ocioso, con lo que el sistema espera en DETALLE.
+  # `fila_en_espera` sale vacía (rc=1) sin ningún cierre ni arranque de bucle
+  # que anclarla -watch.log inexistente o recién creado-, y la tabla queda
+  # igual que antes de esta card.
+  if ! printf '%s\n' "$filas" | awk -F'\t' '$5=="en curso"{f=1} END{exit !f}'; then
+    local fila_espera
+    if fila_espera=$(fila_en_espera "$WATCH_LOG" "$ahora_estado"); then
+      if [ -n "$filas" ]; then filas="$filas"$'\n'"$fila_espera"; else filas=$fila_espera; fi
+    fi
   fi
   if [ -z "$filas" ]; then
     echo "sin lanzamientos registrados en $WATCH_LOG"
@@ -6645,6 +6755,77 @@ $(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-57 ')"
         CLAUDE_BIN="$doble" CUOTA_CACHE="$tmp/cuota-epica-sola/cuota.cache" CUOTA_LOCK="$tmp/cuota-epica-sola/cuota.lock" \
         PS_BIN="$pslist" LOCK="$est/skill.lock" DEVKIT_AHORA="$ahora" \
         WATCH_LOG="$est/watch.log" mostrar_estado | grep -c '^Épica ')"
+
+  # --- DEVKIT-133: fila "(en espera)" cuando nada está en curso -----------
+  # watch.log aparte del de arriba (`$est`, que sí tiene DEVKIT-57 en curso):
+  # sin ningún "en curso", solo un cierre "terminado" y, antes, la línea de
+  # arranque del bucle.
+  local espera_est espera_ahora salida_espera pslist_espera
+  espera_est="$tmp/en-espera"
+  mkdir -p "$espera_est"
+  cat >"$espera_est/watch.log" <<FIN
+2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)
+2026-09-20T09:05:00Z task-fix-1 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-70" log=$espera_est/task-fix-1.log
+2026-09-20T09:10:00Z task-fix-1 terminado: modelo=opus esfuerzo=high ronda=1 costo=0.10 turnos=5 duracion=300s :: OK
+FIN
+  espera_ahora=$(date -d '2026-09-20T09:25:00Z' +%s)
+  check "ultima_actividad_ts: la última línea terminado, no la de lanzando" \
+    "$(date -d '2026-09-20T09:10:00Z' +%s)" "$(ultima_actividad_ts "$espera_est/watch.log")"
+  check "arranque_bucle_ts: la línea de vigilancia iniciada" \
+    "$(date -d '2026-09-20T09:00:00Z' +%s)" "$(arranque_bucle_ts "$espera_est/watch.log")"
+
+  local espera_solo_arranque
+  espera_solo_arranque="$tmp/en-espera-arranque"
+  mkdir -p "$espera_solo_arranque"
+  printf '2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)\n' \
+    >"$espera_solo_arranque/watch.log"
+  check "ultima_actividad_ts: sin ningún cierre todavía, vacío (rc=1)" 1 \
+    "$(ultima_actividad_ts "$espera_solo_arranque/watch.log" >/dev/null 2>&1; echo $?)"
+
+  local merge_vacio merge_con
+  merge_vacio="$tmp/merge-vacio"
+  mkdir -p "$merge_vacio"
+  printf '%s\t%s\n' "$(date +%s)" '[]' >"$merge_vacio/merge.cache"
+  check "esperando_aprobacion: sin cards Lista para merge, vacío" "" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" esperando_aprobacion)"
+  merge_con="$tmp/merge-con"
+  mkdir -p "$merge_con"
+  printf '%s\t%s\n' "$(date +%s)" \
+    '[{"clave":"DEVKIT-40","estado":"En progreso","tipo":"feature","nivel":"Tarea","pr":""},{"clave":"DEVKIT-30","estado":"Lista para merge","tipo":"bug","nivel":"Tarea","pr":"https://github.com/o/r/pull/3"}]' \
+    >"$merge_con/merge.cache"
+  check "esperando_aprobacion: la Clave en Lista para merge" "DEVKIT-30" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" esperando_aprobacion)"
+
+  check "fila_en_espera: HACE y DURÓ iguales, desde el último terminado (15m)" "15m|15m|en espera|cola vacía" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $4"|"$8"|"$5"|"$6}')"
+  check "fila_en_espera: DETALLE con la Clave que espera aprobación" "esperando aprobación de DEVKIT-30" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: sin watch.log, vacío (rc=1)" 1 \
+    "$(fila_en_espera "$tmp/en-espera-inexistente/watch.log" "$espera_ahora" >/dev/null 2>&1; echo $?)"
+
+  pslist_espera="$tmp/ps-en-espera"
+  printf '#!/usr/bin/env bash\n' >"$pslist_espera"
+  chmod +x "$pslist_espera"
+  salida_espera=$(PS_BIN="$pslist_espera" LOCK="$espera_est/skill.lock" CLAUDE_BIN="$doble" \
+      CUOTA_CACHE="$tmp/cuota-espera/cuota.cache" CUOTA_LOCK="$tmp/cuota-espera/cuota.lock" \
+      MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+      DEVKIT_AHORA="$espera_ahora" WATCH_LOG="$espera_est/watch.log" mostrar_estado)
+  # Última línea de la tabla, antes del bloque Consumo que `mostrar_estado`
+  # agrega siempre después de una línea en blanco (DEVKIT-62).
+  check "--estado sin nada en curso: agrega la fila (en espera) al final de la tabla" si \
+    "$(printf '%s\n' "$salida_espera" | awk '/^$/{exit} {l=$0} END{print l}' | grep -qF '(en espera)' && echo si || echo no)"
+  check "--estado sin nada en curso: HACE y DURÓ, ambos 15m" si \
+    "$(printf '%s\n' "$salida_espera" | grep '(en espera)' | grep -qE '15m +15m' && echo si || echo no)"
+  check "--estado sin nada en curso: DETALLE cola vacía" si \
+    "$(printf '%s\n' "$salida_espera" | grep '(en espera)' | grep -qF 'cola vacía' && echo si || echo no)"
+  check "--estado con una skill en curso: sin fila (en espera)" no \
+    "$(PS_BIN="$pslist" LOCK="$est/skill.lock" CLAUDE_BIN="$doble" \
+        CUOTA_CACHE="$tmp/cuota-con-curso/cuota.cache" CUOTA_LOCK="$tmp/cuota-con-curso/cuota.lock" \
+        MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        DEVKIT_AHORA="$ahora" WATCH_LOG="$est/watch.log" mostrar_estado \
+        | grep -qF '(en espera)' && echo si || echo no)"
 
   # --- DEVKIT-62: cuota en vivo con `claude -p "/usage"` -----------------
   # La compuerta de la card probó que el campo `result` de
