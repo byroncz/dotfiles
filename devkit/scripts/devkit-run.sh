@@ -2081,9 +2081,12 @@ rellenar() {  # rellenar <texto> <ancho>
 # de watch.sh, esta autoprueba, todos sin tty pero a veces con `$TERM`
 # heredado): un tamaño grande a propósito, no uno chico. Un `tput` de respaldo
 # acá adentro devolvía 80/24 con `$TERM` definido pero sin tty -el caso más
-# común fuera de una terminal interactiva-, y esta tabla ya usa 77 columnas
-# fijas antes de DETALLE: quedaban 3 caracteres para DETALLE, mucho peor que
-# no recortar nada cuando no hay certeza real del tamaño.
+# común fuera de una terminal interactiva-, y esta tabla ya usa
+# `$ANCHO_COLUMNAS_FIJAS` columnas fijas antes de DETALLE (DEVKIT-131: se
+# calculan, no se fijan a mano; no repetir la cifra acá, que queda vieja en
+# cuanto un valor posible cambia): a 80 quedaban pocos caracteres para
+# DETALLE, mucho peor que no recortar nada cuando no hay certeza real del
+# tamaño.
 ancho_terminal() {
   local c=${COLUMNS:-}
   [ "$c" -gt 0 ] 2>/dev/null || c=200
@@ -2348,11 +2351,12 @@ punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> 
 }
 
 encabezado_tabla() {
-  # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
-  # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
-  # pegado a la columna MODELO. DURÓ (junto a HACE) y TURNOS (antes de
-  # DETALLE) son de DEVKIT-107; sus anchos, angostados en DEVKIT-107 H1, están
-  # en las constantes `ANCHO_*` junto a `ANCHO_COLUMNAS_FIJAS`.
+  # Cada ANCHO_* sale de `ancho_de` contra los valores posibles reales de su
+  # columna (DEVKIT-131), no de una cifra fijada a mano: no repetir números
+  # acá, que quedan viejos en cuanto un valor posible cambia (caso real:
+  # "⚠ sin registro" ensanchó ESTADO en DEVKIT-106 H2, después de que
+  # DEVKIT-81 H7 ya la había ensanchado una vez). Las constantes `ANCHO_*`
+  # están junto a `ANCHO_COLUMNAS_FIJAS`, arriba.
   printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
     "$(rellenar LANZÓ "$ANCHO_LANZO")" "$(rellenar HACE "$ANCHO_HACE")" "$(rellenar DURÓ "$ANCHO_DURO")" \
     "$(rellenar ESTADO "$ANCHO_ESTADO")" "$(rellenar MODELO "$ANCHO_MODELO")" \
@@ -2368,18 +2372,19 @@ encabezado_tabla() {
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 # <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
 # el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
-# directas de la autoprueba (sin esos tres argumentos) no cambian. ESTADO
-# ensanchada a 16 (DEVKIT-106 H2): "⚠ sin registro" con icono y espacio mide
-# 14, y sin margen quedaba pegado a MODELO. <duracion> y <turnos> (DEVKIT-107)
+# directas de la autoprueba (sin esos tres argumentos) no cambian. ANCHO_ESTADO
+# sale de `ancho_de` sobre los estados posibles (DEVKIT-131): "⚠ sin registro"
+# fue el que la ensanchó (DEVKIT-106 H2), sin margen quedaba pegado a MODELO.
+# <duracion> y <turnos> (DEVKIT-107)
 # ya llegan formateados desde `estado_filas` (o de la autoprueba, directo):
 # esta función solo alinea y colorea, no vuelve a calcularlos.
 #
 # La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
 # entra en el ancho de la terminal, se recorta completa con `recortar` -no
 # solo DETALLE- y recién ahí se pintan los colores con `pintar_rango`
-# (DEVKIT-107 H1): angostar las columnas fijas (89, antes 97) no alcanza en
-# una terminal de menos de 90 columnas, y ahí hace falta comerse parte de las
-# columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
+# (DEVKIT-107 H1): angostar `ANCHO_COLUMNAS_FIJAS` (calculado, DEVKIT-131) no
+# alcanza en una terminal más angosta que eso, y ahí hace falta comerse parte
+# de las columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
 # antes de ese recorte final correría el corte, como ya cuidaba DEVKIT-106 H3
 # para DETALLE por separado.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=]
