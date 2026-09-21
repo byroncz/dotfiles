@@ -1062,6 +1062,61 @@ env DEVKIT_NOTION_BIN="$SUELTA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
 check_igual "card suelta en Lista arranca sola: idempotente, no la relanza" "" \
   "$(cat "$SUELTA/lanzamientos" 2>/dev/null)"
 
+# --- Arrastre de hijas de Backlog a Lista (DEVKIT-121) ----------------------
+# Doble de notion.sh con dos Épicas: DEVKIT-50 (con una hija en Backlog con
+# Criterios de verdad y otra ya en Lista, que no se toca) y DEVKIT-60 (con
+# una hija en Backlog con Criterios "Pendientes de definir" -no se mueve, y
+# se nombra en el comentario; misma regla de cierre de Épica que DEVKIT-44
+# en task-close.sh). "hijas epica-50" deja de listar DEVKIT-51 en Backlog en
+# cuanto "set" la mueve (el archivo "movida-51"), como la Notion real.
+ARRASTRE=$(mktemp -d -p "$TMP")
+mkdir -p "$ARRASTRE/run" "$ARRASTRE/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$ARRASTRE/ws/.devkit/devkit.toml"
+cat >"$ARRASTRE/notion.sh" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "epicas-abiertas DEVKIT")
+    echo '[{"id":"epica-50","clave":"DEVKIT-50"},{"id":"epica-60","clave":"DEVKIT-60"}]' ;;
+  "hijas epica-50")
+    if [ -f "$ARRASTRE/movida-51" ]; then
+      echo '[{"id":"card-51","clave":"DEVKIT-51","nivel":"Tarea","estado":"Lista"},{"id":"card-52","clave":"DEVKIT-52","nivel":"Tarea","estado":"Lista"}]'
+    else
+      echo '[{"id":"card-51","clave":"DEVKIT-51","nivel":"Tarea","estado":"Backlog"},{"id":"card-52","clave":"DEVKIT-52","nivel":"Tarea","estado":"Lista"}]'
+    fi ;;
+  "hijas epica-60")
+    echo '[{"id":"card-61","clave":"DEVKIT-61","nivel":"Tarea","estado":"Backlog"}]' ;;
+  "criterios card-51") echo "Un criterio de verdad." ;;
+  "criterios card-61") echo "Pendientes de definir" ;;
+  "set card-51") touch "$ARRASTRE/movida-51"; printf '%s %s\n' "\$2" "\$3" >>"$ARRASTRE/llamadas-set" ;;
+  "set card-61") printf '%s %s\n' "\$2" "\$3" >>"$ARRASTRE/llamadas-set" ;;
+  "comentar epica-50") printf '%s\n' "\$3" >>"$ARRASTRE/comentario-50" ;;
+  "comentar epica-60") printf '%s\n' "\$3" >>"$ARRASTRE/comentario-60" ;;
+esac
+FIN
+chmod +x "$ARRASTRE/notion.sh"
+
+env DEVKIT_NOTION_BIN="$ARRASTRE/notion.sh" DEVKIT_RUN_DIR="$ARRASTRE/run" DEVKIT_WS="$ARRASTRE/ws" \
+  bash "$WATCH" --arrastrar-hijas 1 >"$ARRASTRE/watch.log" 2>&1
+check_igual "arrastre: hija en Backlog con Criterios pasa a Lista" "card-51 Estado=Lista" \
+  "$(cat "$ARRASTRE/llamadas-set" 2>/dev/null)"
+check_igual "arrastre: comenta en la Épica las Claves movidas" "Arrastradas de Backlog a Lista: DEVKIT-51." \
+  "$(cat "$ARRASTRE/comentario-50" 2>/dev/null)"
+check_igual "arrastre: hija con Criterios pendientes de definir no se mueve" 0 \
+  "$(grep -c 'card-61' "$ARRASTRE/llamadas-set" 2>/dev/null)"
+check_igual "arrastre: la hija pendiente se nombra en el comentario" \
+  "Con Criterios de aceptación pendientes de definir, sin mover: DEVKIT-61." \
+  "$(cat "$ARRASTRE/comentario-60" 2>/dev/null)"
+
+# Segunda pasada: DEVKIT-51 ya no aparece en Backlog (la Notion real ya la
+# movió) y DEVKIT-61 sigue pendiente -mismo comentario que la primera vez, la
+# guarda de `launched` evita repetirlo.
+env DEVKIT_NOTION_BIN="$ARRASTRE/notion.sh" DEVKIT_RUN_DIR="$ARRASTRE/run" DEVKIT_WS="$ARRASTRE/ws" \
+  bash "$WATCH" --arrastrar-hijas 2 >"$ARRASTRE/watch.log" 2>&1
+check_igual "arrastre: idempotente, no repite el comentario de la hija pendiente" 1 \
+  "$(wc -l <"$ARRASTRE/comentario-60" 2>/dev/null | tr -d ' ')"
+check_igual "arrastre: idempotente, no vuelve a mover una hija ya en Lista" 1 \
+  "$(wc -l <"$ARRASTRE/llamadas-set" 2>/dev/null | tr -d ' ')"
+
 # Bloqueo por tres ciclos sin OK: marcador en el PR y task-block.sh real.
 tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
 : >"$N/llamadas"; : >"$CICLO/gh/comentarios"

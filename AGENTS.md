@@ -61,6 +61,9 @@ Diseño y decisiones en la base Documentación de Notion (proyecto `DEVKIT`).
   Lista, y Épicas de Backlog a Lista) y aprobar el PR; el bucle toma las
   cards en el orden de `devkit-run --cola`. Todo lo demás lo haces tú, sin
   preguntar, siguiendo las skills.
+- Una hija en Backlog de una Épica ya en Lista o En progreso no se queda
+  atrás: el bucle la arrastra a Lista en cada pasada, salvo que sus Criterios
+  de aceptación sigan pendientes de definir.
 - En modo headless (`claude -p`) no hay quien responda: una pregunta al
   humano equivale a bloquear la card. Nunca termines con una pregunta
   abierta. Si falta algo, ejecuta `task-block.sh` con el motivo "Qué intenté:
