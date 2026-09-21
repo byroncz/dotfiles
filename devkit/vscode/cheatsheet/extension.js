@@ -3,7 +3,9 @@
 // pestaña abierta es un archivo -así reemplaza la marca de agua de fábrica
 // (Show All Commands, Go to File, Open Chat) sin pisar una sesión con
 // archivos ya abiertos, y Welcome o el walkthrough no cuentan como sesión
-// en curso-. El comando "devkit: comandos" la reabre en cualquier momento;
+// en curso-. Si al recargar la ventana la pestaña "devkit: comandos"
+// vuelve en blanco, se cierra y se reabre con el html, haya o no archivos
+// abiertos. El comando "devkit: comandos" la reabre en cualquier momento;
 // cerrarla no la vuelve a abrir sola hasta el próximo arranque del editor.
 const vscode = require('vscode');
 const fs = require('fs');
