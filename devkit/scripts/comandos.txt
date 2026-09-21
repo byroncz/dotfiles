@@ -29,6 +29,7 @@ c | c | Alias de `clear`.
 devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle.
 devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
 devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
+devkit-run --cola | devkit-run --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
 devkit-run pr-review <N> | devkit-run pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.
 devkit-run task-fix <N> | devkit-run task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.
 devkit-run --otros-agentes | devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
@@ -51,6 +52,7 @@ notion.sh | notion.sh <endpoint> | Cliente de la API de Notion para bash: leer y
 task-close.sh <Clave> [PR] | task-close.sh DEVKIT-42 118 | Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR. Úsalo tras mergear a mano, cuando el bucle no la alcanzó a cerrar solo.
 task-block.sh <Clave> <motivo> | task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card y anota el motivo. Úsalo cuando falte algo del humano y no puedas seguir sin preguntar.
 task-next.sh <Clave> | task-next.sh DEVKIT-1 | Lanza la siguiente hija libre de la Épica de la card.
+cola.sh [--lista] | cola.sh --lista | Imprime la Clave de la siguiente card de la cola, o con `--lista`, las primeras diez.
 prompt-status.sh | prompt-status.sh | Arma la línea dinámica del prompt de starship.
 dropbox-setup.sh | dropbox-setup.sh | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`.
 sync-sandbox.sh | sync-sandbox.sh | Respalda `sandbox.local/` en Dropbox cada minuto.

@@ -195,6 +195,9 @@ REVIEW_PREP_BIN="${DEVKIT_REVIEW_PREP_BIN:-$HERE/review-prep.sh}"
 # URL del PR, y gh cuenta sus comentarios devkit-fix. Sustituibles por dobles.
 NOTION_BIN="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 GH_BIN="${DEVKIT_GH_BIN:-gh}"
+# La siguiente card por la estrategia fija de la cola (DEVKIT-119). Sustituible
+# por un doble en la autoprueba, mismo motivo que NOTION_BIN.
+COLA_BIN="${DEVKIT_COLA_BIN:-$HERE/cola.sh}"
 # El worker (`nohup ... &`) nace en el mismo grupo de proceso que este script
 # (comprobado: sin `set -m`, un `&` no crea grupo propio), así que una señal
 # real de la terminal -Ctrl-C- lo alcanzaría igual que a este proceso, aunque
@@ -6459,6 +6462,22 @@ FIN
   check "--tablero sin \"project\" en devkit.toml: lo avisa" si \
     "$(printf '%s' "$tablero_err" | grep -q 'no encuentro' && echo si || echo no)"
 
+  # --cola (DEVKIT-119): un paso al costado, `cola.sh --lista`. Doble que
+  # anota sus argumentos, para comprobar que se llama con --lista y que
+  # devkit-run se limita a mostrar su salida, sin tocar Notion por su cuenta.
+  local cola_doble cola_llamadas cola_salida
+  cola_doble="$tmp/cola-doble"
+  cola_llamadas="$tmp/cola-llamadas"
+  cat >"$cola_doble" <<FIN
+#!/usr/bin/env bash
+echo "\$*" >>"$cola_llamadas"
+echo "DEVKIT-51 DEVKIT-50 hija de prueba"
+FIN
+  chmod +x "$cola_doble"
+  cola_salida=$(DEVKIT_COLA_BIN="$cola_doble" bash "$HERE/devkit-run.sh" --cola)
+  check "--cola: llama a cola.sh --lista" "--lista" "$(cat "$cola_llamadas")"
+  check "--cola: muestra la salida de cola.sh --lista" "DEVKIT-51 DEVKIT-50 hija de prueba" "$cola_salida"
+
   # H3 (pr-review sobre DEVKIT-82): si el worker muere sin dejar su línea de
   # cierre en watch.log (SIGKILL, OOM), `seguir_lanzamiento` no espera para
   # siempre: pasado MARGEN_LANZAMIENTO_MUERTO desde que `kill -0` empieza a
@@ -7283,6 +7302,12 @@ $card_md"
     if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
     tablero_color=''; [ -t 1 ] && tablero_color=1
     mostrar_tablero 0 1 "$tablero_color"
+    exit $?
+    ;;
+  --cola)
+    # DEVKIT-119: la misma cola que decide "la siguiente card", en formato de
+    # lista para que el humano la vea sin abrir Notion.
+    "$COLA_BIN" --lista
     exit $?
     ;;
   --agentes)
