@@ -488,8 +488,16 @@ check_igual "tras el éxito, la clave queda marcada como un lanzamiento normal" 
 # nivel del reintento se agenda desde el subshell del nivel anterior, así que
 # el `wait` del hook solo alcanza al primero: se sondea el resto.
 TRANSIENT_WAITS_OVERRIDE=1,1,1 corre_doble 9 "API Error: 529 Overloaded"
-esperar_llamadas 4
-sleep 0.3  # deja terminar el resto de run_skill (ALARMA, work_state) tras la 4a llamada
+if ! esperar_llamadas 4; then
+  printf 'FAIL %-58s no llegó a las 4 llamadas\n' "cuatro intentos en total (uno más tres reintentos)"
+  fail=1
+fi
+# Espera la línea del tope en vez de un `sleep` fijo: run_skill sigue
+# trabajando (ALARMA, work_state) después de la 4a llamada.
+for ((i = 0; i < 50; i++)); do
+  grep -qE 'sin más reintentos por error transitorio de la API' "$OUT" 2>/dev/null && break
+  sleep 0.1
+done
 check_log "tope de reintentos por error transitorio" \
   'pr-review-9-abc1234 sin más reintentos por error transitorio de la API \(tope de 3\)'
 check_igual "cuatro intentos en total (uno más tres reintentos)" 4 "$LLAMADAS"
