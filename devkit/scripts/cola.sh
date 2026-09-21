@@ -24,7 +24,11 @@
 # Una card con algo en `Depende de` que no está `Hecha`, o `Agente` =
 # `humano`, no entra en ninguno de los cuatro grupos. Los grupos 3 y 4 no
 # necesitan excluir `Por refinar` aparte: ese Estado nunca es `Backlog`, así
-# que el filtro por Estado ya lo deja fuera.
+# que el filtro por Estado ya lo deja fuera. Además, a diferencia de los
+# grupos 1 y 2 -que solo leen `Lista`, donde esa definición ya se dio por
+# buena al moverla ahí-, los grupos 3 y 4 exigen Criterios de aceptación
+# definidos (H2 de pr-review, DEVKIT-122): una card de Backlog sin eso no se
+# ofrece ni arranca.
 #
 # Los grupos 3 y 4 tratan `Backlog` como reserva aprobada por el humano
 # (AGENTS.md): a diferencia de los grupos 1 y 2, que solo leen, tomar una
@@ -84,6 +88,19 @@ join_coma() {  # join_coma <elemento>...
     if [ -z "$out" ]; then out="$x"; else out="$out, $x"; fi
   done
   printf '%s' "$out"
+}
+
+# Criterios de aceptación definidos (misma regla que `arrastrar_hijas` de
+# watch.sh y `task-close.sh`): vacíos o "pendientes de definir" no cuentan.
+# La usan los grupos 3 y 4 para no ofrecer una card de Backlog que un humano
+# todavía no terminó de definir (H2 de pr-review, DEVKIT-122): a diferencia
+# de los grupos 1 y 2, que solo leen `Lista` -donde esa definición ya se dio
+# por buena al moverla ahí-, Backlog es la reserva donde puede seguir sin
+# terminar.
+criterios_definidos() {  # criterios_definidos <page_id>
+  local id=$1 criterios
+  criterios=$("$NOTION" criterios "$id" 2>&1) || criterios=""
+  [ -n "$criterios" ] && ! printf '%s' "$criterios" | grep -qiE 'pendientes? de definir'
 }
 
 # Ningún `Depende de` de la card sigue sin `Hecha` (mismo criterio que
@@ -195,6 +212,7 @@ armar_cola() {  # armar_cola <activas JSON>
         | sort_by([(.orden // 1e9), (.prioridad | prio)])' <<<"$hijas")
       while IFS= read -r item; do
         [ -n "$item" ] || continue
+        criterios_definidos "$(jq -r '.id' <<<"$item")" || continue
         dependencias_hechas "$item"; rc=$?
         case $rc in
           0) items+=("$(jq -c --arg g "$epica_clave" --arg eid "$epica_id" \
@@ -215,6 +233,7 @@ armar_cola() {  # armar_cola <activas JSON>
       | sort_by([(.prioridad | prio), (.orden // 1e9), (.creado // "")])' <<<"$sueltas_backlog")
     while IFS= read -r item; do
       [ -n "$item" ] || continue
+      criterios_definidos "$(jq -r '.id' <<<"$item")" || continue
       dependencias_hechas "$item"; rc=$?
       case $rc in
         0) items+=("$(jq -c '. + {grupo: "(sin Épica)", origen: "backlog"}' <<<"$item")") ;;
@@ -264,7 +283,7 @@ task_start_vivo() {  # task_start_vivo <activas JSON>
 # regla de Criterios de aceptación pendientes de definir que usa
 # `arrastrar_hijas`, y un solo comentario en la Épica.
 tomar_de_backlog() {  # tomar_de_backlog <elegido JSON> <cola JSON>
-  local elegido=$1 cola=$2 id clave epica_id hermanos hitem hid hclave criterios
+  local elegido=$1 cola=$2 id clave epica_id hermanos hitem hid hclave
   local movidas=() pendientes=() comentario
   id=$(jq -r '.id' <<<"$elegido")
   clave=$(jq -r '.clave' <<<"$elegido")
@@ -288,13 +307,14 @@ tomar_de_backlog() {  # tomar_de_backlog <elegido JSON> <cola JSON>
     [ -n "$hitem" ] || continue
     hid=$(jq -r '.id' <<<"$hitem")
     hclave=$(jq -r '.clave' <<<"$hitem")
-    criterios=$("$NOTION" criterios "$hid" 2>&1) || criterios=""
-    if [ -z "$criterios" ] || printf '%s' "$criterios" | grep -qiE 'pendientes? de definir'; then
-      pendientes+=("$hclave")
-    elif "$NOTION" set "$hid" Estado=Lista >/dev/null 2>&1; then
-      movidas+=("$hclave")
+    if criterios_definidos "$hid"; then
+      if "$NOTION" set "$hid" Estado=Lista >/dev/null 2>&1; then
+        movidas+=("$hclave")
+      else
+        err "no pude mover $hclave (hija de la misma Épica) a Lista"
+      fi
     else
-      err "no pude mover $hclave (hija de la misma Épica) a Lista"
+      pendientes+=("$hclave")
     fi
   done < <(jq -c '.[]' <<<"$hermanos")
 
@@ -533,14 +553,14 @@ FIN
   check "Épica En progreso sin ninguna Tarea en curso no bloquea la cola" "DEVKIT-90" "$got"
 
   # Bandera cola.backlog (DEVKIT-122): Lista vacía, Backlog con una Épica
-  # -DEVKIT-300, con dos hijas elegibles (DEVKIT-301 orden 1, DEVKIT-302
-  # orden 2) y una con Criterios de aceptación pendientes de definir
-  # (DEVKIT-305), más una hija Por refinar (DEVKIT-303) que nunca debe
+  # -DEVKIT-300, con dos hijas elegibles con Criterios definidos (DEVKIT-301
+  # orden 1, DEVKIT-302 orden 2) y una con Criterios de aceptación
+  # pendientes de definir (DEVKIT-305, que por eso nunca entra a la cola,
+  # H2 de pr-review), más una hija Por refinar (DEVKIT-303) que nunca debe
   # aparecer- y una suelta (DEVKIT-310). Toma primero la hija de la Épica, la
   # pasa a Lista con "tomada por la cola" y, por ser hija de una Épica en
   # Backlog, le aplica la hija 3 (DEVKIT-121): arrastra a Lista el resto de
-  # hijas elegibles de esa Épica, con el mismo trato de Criterios pendientes
-  # que `arrastrar_hijas` de watch.sh.
+  # hijas elegibles de esa Épica.
   local llamadas_backlog="$tmp/llamadas-backlog"
   local notion_backlog="$tmp/notion-backlog"
   cat >"$notion_backlog" <<FIN
@@ -560,10 +580,14 @@ case "\$1 \$2" in
     ]' ;;
   "sueltas-backlog DEVKIT")
     echo '[{"id":"card-310","clave":"DEVKIT-310","estado":"Backlog","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"suelta backlog"}]' ;;
+  "criterios card-301")
+    echo "criterio definido" ;;
   "criterios card-302")
     echo "criterio definido" ;;
   "criterios card-305")
     echo "pendientes de definir" ;;
+  "criterios card-310")
+    echo "criterio definido" ;;
   "set epica-300")
     echo ok ;;
   "set card-301")
@@ -592,18 +616,19 @@ FIN
     "$(grep -c '^set epica-300 Estado=Lista$' "$llamadas_backlog")"
   check "cola.backlog: hija 3 arrastra a Lista la otra hija con Criterios definidos" 1 \
     "$(grep -c '^set card-302 Estado=Lista$' "$llamadas_backlog")"
-  check "cola.backlog: hija 3 no mueve la hija con Criterios pendientes de definir" 0 \
+  check "cola.backlog: nunca toca la hija con Criterios pendientes de definir (filtrada antes)" 0 \
     "$(grep -c '^set card-305' "$llamadas_backlog")"
   check "cola.backlog: comenta en la Épica que se movió y qué hijas arrastró" 1 \
-    "$(grep -cF 'comentar epica-300 Épica movida de Backlog a Lista: la tomó DEVKIT-301. Arrastradas de Backlog a Lista: DEVKIT-302. Con Criterios de aceptación pendientes de definir, sin mover: DEVKIT-305.' "$llamadas_backlog")"
+    "$(grep -cF 'comentar epica-300 Épica movida de Backlog a Lista: la tomó DEVKIT-301. Arrastradas de Backlog a Lista: DEVKIT-302.' "$llamadas_backlog")"
 
   got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh" --lista)
   check "cola.backlog: --lista nunca muestra una card Por refinar" no \
     "$(grep -q 'DEVKIT-303' <<<"$got" && echo si || echo no)"
-  check "cola.backlog: --lista muestra las hijas de la Épica y luego la suelta, en ese orden" \
+  check "cola.backlog: --lista nunca muestra una card con Criterios pendientes de definir" no \
+    "$(grep -q 'DEVKIT-305' <<<"$got" && echo si || echo no)"
+  check "cola.backlog: --lista muestra las hijas elegibles de la Épica y luego la suelta, en ese orden" \
     "DEVKIT-301
 DEVKIT-302
-DEVKIT-305
 DEVKIT-310" \
     "$(cut -d' ' -f1 <<<"$got" | tr -s ' ')"
 
@@ -637,6 +662,43 @@ FIN
   chmod +x "$notion_segunda_pasada"
   got=$(env DEVKIT_NOTION_BIN="$notion_segunda_pasada" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
   check "segunda pasada: Épica ya en Lista con su hija arrastrada, la cola la sugiere" "DEVKIT-302" "$got"
+
+  # H2 de pr-review (DEVKIT-122): una hija en Orden 1 con Criterios de
+  # aceptación pendientes de definir no bloquea el grupo 3 ni se ofrece -se
+  # salta, igual que se saltaría del grupo 1 o 2 si estuviera en Lista-; la
+  # cola elige la siguiente candidata elegible, DEVKIT-322 en Orden 2.
+  local notion_orden_pendiente="$tmp/notion-orden-pendiente"
+  cat >"$notion_orden_pendiente" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    echo '[]' ;;
+  "epicas-backlog DEVKIT")
+    echo '[{"id":"epica-320","clave":"DEVKIT-320","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}]' ;;
+  "hijas epica-320")
+    echo '[
+      {"id":"card-321","clave":"DEVKIT-321","nivel":"Tarea","estado":"Backlog","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"orden 1 con criterios pendientes"},
+      {"id":"card-322","clave":"DEVKIT-322","nivel":"Tarea","estado":"Backlog","prioridad":"alta","orden":2,"agente":"claude","depende":[],"titulo":"orden 2 con criterios definidos"}
+    ]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[]' ;;
+  "criterios card-321")
+    echo "pendientes de definir" ;;
+  "criterios card-322")
+    echo "criterio definido" ;;
+  "set epica-320")
+    echo ok ;;
+  "set card-322")
+    echo ok ;;
+  "comentar card-322")
+    echo ok ;;
+  "comentar epica-320")
+    echo ok ;;
+esac
+FIN
+  chmod +x "$notion_orden_pendiente"
+  got=$(env DEVKIT_NOTION_BIN="$notion_orden_pendiente" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "cola.backlog: hija en Orden 1 con Criterios pendientes se salta, elige la de Orden 2" "DEVKIT-322" "$got"
 
   return $fail
 }
