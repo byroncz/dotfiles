@@ -69,6 +69,22 @@
 #     tabla sin Clave (H6 de pr-review en DEVKIT-89), aunque sí en
 #     `--costos <Clave>`.
 #
+# Interruptor de tres posiciones para el humano (DEVKIT-136), guardado en
+# /run/devkit/modo -tmpfs, así que un `devkit recreate` siempre vuelve a
+# trabajo, el modo por defecto sin archivo-. Cada uno responde con una línea
+# que dice el modo nuevo y qué implica, y los tres quedan reflejados en la
+# cabecera de `--estado`/`--tablero`, junto al punto de estado (trabajo
+# verde, pausa ámbar, alto rojo y negrita):
+#   devkit-run --pausa      el bucle deja de tomar cards nuevas de la cola
+#                           cuando la obedezca; un lanzamiento manual
+#                           (`devkit-run <skill> <Clave>`) sigue permitido.
+#   devkit-run --alto       el bucle se detiene del todo cuando la obedezca;
+#                           un lanzamiento manual se rechaza, con el motivo.
+#   devkit-run --reanudar   vuelve al modo trabajo.
+# Esta card solo define el modo, lo muestra y hace que `devkit-run <skill>
+# <Clave>` a mano lo respete; que `watch.sh` también lo obedezca queda para
+# otra card.
+#
 # Uso con anulación manual, para subir o bajar el rol de un lanzamiento
 # concreto sin tocar roles.toml:
 #   devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] <skill> <Clave> [texto extra...]
@@ -127,6 +143,12 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
+# Interruptor de tres posiciones del humano (DEVKIT-136): trabajo (el valor
+# por defecto, sin archivo), pausa o alto. Vive en RUN_DIR -tmpfs, así que un
+# `devkit recreate` siempre vuelve a trabajo-, y lo escriben
+# --pausa/--alto/--reanudar (`escribir_modo`, más abajo, y el `case
+# "${1:-}"` final de este archivo).
+MODO_FILE="${DEVKIT_MODO_FILE:-$RUN_DIR/modo}"
 CLAUDE_BIN="${DEVKIT_CLAUDE_BIN:-claude}"
 # Transcripción de cada `claude -p` real, junto a su log (DEVKIT-102): sin
 # ella, diagnosticar un caso como el del PR 68 -task-fix leyó una fila ajena
@@ -2461,6 +2483,49 @@ color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
   esac
 }
 
+# Modo del interruptor de tres posiciones (DEVKIT-136), leído de MODO_FILE:
+# "trabajo" (el valor por defecto, sin archivo), "pausa" o "alto". Por ahora
+# solo `devkit-run.sh` lo obedece, rechazando un lanzamiento manual en alto
+# (ver el `case "$skill"` al final del archivo); que `watch.sh` también lo
+# respete queda para otra card.
+modo_actual() {
+  local m
+  m=$(tr -d '[:space:]' 2>/dev/null < "$MODO_FILE")
+  case "$m" in
+    pausa|alto) printf '%s' "$m" ;;
+    *) printf trabajo ;;
+  esac
+}
+
+# Escribe <modo> en MODO_FILE y confirma con la línea que --pausa/--alto/
+# --reanudar devuelven al humano: el modo nuevo y qué implica.
+escribir_modo() {  # escribir_modo <modo> <línea de confirmación>
+  mkdir -p "$RUN_DIR"
+  printf '%s' "$1" > "$MODO_FILE"
+  printf '%s\n' "$2"
+}
+
+# Color de <modo> para la cabecera de `--estado`/`--tablero`, junto al punto
+# de estado (DEVKIT-136): trabajo verde -todo sigue su curso normal-, pausa
+# ámbar -aviso, nada se corta todavía-, alto rojo y negrita -el único que de
+# verdad rechaza un lanzamiento manual, mismo criterio que "Bloqueada" en
+# `color_de_estado_fila`-.
+color_de_modo() {  # color_de_modo <modo>
+  case "$1" in
+    trabajo) printf verde ;;
+    pausa) printf ambar ;;
+    alto) printf rojo-negrita ;;
+  esac
+}
+
+# "modo: <modo actual>" ya coloreado, para pegar junto al punto de estado en
+# la cabecera de `--estado`/`--tablero`, con o sin `--seguir`.
+texto_modo() {  # texto_modo <color_habilitado>
+  local modo
+  modo=$(modo_actual)
+  printf 'modo: %s' "$(colorear "$(color_de_modo "$modo")" "$modo" "${1:-}")"
+}
+
 # Punto de la cabecera de `--estado`/`--tablero --seguir` (DEVKIT-106): verde
 # "ejecutando" con al menos una fila "en curso" en <filas> (la salida de
 # `estado_filas`); si no hay ninguna, ámbar "en espera" con el bucle vivo o
@@ -2869,8 +2934,8 @@ seguir_estado() {
     # `printf`, la sustitución se comía las dos líneas en blanco antes de que
     # `frame+=` pegara la tabla, y la fila de títulos quedaba pegada a la
     # cabecera. El separador se agrega aparte, después de la sustitución.
-    frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
-      "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
+    frame=$(printf 'devkit-run --estado  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
+      "$(date +%T)" "$punto" "$(texto_modo "$color_tty")" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
     frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
     i=$((i + 1))
@@ -3075,8 +3140,8 @@ seguir_tablero() {
     punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
     # el separador va aparte de la sustitución que trae senal_bucle.
-    frame=$(printf 'devkit-run --tablero  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
-      "$(date +%T)" "$punto" "$TABLERO_INTERVALO" "$bucle")
+    frame=$(printf 'devkit-run --tablero  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
+      "$(date +%T)" "$punto" "$(texto_modo "$color_tty")" "$TABLERO_INTERVALO" "$bucle")
     frame+=$'\n\n'
     frame+=$(mostrar_tablero "$i" 0 "$color_tty")
     i=$((i + 1))
@@ -7496,6 +7561,64 @@ FIN
   check "lanzamiento duplicado: avisa con el pid y el log del lanzamiento vivo (línea vieja sin modelo/esfuerzo/ronda)" 1 \
     "$(printf '%s' "$dup_out_viejo" | grep -c "ya hay un lanzamiento de \"/task-start DEVKIT-9\" en curso (pid 9002, log $tmp_viejo/run/task-start-9.log)")"
 
+  # --- DEVKIT-136: interruptor de tres posiciones (--pausa/--alto/--reanudar) ---
+  local modo_run
+  modo_run="$tmp/modo"
+  mkdir -p "$modo_run"
+  : >"$modo_run/ready"  # sin esto, esperar_arranque espera 120s de verdad
+
+  check "modo_actual sin archivo: trabajo" trabajo "$(MODO_FILE="$modo_run/modo" modo_actual)"
+  check "color_de_modo: trabajo verde" verde "$(color_de_modo trabajo)"
+  check "color_de_modo: pausa ámbar" ambar "$(color_de_modo pausa)"
+  check "color_de_modo: alto rojo y negrita" rojo-negrita "$(color_de_modo alto)"
+
+  check "--pausa deja pausa en MODO_FILE y dice qué implica" "pausa 1" \
+    "$(DEVKIT_RUN_DIR="$modo_run" bash "$HERE/devkit-run.sh" --pausa >"$modo_run/pausa.out"
+       printf '%s %s' "$(cat "$modo_run/modo")" \
+         "$(grep -c '^modo: pausa —.*lanzamientos manuales.*permitidos' "$modo_run/pausa.out")")"
+
+  check "--alto deja alto en MODO_FILE y dice qué implica" "alto 1" \
+    "$(DEVKIT_RUN_DIR="$modo_run" bash "$HERE/devkit-run.sh" --alto >"$modo_run/alto.out"
+       printf '%s %s' "$(cat "$modo_run/modo")" \
+         "$(grep -c '^modo: alto —.*se rechaza' "$modo_run/alto.out")")"
+
+  check "--reanudar deja trabajo en MODO_FILE y dice qué implica" "trabajo 1" \
+    "$(DEVKIT_RUN_DIR="$modo_run" bash "$HERE/devkit-run.sh" --reanudar >"$modo_run/reanudar.out"
+       printf '%s %s' "$(cat "$modo_run/modo")" \
+         "$(grep -c '^modo: trabajo —.*normal' "$modo_run/reanudar.out")")"
+
+  # `--estado`/`--tablero`, en foto única, muestran el modo junto al punto de
+  # la cabecera. $modo_run sigue en trabajo, la última escritura de arriba.
+  check "--estado (foto única) muestra el modo junto al punto" si \
+    "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$modo_run" DEVKIT_WS="$tmp" \
+        bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '[●*].*modo: trabajo' && echo si || echo no)"
+  check "--tablero (foto única) muestra el modo junto al punto" si \
+    "$(DEVKIT_NOTION_BIN="$notion_tablero_vacio" DEVKIT_WS="$tablero_ws" DEVKIT_RUN_DIR="$modo_run" \
+        bash "$HERE/devkit-run.sh" --tablero | head -1 \
+        | grep -qE '^devkit-run --tablero  .*[●*].*modo: trabajo' && echo si || echo no)"
+
+  # En alto, `devkit-run <skill> <Clave>` lanzado a mano se rechaza con el
+  # motivo, antes de escribir la línea "lanzando"; en pausa sigue permitido.
+  printf alto >"$modo_run/modo"
+  : >"$modo_run/watch.log"
+  local modo_alto_out modo_alto_rc
+  modo_alto_out=$(DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 2>&1); modo_alto_rc=$?
+  check "modo alto: un lanzamiento manual se rechaza (código propio, no 0)" 66 "$modo_alto_rc"
+  check "modo alto: el rechazo trae el motivo" 1 \
+    "$(printf '%s' "$modo_alto_out" | grep -c 'modo alto, no se lanza "/task-fix DEVKIT-9" a mano')"
+  check "modo alto: no llega a escribir la línea lanzando" 0 \
+    "$(grep -c 'lanzando' "$modo_run/watch.log" 2>/dev/null)"
+
+  printf pausa >"$modo_run/modo"
+  : >"$modo_run/watch.log"
+  DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "modo pausa: un lanzamiento manual sigue permitido" 1 \
+    "$(grep -c 'lanzando' "$modo_run/watch.log" 2>/dev/null)"
+
   # --- DEVKIT-89: costos.log y devkit-run --costos --------------------------
   check "resumen incluye duracion= desde duration_ms del JSON" "duracion=12s" \
     "$(printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3,"duration_ms":12345}\n' >"$tmp/dur.log"
@@ -8246,8 +8369,9 @@ $card_md"
     estado_filas_una=$(estado_filas "$WATCH_LOG" "$estado_ahora_una")
     estado_bucle_una=$(senal_bucle "$WATCH_LOG" "$estado_ahora_una" "$estado_color")
     estado_utf_una=0; utf8_disponible && estado_utf_una=1
-    printf 'devkit-run --estado  %s %s\n%s\n\n' "$(date +%T)" \
+    printf 'devkit-run --estado  %s %s  %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
+      "$(texto_modo "$estado_color")" \
       "$estado_bucle_una"
     mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una" "$estado_bucle_una"
     exit 0
@@ -8255,6 +8379,17 @@ $card_md"
   --tablero)
     if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
     tablero_color=''; [ -t 1 ] && tablero_color=1
+    # Misma cabecera de punto+modo que la foto única de `--estado` (DEVKIT-136):
+    # sin esto, `--tablero` sin `--seguir` no tenía cabecera propia y el modo
+    # no tenía dónde mostrarse.
+    tablero_ahora_una=${DEVKIT_AHORA:-$(date +%s)}
+    tablero_filas_una=$(estado_filas "$WATCH_LOG" "$tablero_ahora_una")
+    tablero_bucle_una=$(senal_bucle "$WATCH_LOG" "$tablero_ahora_una" "$tablero_color")
+    tablero_utf_una=0; utf8_disponible && tablero_utf_una=1
+    printf 'devkit-run --tablero  %s %s  %s\n%s\n\n' "$(date +%T)" \
+      "$(punto_estado "$tablero_filas_una" "$tablero_bucle_una" 0 1 "$tablero_utf_una" "$tablero_color")" \
+      "$(texto_modo "$tablero_color")" \
+      "$tablero_bucle_una"
     mostrar_tablero 0 1 "$tablero_color"
     exit $?
     ;;
@@ -8303,6 +8438,18 @@ $card_md"
     run_tests
     exit $?
     ;;
+  --pausa)
+    escribir_modo pausa "modo: pausa — los lanzamientos manuales (devkit-run <skill> <Clave>) siguen permitidos; el bucle dejará de tomar cards nuevas de la cola cuando la obedezca."
+    exit 0
+    ;;
+  --alto)
+    escribir_modo alto "modo: alto — devkit-run <skill> <Clave> lanzado a mano se rechaza; el bucle se detendrá del todo cuando la obedezca."
+    exit 0
+    ;;
+  --reanudar)
+    escribir_modo trabajo "modo: trabajo — el bucle toma cards de la cola y los lanzamientos manuales corren normal."
+    exit 0
+    ;;
 esac
 
 # Anulación manual del rol para este lanzamiento (no toca roles.toml): un
@@ -8323,6 +8470,7 @@ falta_valor() {  # falta_valor <valor>
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
   echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --costos [<Clave>] | --test" >&2
+  echo "     devkit-run --pausa | --alto | --reanudar" >&2
 }
 
 modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
@@ -8363,6 +8511,16 @@ esac
 
 prompt="/$skill $clave"
 [ $# -eq 0 ] || prompt="$prompt $*"
+
+# DEVKIT-136: el interruptor de tres posiciones. En alto, ni un humano ni
+# task-close.sh/epic-plan -que lanzan la siguiente hija por este mismo camino-
+# corren una skill a mano; en pausa, un lanzamiento manual sigue permitido,
+# porque pausa frena al bucle cuando lo obedezca, no a quien decide lanzar
+# algo a propósito.
+if [ "$(modo_actual)" = alto ]; then
+  echo "devkit-run: modo alto, no se lanza \"$prompt\" a mano; usa \`devkit-run --pausa\` o \`devkit-run --reanudar\` para levantarlo." >&2
+  exit 66
+fi
 
 # DEVKIT-79: ¿ya hay un worker o un `claude -p` de este mismo prompt vivo o
 # esperando el candado? El relanzamiento manual sobre un falso "no arrancó"

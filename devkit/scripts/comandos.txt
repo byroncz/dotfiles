@@ -30,6 +30,9 @@ devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza un
 devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
 devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
 devkit-run --cola | devkit-run --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
+devkit-run --pausa | devkit-run --pausa | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido.
+devkit-run --alto | devkit-run --alto | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente.
+devkit-run --reanudar | devkit-run --reanudar | Vuelve el interruptor al modo trabajo.
 devkit-run pr-review <N> | devkit-run pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.
 devkit-run task-fix <N> | devkit-run task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.
 devkit-run --otros-agentes | devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
