@@ -38,7 +38,12 @@ turnos que esta card elimina.
      `## Material` si el PR es de código, leyendo el diff si es de
      documentación- y se marcan `Verificado`, `Falla` o `No verificado`
      cuando no hay forma de ejecutarlo desde el contenedor. Di siempre cómo
-     lo comprobaste.
+     lo comprobaste. Sobre ese worktree, el perfil solo admite
+     `git -C <worktree> diff/log/show/grep`, `bash -n <worktree>/...`,
+     `ruff check <worktree>/...` y `pytest <worktree>/...`: un `cd
+     <worktree> && git diff` o un `git diff` sin `-C` no van a ningún lado
+     (DEVKIT-125), y el `--test` de un script del worktree usa la misma ruta
+     absoluta que aparece en `bash <ruta>/<script>.sh --test`.
    - **El cuerpo del PR es afirmación, no evidencia.** Cada "se probó X" del
      autor se repite o se marca `No verificado`.
    - **Lectura adversarial del diff.** Busca lo que rompe, lo que queda fuera
@@ -64,10 +69,11 @@ turnos que esta card elimina.
    siguientes continúan la numeración anterior. Veredicto `CAMBIOS` si hay
    algún hallazgo `alta` o `media`, o algún criterio en `Falla`; `OK` en
    cualquier otro caso.
-3. Escribe `.devkit/review-<N>.md` con exactamente este formato, sin saludos
-   ni resumen:
+3. Arma el informe con exactamente este formato y publícalo por `stdin`, sin
+   escribir ningún archivo -este perfil no trae `Edit` ni `Write` (DEVKIT-125)-:
 
-   ```
+   ```sh
+   <ruta>/review-publish.sh <N> - <<'INFORME'
    <!-- devkit-review sha=<headRefOid> verdict=<OK|CAMBIOS> -->
    Revisado con <modelo>, esfuerzo <esfuerzo>
    ## Revisión independiente (commit <sha corto>)
@@ -92,25 +98,33 @@ turnos que esta card elimina.
    H1 | alta | ruta/archivo:línea | qué falla | qué hacer
    H2 | baja | ruta/archivo:línea | qué falla | qué hacer
    <!-- /devkit-findings -->
+   INFORME
    ```
 
-   La línea "Revisado con ..." va justo debajo del marcador, y sale de las
-   variables que `devkit-run` exporta al `claude -p` (DEVKIT-58): `echo
-   "Revisado con ${DEVKIT_MODEL:-?}, esfuerzo ${DEVKIT_EFFORT:-?}"`. Cópiala
-   tal cual, sin formato. Si vienen vacías (sesión interactiva), escribe el
+   `<ruta>` es el valor `DEVKIT_SCRIPTS_DIR` de la segunda línea de este
+   prompt (`(DEVKIT_SCRIPTS_DIR=... DEVKIT_MODEL=... DEVKIT_EFFORT=...)`,
+   justo debajo de `/pr-review ...`), copiado tal cual, como texto plano y
+   sin `$`: por ejemplo `/opt/devkit/scripts/review-publish.sh`. Va en la
+   segunda línea y no en la primera para que Claude Code siga reconociendo
+   `/pr-review` como slash command: solo lo interpreta así cuando es lo
+   primero del mensaje (DEVKIT-125, revisión del PR 92, H8). Un comando
+   armado con `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/..."` no sirve
+   aquí: Claude Code rechaza con "Contains expansion" cualquier Bash que
+   traiga una expansión de variable, sin mirar siquiera la lista allow
+   (DEVKIT-125). Si esta sesión es interactiva y esa segunda línea no está,
+   usa `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}"` como antes: ahí sí
+   corre bajo un perfil que lo permite.
+
+   La línea "Revisado con ..." va justo debajo del marcador, con el
+   `<modelo>` y el `<esfuerzo>` de esa misma segunda línea, copiados tal
+   cual, sin formato. Si esa línea no está (sesión interactiva), escribe el
    alias del modelo que te ejecuta y `esfuerzo sin registrar`; nunca
    inventes un esfuerzo.
 
    El bloque `devkit-findings` va solo si hay hallazgos. Es lo único que
    `task-fix` lee: una línea por hallazgo, cinco campos separados por ` | `,
    sin saltos de línea dentro de un hallazgo.
-4. Ejecuta:
-
-   ```sh
-   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/review-publish.sh" <N> .devkit/review-<N>.md
-   ```
-
-   El script publica el informe con `gh pr review --comment --body-file`,
+4. El script publica el informe con `gh pr review --comment --body-file`,
    borra el worktree si existía y, solo con veredicto `OK`, pasa la card a
    `Lista para merge`, pide el review al humano (`reviewer` de
    `.devkit/devkit.toml`, o el dueño del repo si es un usuario y no una
@@ -119,12 +133,11 @@ turnos que esta card elimina.
    no redactes tú ese comentario, ni lo dupliques. Con veredicto `CAMBIOS`,
    la card se queda en `Revisión automática` sin que este script toque nada
    más: `task-fix` lee el bloque de hallazgos directamente en el PR. Si
-   falla, el error va en stderr y `.devkit/review-<N>.md` ya no existe: el
-   script lo borra al salir, también cuando falla (DEVKIT-99). Vuelve a
-   escribir el informe corregido -el marcador suele ser la causa- antes de
-   reintentar, o repite con `--conservar` como primer argumento si necesitas
-   inspeccionar el archivo que falló. No publiques un segundo informe con
-   `gh pr review` a mano.
+   falla, el error va en stderr; el heredoc no deja ningún archivo que
+   limpiar. Corrige el informe -el marcador suele ser la causa- y repite el
+   mismo comando, o agrega `--conservar` como primer argumento si necesitas
+   que el script deje una copia en `.devkit/review-<N>.md` para inspeccionar
+   qué falló. No publiques un segundo informe con `gh pr review` a mano.
 5. Responde con una línea: PR, veredicto y número de hallazgos.
 
 ## Reglas
