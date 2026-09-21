@@ -76,17 +76,16 @@
 #   notion.sh epicas-backlog <código>         Épicas del proyecto en Backlog,
 #                                             normalizadas (con id), como
 #                                             lista JSON (grupo 3 de
-#                                             `cola.sh` con la bandera
-#                                             `cola.backlog`, DEVKIT-122;
-#                                             misma forma que
-#                                             `epicas-abiertas`, con Estado
-#                                             Backlog en vez de Lista/En
-#                                             progreso)
+#                                             `cola.sh`, DEVKIT-122, sin
+#                                             bandera desde DEVKIT-128; misma
+#                                             forma que `epicas-abiertas`, con
+#                                             Estado Backlog en vez de
+#                                             Lista/En progreso)
 #   notion.sh sueltas-backlog <código>        Tareas del proyecto en Backlog
 #                                             sin Padre, como lista JSON
-#                                             (grupo 4 de `cola.sh` con la
-#                                             bandera `cola.backlog`,
-#                                             DEVKIT-122; misma forma que
+#                                             (grupo 4 de `cola.sh`,
+#                                             DEVKIT-122, sin bandera desde
+#                                             DEVKIT-128; misma forma que
 #                                             `sueltas`, con Estado Backlog
 #                                             en vez de Lista)
 #   notion.sh --test                          autoprueba, sin red
@@ -488,9 +487,9 @@ cmd_sueltas() {  # cmd_sueltas <código>
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
-# Tareas sueltas en Backlog (DEVKIT-122, grupo 4 de `cola.sh` con la bandera
-# `cola.backlog`): misma consulta que `sueltas`, acotada a Backlog en vez de
-# Lista.
+# Tareas sueltas en Backlog (DEVKIT-122, grupo 4 de `cola.sh`, sin bandera
+# desde DEVKIT-128): misma consulta que `sueltas`, acotada a Backlog en vez
+# de Lista.
 cmd_sueltas_backlog() {  # cmd_sueltas_backlog <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
@@ -627,9 +626,9 @@ cmd_epicas_abiertas() {  # cmd_epicas_abiertas <código>
   jq -c --arg codigo "$codigo" "map($NORMALIZA)" <<<"$filas"
 }
 
-# Épicas en Backlog (DEVKIT-122, grupo 3 de `cola.sh` con la bandera
-# `cola.backlog`): misma forma que `epicas-abiertas`, acotada a Backlog en
-# vez de Lista/En progreso.
+# Épicas en Backlog (DEVKIT-122, grupo 3 de `cola.sh`, sin bandera desde
+# DEVKIT-128): misma forma que `epicas-abiertas`, acotada a Backlog en vez
+# de Lista/En progreso.
 cmd_epicas_backlog() {  # cmd_epicas_backlog <código>
   local codigo=$1 proy filas
   proy=$(proyecto_id "$codigo") || return
@@ -1109,8 +1108,8 @@ $(epica epica-51 51 Lista)],\"has_more\":false}"
     '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Nivel","select":{"equals":"Tarea"}},{"property":"Estado","select":{"equals":"Lista"}},{"property":"Padre","relation":{"is_empty":true}}]}' \
     "$(grep 'dbtareas' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
 
-  # epicas-backlog / sueltas-backlog (DEVKIT-122): grupos 3 y 4 de `cola.sh`
-  # con la bandera `cola.backlog`, misma forma que `epicas-abiertas` y
+  # epicas-backlog / sueltas-backlog (DEVKIT-122): grupos 3 y 4 de `cola.sh`,
+  # sin bandera desde DEVKIT-128, misma forma que `epicas-abiertas` y
   # `sueltas` pero acotadas a Estado Backlog.
   resp POST__databases_dbtareas_query "{\"results\":[$(epica epica-50 50 Backlog)],\"has_more\":false}"
   check "epicas-backlog: las Épicas en Backlog, con id" \
