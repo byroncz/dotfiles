@@ -10,20 +10,24 @@
 #   cola.sh --test   autoprueba con fixtures, sin red
 #
 # Orden fijo, dos grupos:
-#   1. Hijas de Épicas en `Lista`: las Épicas por `Prioridad` y `Creado`, y
-#      dentro de cada una sus hijas por `Orden` y `Prioridad`.
+#   1. Hijas de Épicas en `Lista` o `En progreso` (DEVKIT-109: task-begin.sh
+#      pasa la Épica a En progreso con su primera hija): las Épicas por
+#      `Prioridad` y `Creado`, y dentro de cada una sus hijas por `Orden` y
+#      `Prioridad`.
 #   2. Tareas sueltas (sin Padre) en `Lista`, por `Prioridad`, `Orden` y
 #      `Creado`.
 # Una card con algo en `Depende de` que no está `Hecha`, o `Agente` =
 # `humano`, no entra en ninguno de los dos grupos.
 #
-# `cola.sh` (sin argumento) no imprime nada si hay una card `En progreso` o
+# `cola.sh` (sin argumento) no imprime nada si hay una Tarea `En progreso` o
 # `Revisión automática` en el proyecto, o un `task-start` vivo para una card
 # en `Lista` (misma detección de `ps` que task-next.sh): con algo en curso,
-# "la siguiente" ya está decidida y no hay nada que sugerir. `--lista` no
-# aplica este corte: es una foto de la cola completa, útil para ver qué
-# sigue aunque algo esté corriendo ahora mismo (mismo trato que --tablero
-# frente a --estado).
+# "la siguiente" ya está decidida y no hay nada que sugerir. Una Épica En
+# progreso no cuenta: solo lo está porque task-begin.sh se lo aplicó junto
+# con su primera hija (DEVKIT-109), y es esa hija -una Tarea- la que refleja
+# si hay trabajo en curso. `--lista` no aplica este corte: es una foto de la
+# cola completa, útil para ver qué sigue aunque algo esté corriendo ahora
+# mismo (mismo trato que --tablero frente a --estado).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
@@ -61,8 +65,8 @@ dependencias_hechas() {  # dependencias_hechas <card JSON>
 }
 
 # Todas las cards elegibles, en el orden fijo de la card: grupo 1 (hijas de
-# Épicas en Lista) seguido del grupo 2 (sueltas en Lista), cada objeto con un
-# campo "grupo" agregado para --lista.
+# Épicas en Lista o En progreso) seguido del grupo 2 (sueltas en Lista), cada
+# objeto con un campo "grupo" agregado para --lista.
 armar_cola() {  # armar_cola <activas JSON>
   local activas=$1 items=()
 
@@ -74,7 +78,7 @@ armar_cola() {  # armar_cola <activas JSON>
       return 1
     fi
     epicas_cards+=("$c")
-  done < <(jq -r '.[] | select(.nivel == "Épica" and .estado == "Lista") | .clave' <<<"$activas")
+  done < <(jq -r '.[] | select(.nivel == "Épica" and (.estado == "Lista" or .estado == "En progreso")) | .clave' <<<"$activas")
 
   local epicas_ordenadas='[]'
   if [ "${#epicas_cards[@]}" -gt 0 ]; then
@@ -145,7 +149,7 @@ modo_siguiente() {
   codigo=$(project_code)
   [ -n "$codigo" ] || { err "no encuentro \"project\" en $WS/.devkit/devkit.toml"; exit 1; }
   activas=$("$NOTION" activas "$codigo" 2>&1) || { err "no pude leer Notion: $activas"; exit 1; }
-  en_curso=$(jq -r '[.[] | select(.estado == "En progreso" or .estado == "Revisión automática")] | length' <<<"$activas")
+  en_curso=$(jq -r '[.[] | select(.nivel == "Tarea" and (.estado == "En progreso" or .estado == "Revisión automática"))] | length' <<<"$activas")
   [ "$en_curso" -eq 0 ] || exit 0
   task_start_vivo "$activas" && exit 0
   cola=$(armar_cola "$activas") || exit 1
@@ -312,6 +316,55 @@ FIN
   got=$(env "${entorno[@]}" DEVKIT_PS_BIN="$ps_ocupado" bash "$HERE/cola.sh" --lista)
   check "--lista no aplica el corte de \"algo en curso\"" si \
     "$(grep -q 'DEVKIT-51' <<<"$got" && echo si || echo no)"
+
+  # DEVKIT-126: una Épica En progreso (task-begin.sh la deja así junto con su
+  # primera hija, DEVKIT-109) no debe perder sus hijas restantes.
+  local activas_epica_progreso="$tmp/activas-epica-progreso.json"
+  cat >"$activas_epica_progreso" <<'FIN'
+[{"clave":"DEVKIT-118","estado":"En progreso","nivel":"Épica"},
+ {"clave":"DEVKIT-121","estado":"Lista","nivel":"Tarea"}]
+FIN
+  local notion_epica_progreso="$tmp/notion-epica-progreso"
+  cat >"$notion_epica_progreso" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    cat "$activas_epica_progreso" ;;
+  "card DEVKIT-118")
+    echo '{"id":"epica-118","clave":"DEVKIT-118","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
+  "hijas epica-118")
+    echo '[{"id":"card-121","clave":"DEVKIT-121","nivel":"Tarea","estado":"Lista","prioridad":"media","orden":1,"agente":"claude","depende":[],"titulo":"hija de Épica en progreso"}]' ;;
+esac
+FIN
+  chmod +x "$notion_epica_progreso"
+  got=$(env DEVKIT_NOTION_BIN="$notion_epica_progreso" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "Épica En progreso con una hija libre en Lista: la sugiere" "DEVKIT-121" "$got"
+
+  # Y una Épica En progreso sin ninguna Tarea en curso -aunque ella misma
+  # esté En progreso- no bloquea la cola: aquí no tiene hijas elegibles, pero
+  # sigue ofreciendo la siguiente card libre (una suelta).
+  local activas_epica_sin_hijas="$tmp/activas-epica-sin-hijas.json"
+  cat >"$activas_epica_sin_hijas" <<'FIN'
+[{"clave":"DEVKIT-118","estado":"En progreso","nivel":"Épica"},
+ {"clave":"DEVKIT-90","estado":"Lista","nivel":"Tarea"}]
+FIN
+  local notion_epica_sin_hijas="$tmp/notion-epica-sin-hijas"
+  cat >"$notion_epica_sin_hijas" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    cat "$activas_epica_sin_hijas" ;;
+  "card DEVKIT-118")
+    echo '{"id":"epica-118","clave":"DEVKIT-118","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
+  "hijas epica-118")
+    echo '[]' ;;
+  "sueltas DEVKIT")
+    echo '[{"id":"card-90","clave":"DEVKIT-90","estado":"Lista","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"suelta prioritaria"}]' ;;
+esac
+FIN
+  chmod +x "$notion_epica_sin_hijas"
+  got=$(env DEVKIT_NOTION_BIN="$notion_epica_sin_hijas" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "Épica En progreso sin ninguna Tarea en curso no bloquea la cola" "DEVKIT-90" "$got"
 
   return $fail
 }
