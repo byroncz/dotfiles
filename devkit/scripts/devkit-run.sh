@@ -1850,7 +1850,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     resto=$(tail -n +"$((ln + 1))" "$wlog")
     fin=$(printf '%s\n' "$resto" | grep -m1 -E \
       "^[^ ]+ ($id (terminado|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]$)")
-    estado="" detalle=""
+    estado="" detalle="" fin_ln=""
     if [ -n "$fin" ]; then
       case "$fin" in
         *"ALARMA: no arrancó"*) estado="no arrancó"; detalle="el worker murió al arrancar; ver $logf" ;;
@@ -1947,10 +1947,17 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     # informe, no de uno posterior (ver el comentario de `procesar_pr` en
     # watch.sh). Sin esa línea todavía -el bucle no volvió a decidir, o
     # decidió `fix-humano`/`nada`, que no dejan una línea con este prefijo-
-    # sigue "terminó".
-    if [ "$skill" = pr-review ] && [ "$estado" = terminó ] && [ -n "$arg" ]; then
+    # sigue "terminó". También corre cuando el bloqueo de arriba (DEVKIT-97
+    # H3) ya dejó estado=bloqueada: si esa misma línea de decisión es
+    # "bloqueando con task-block.sh", el bloqueo es el veredicto de ESTE
+    # informe y pasa a "Bloqueada" (negrita), conservando el detalle con el
+    # motivo que el bloque de arriba ya extrajo; si no matchea ninguna
+    # decisión, el bloqueo era ajeno y sigue "bloqueada" (sin negrita).
+    if [ "$skill" = pr-review ] && { [ "$estado" = terminó ] || [ "$estado" = bloqueada ]; } \
+       && [ -n "$arg" ]; then
       short_pr=${id#pr-review-"$arg"-}
-      decision_ln=$(printf '%s\n' "$resto" | grep -nF -m1 -- "$fin" | cut -d: -f1)
+      decision_ln=${fin_ln:-}
+      [ -n "$decision_ln" ] || decision_ln=$(printf '%s\n' "$resto" | grep -nF -m1 -- "$fin" | cut -d: -f1)
       if [ -n "$decision_ln" ]; then
         decision=$(printf '%s\n' "$resto" | tail -n "+$((decision_ln + 1))" | grep -m1 -E "^[^ ]+ PR #$arg \(")
         case "$decision" in
@@ -5679,6 +5686,8 @@ FIN
 2026-09-16T11:10:00Z pr-review-102-ccc3333 lanzando (origen=bucle): "/pr-review 102" log=$est/pr-review-102-ccc3333.log
 2026-09-16T11:11:00Z pr-review-102-ccc3333 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
 2026-09-16T11:11:01Z PR #102 (DEVKIT-102) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-16T11:11:02Z task-block.sh DEVKIT-102 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/102
+2026-09-16T11:11:03Z task-block-102 terminado: bash :: task-block: DEVKIT-102 Bloqueada desde Revisión automática
 2026-09-16T11:08:00Z task-start-5 lanzando (origen=humano): "/task-start DEVKIT-5" log=$est/task-start-5.log
 2026-09-16T11:10:00Z task-start-1 lanzando (origen=task-close): "/task-start DEVKIT-57" log=$est/task-start-1.log
 2026-09-16T11:12:00Z task-block.sh DEVKIT-5 Bloqueada desde En progreso: motivo de la cinco.
@@ -5732,6 +5741,9 @@ FIN
     "$(fila DEVKIT-101)"
   check "pr-review terminado y bloqueado (tres ciclos sin OK): ESTADO Bloqueada" \
     "Bloqueada|bucle" "$(fila DEVKIT-102)"
+  check "detalle del bloqueo real de pr-review conserva el motivo" \
+    "Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/102" \
+    "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-102" {print $6}')"
   check "pr-review sin línea de decisión todavía: sigue terminó (DEVKIT-56)" \
     "terminó|bucle" "$(fila DEVKIT-56)"
   estado_de_fila() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
