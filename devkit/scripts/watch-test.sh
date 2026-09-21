@@ -1002,6 +1002,8 @@ cat >"$SUELTA/notion.sh" <<FIN
 case "\$1 \$2" in
   "activas DEVKIT") cat "$SUELTA/activas.json" ;;
   "sueltas DEVKIT") cat "$SUELTA/sueltas.json" ;;
+  "epicas-backlog DEVKIT") echo '[]' ;;
+  "sueltas-backlog DEVKIT") echo '[]' ;;
 esac
 FIN
 chmod +x "$SUELTA/notion.sh"

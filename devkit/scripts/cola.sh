@@ -9,18 +9,18 @@
 #   cola.sh --lista  las primeras diez en ese orden: Clave, grupo y título
 #   cola.sh --test   autoprueba con fixtures, sin red
 #
-# Orden fijo, hasta cuatro grupos:
+# Orden fijo, hasta cuatro grupos (DEVKIT-128: Backlog se drena siempre que
+# Lista esté agotada, sin bandera; Por refinar es la única compuerta,
+# AGENTS.md):
 #   1. Hijas de Épicas en `Lista` o `En progreso` (DEVKIT-109: task-begin.sh
 #      pasa la Épica a En progreso con su primera hija): las Épicas por
 #      `Prioridad` y `Creado`, y dentro de cada una sus hijas por `Orden` y
 #      `Prioridad`.
 #   2. Tareas sueltas (sin Padre) en `Lista`, por `Prioridad`, `Orden` y
 #      `Creado`.
-#   3. Con la bandera `cola.backlog` de `.devkit/devkit.toml` en `true`
-#      (DEVKIT-122, apagada por defecto): hijas de Épicas en `Backlog`,
-#      mismo orden que el grupo 1 pero sobre ese Estado.
-#   4. También con `cola.backlog`: tareas sueltas en `Backlog`, mismo orden
-#      que el grupo 2.
+#   3. Hijas de Épicas en `Backlog`, mismo orden que el grupo 1 pero sobre
+#      ese Estado.
+#   4. Tareas sueltas en `Backlog`, mismo orden que el grupo 2.
 # Una card con algo en `Depende de` que no está `Hecha`, o `Agente` =
 # `humano`, no entra en ninguno de los cuatro grupos. Los grupos 3 y 4 no
 # necesitan excluir `Por refinar` aparte: ese Estado nunca es `Backlog`, así
@@ -67,18 +67,6 @@ project_code() {
 }
 
 PRIO_DEF='def prio: {"alta": 0, "media": 1, "baja": 2}[. // ""] // 3;'
-
-# La bandera `cola.backlog` de devkit.toml (DEVKIT-122), apagada por
-# defecto: sin ella, cola.sh no toca el Backlog. `devkit.toml` es una sola
-# tabla `[devkit]` de valores de una línea (mismo criterio que `template` o
-# `python`, en entrypoint.sh y devkit.sh); la clave lleva un punto porque el
-# nombre de la card la escribe así, no porque haya una tabla `[cola]` aparte.
-backlog_habilitado() {
-  [ -f "$WS/.devkit/devkit.toml" ] || return 1
-  local valor
-  valor=$(sed -n 's/^cola\.backlog[[:space:]]*=[[:space:]]*\(true\|false\).*/\1/p' "$WS/.devkit/devkit.toml" | head -1)
-  [ "$valor" = "true" ]
-}
 
 # "a, b, c": mismo helper que `join_coma` de watch.sh (DEVKIT-121), duplicado
 # porque cola.sh no se abastece de watch.sh y el helper es de tres líneas.
@@ -183,64 +171,62 @@ armar_cola() {  # armar_cola <activas JSON>
     esac
   done < <(jq -c '.[]' <<<"$elegibles2")
 
-  if backlog_habilitado; then
-    local codigo3
+  local codigo3
 
-    # Grupo 3: hijas de Épicas en Backlog. `activas` (DEVKIT-82) solo trae
-    # los cinco Estados del tablero y Backlog no es uno de ellos, así que
-    # este grupo no puede salir de "$activas" como el grupo 1: pide su
-    # propia lista a `notion.sh epicas-backlog`.
-    local epicas_backlog epicas_backlog_ordenadas='[]'
-    codigo3=$(project_code)
-    if ! epicas_backlog=$("$NOTION" epicas-backlog "$codigo3" 2>&1); then
-      err "no pude leer Notion (epicas-backlog): $epicas_backlog"
+  # Grupo 3: hijas de Épicas en Backlog. `activas` (DEVKIT-82) solo trae
+  # los cinco Estados del tablero y Backlog no es uno de ellos, así que
+  # este grupo no puede salir de "$activas" como el grupo 1: pide su
+  # propia lista a `notion.sh epicas-backlog`.
+  local epicas_backlog epicas_backlog_ordenadas='[]'
+  codigo3=$(project_code)
+  if ! epicas_backlog=$("$NOTION" epicas-backlog "$codigo3" 2>&1); then
+    err "no pude leer Notion (epicas-backlog): $epicas_backlog"
+    return 1
+  fi
+  if [ "$(jq 'length' <<<"$epicas_backlog")" -gt 0 ]; then
+    epicas_backlog_ordenadas=$(jq -c "$PRIO_DEF"'
+      sort_by([(.prioridad | prio), (.creado // "")])' <<<"$epicas_backlog")
+  fi
+
+  while IFS=$'\t' read -r epica_id epica_clave; do
+    [ -n "$epica_id" ] || continue
+    if ! hijas=$("$NOTION" hijas "$epica_id" 2>&1); then
+      err "no pude leer Notion (hijas $epica_id): $hijas"
       return 1
     fi
-    if [ "$(jq 'length' <<<"$epicas_backlog")" -gt 0 ]; then
-      epicas_backlog_ordenadas=$(jq -c "$PRIO_DEF"'
-        sort_by([(.prioridad | prio), (.creado // "")])' <<<"$epicas_backlog")
-    fi
-
-    while IFS=$'\t' read -r epica_id epica_clave; do
-      [ -n "$epica_id" ] || continue
-      if ! hijas=$("$NOTION" hijas "$epica_id" 2>&1); then
-        err "no pude leer Notion (hijas $epica_id): $hijas"
-        return 1
-      fi
-      elegibles=$(jq -c "$PRIO_DEF"'
-        map(select(.nivel == "Tarea" and .estado == "Backlog" and .agente != "humano"))
-        | sort_by([(.orden // 1e9), (.prioridad | prio)])' <<<"$hijas")
-      while IFS= read -r item; do
-        [ -n "$item" ] || continue
-        criterios_definidos "$(jq -r '.id' <<<"$item")" || continue
-        dependencias_hechas "$item"; rc=$?
-        case $rc in
-          0) items+=("$(jq -c --arg g "$epica_clave" --arg eid "$epica_id" \
-               '. + {grupo: $g, origen: "backlog", epica_id: $eid}' <<<"$item")") ;;
-          2) return 1 ;;
-        esac
-      done < <(jq -c '.[]' <<<"$elegibles")
-    done < <(jq -r '.[] | [.id, .clave] | @tsv' <<<"$epicas_backlog_ordenadas")
-
-    # Grupo 4: tareas sueltas en Backlog, mismo trato que el grupo 2.
-    local sueltas_backlog elegibles3
-    if ! sueltas_backlog=$("$NOTION" sueltas-backlog "$codigo3" 2>&1); then
-      err "no pude leer Notion (sueltas-backlog): $sueltas_backlog"
-      return 1
-    fi
-    elegibles3=$(jq -c "$PRIO_DEF"'
-      map(select(.agente != "humano"))
-      | sort_by([(.prioridad | prio), (.orden // 1e9), (.creado // "")])' <<<"$sueltas_backlog")
+    elegibles=$(jq -c "$PRIO_DEF"'
+      map(select(.nivel == "Tarea" and .estado == "Backlog" and .agente != "humano"))
+      | sort_by([(.orden // 1e9), (.prioridad | prio)])' <<<"$hijas")
     while IFS= read -r item; do
       [ -n "$item" ] || continue
       criterios_definidos "$(jq -r '.id' <<<"$item")" || continue
       dependencias_hechas "$item"; rc=$?
       case $rc in
-        0) items+=("$(jq -c '. + {grupo: "(sin Épica)", origen: "backlog"}' <<<"$item")") ;;
+        0) items+=("$(jq -c --arg g "$epica_clave" --arg eid "$epica_id" \
+             '. + {grupo: $g, origen: "backlog", epica_id: $eid}' <<<"$item")") ;;
         2) return 1 ;;
       esac
-    done < <(jq -c '.[]' <<<"$elegibles3")
+    done < <(jq -c '.[]' <<<"$elegibles")
+  done < <(jq -r '.[] | [.id, .clave] | @tsv' <<<"$epicas_backlog_ordenadas")
+
+  # Grupo 4: tareas sueltas en Backlog, mismo trato que el grupo 2.
+  local sueltas_backlog elegibles3
+  if ! sueltas_backlog=$("$NOTION" sueltas-backlog "$codigo3" 2>&1); then
+    err "no pude leer Notion (sueltas-backlog): $sueltas_backlog"
+    return 1
   fi
+  elegibles3=$(jq -c "$PRIO_DEF"'
+    map(select(.agente != "humano"))
+    | sort_by([(.prioridad | prio), (.orden // 1e9), (.creado // "")])' <<<"$sueltas_backlog")
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    criterios_definidos "$(jq -r '.id' <<<"$item")" || continue
+    dependencias_hechas "$item"; rc=$?
+    case $rc in
+      0) items+=("$(jq -c '. + {grupo: "(sin Épica)", origen: "backlog"}' <<<"$item")") ;;
+      2) return 1 ;;
+    esac
+  done < <(jq -c '.[]' <<<"$elegibles3")
 
   if [ "${#items[@]}" -eq 0 ]; then
     echo '[]'
@@ -403,6 +389,10 @@ case "$1 $2" in
     ]' ;;
   "pagina card-40")
     echo '{"estado":"En progreso"}' ;;
+  "epicas-backlog DEVKIT")
+    echo '[]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[]' ;;
 esac
 FIN
   chmod +x "$notion_fake"
@@ -520,6 +510,10 @@ case "\$1 \$2" in
     echo '{"id":"epica-118","clave":"DEVKIT-118","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
   "hijas epica-118")
     echo '[{"id":"card-121","clave":"DEVKIT-121","nivel":"Tarea","estado":"Lista","prioridad":"media","orden":1,"agente":"claude","depende":[],"titulo":"hija de Épica en progreso"}]' ;;
+  "epicas-backlog DEVKIT")
+    echo '[]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[]' ;;
 esac
 FIN
   chmod +x "$notion_epica_progreso"
@@ -546,17 +540,22 @@ case "\$1 \$2" in
     echo '[]' ;;
   "sueltas DEVKIT")
     echo '[{"id":"card-90","clave":"DEVKIT-90","estado":"Lista","prioridad":"alta","orden":1,"agente":"claude","depende":[],"titulo":"suelta prioritaria"}]' ;;
+  "epicas-backlog DEVKIT")
+    echo '[]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[]' ;;
 esac
 FIN
   chmod +x "$notion_epica_sin_hijas"
   got=$(env DEVKIT_NOTION_BIN="$notion_epica_sin_hijas" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
   check "Épica En progreso sin ninguna Tarea en curso no bloquea la cola" "DEVKIT-90" "$got"
 
-  # Bandera cola.backlog (DEVKIT-122): Lista vacía, Backlog con una Épica
-  # -DEVKIT-300, con dos hijas elegibles con Criterios definidos (DEVKIT-301
-  # orden 1, DEVKIT-302 orden 2) y una con Criterios de aceptación
-  # pendientes de definir (DEVKIT-305, que por eso nunca entra a la cola,
-  # H2 de pr-review), más una hija Por refinar (DEVKIT-303) que nunca debe
+  # Grupos 3 y 4 (DEVKIT-128: Backlog se drena siempre que Lista esté
+  # agotada, sin bandera): Lista vacía, Backlog con una Épica -DEVKIT-300,
+  # con dos hijas elegibles con Criterios definidos (DEVKIT-301 orden 1,
+  # DEVKIT-302 orden 2) y una con Criterios de aceptación pendientes de
+  # definir (DEVKIT-305, que por eso nunca entra a la cola, H2 de
+  # pr-review), más una hija Por refinar (DEVKIT-303) que nunca debe
   # aparecer- y una suelta (DEVKIT-310). Toma primero la hija de la Épica, la
   # pasa a Lista con "tomada por la cola" y, por ser hija de una Épica en
   # Backlog, le aplica la hija 3 (DEVKIT-121): arrastra a Lista el resto de
@@ -602,41 +601,40 @@ esac
 FIN
   chmod +x "$notion_backlog"
 
-  local ws_backlog="$tmp/ws-backlog"
-  mkdir -p "$ws_backlog/.devkit"
-  printf '[devkit]\nproject = "DEVKIT"\ncola.backlog = true\n' >"$ws_backlog/.devkit/devkit.toml"
-
-  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
-  check "cola.backlog: Lista vacía, toma primero la hija de la Épica en Backlog" "DEVKIT-301" "$got"
-  check "cola.backlog: mueve la card elegida a Lista" 1 \
+  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "Backlog: Lista vacía, toma primero la hija de la Épica en Backlog" "DEVKIT-301" "$got"
+  check "Backlog: mueve la card elegida a Lista" 1 \
     "$(grep -c '^set card-301 Estado=Lista$' "$llamadas_backlog")"
-  check "cola.backlog: comenta \"tomada por la cola\" en la card elegida" 1 \
+  check "Backlog: comenta \"tomada por la cola\" en la card elegida" 1 \
     "$(grep -c '^comentar card-301 tomada por la cola$' "$llamadas_backlog")"
-  check "cola.backlog: mueve también la Épica de Backlog a Lista" 1 \
+  check "Backlog: mueve también la Épica de Backlog a Lista" 1 \
     "$(grep -c '^set epica-300 Estado=Lista$' "$llamadas_backlog")"
-  check "cola.backlog: hija 3 arrastra a Lista la otra hija con Criterios definidos" 1 \
+  check "Backlog: hija 3 arrastra a Lista la otra hija con Criterios definidos" 1 \
     "$(grep -c '^set card-302 Estado=Lista$' "$llamadas_backlog")"
-  check "cola.backlog: nunca toca la hija con Criterios pendientes de definir (filtrada antes)" 0 \
+  check "Backlog: nunca toca la hija con Criterios pendientes de definir (filtrada antes)" 0 \
     "$(grep -c '^set card-305' "$llamadas_backlog")"
-  check "cola.backlog: comenta en la Épica que se movió y qué hijas arrastró" 1 \
+  check "Backlog: comenta en la Épica que se movió y qué hijas arrastró" 1 \
     "$(grep -cF 'comentar epica-300 Épica movida de Backlog a Lista: la tomó DEVKIT-301. Arrastradas de Backlog a Lista: DEVKIT-302.' "$llamadas_backlog")"
 
-  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh" --lista)
-  check "cola.backlog: --lista nunca muestra una card Por refinar" no \
+  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh" --lista)
+  check "Backlog: --lista nunca muestra una card Por refinar" no \
     "$(grep -q 'DEVKIT-303' <<<"$got" && echo si || echo no)"
-  check "cola.backlog: --lista nunca muestra una card con Criterios pendientes de definir" no \
+  check "Backlog: --lista nunca muestra una card con Criterios pendientes de definir" no \
     "$(grep -q 'DEVKIT-305' <<<"$got" && echo si || echo no)"
-  check "cola.backlog: --lista muestra las hijas elegibles de la Épica y luego la suelta, en ese orden" \
+  check "Backlog: --lista muestra las hijas elegibles de la Épica y luego la suelta, en ese orden" \
     "DEVKIT-301
 DEVKIT-302
 DEVKIT-310" \
     "$(cut -d' ' -f1 <<<"$got" | tr -s ' ')"
 
-  # Apagada por defecto (sin "cola.backlog" en devkit.toml, el mismo $ws de
-  # las pruebas de arriba): aunque Lista esté vacía, no sugiere nada del
-  # Backlog.
-  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
-  check "cola.backlog apagada por defecto: nada de Backlog aunque Lista esté vacía" "" "$got"
+  # Una clave "cola.backlog" que quede en un devkit.toml viejo (DEVKIT-128)
+  # se ignora sin error: cola.sh ya no la lee, y sigue drenando Backlog igual
+  # que con el $ws sin esa clave.
+  local ws_clave_vieja="$tmp/ws-clave-vieja"
+  mkdir -p "$ws_clave_vieja/.devkit"
+  printf '[devkit]\nproject = "DEVKIT"\ncola.backlog = false\n' >"$ws_clave_vieja/.devkit/devkit.toml"
+  got=$(env DEVKIT_NOTION_BIN="$notion_backlog" DEVKIT_WS="$ws_clave_vieja" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "cola.backlog en un devkit.toml viejo se ignora sin error, Backlog se drena igual" "DEVKIT-301" "$got"
 
   # H1 de pr-review (DEVKIT-122), segunda pasada: la Épica ya está en Lista
   # -como quedaría tras la pasada de arriba- y trae una hija en Lista
@@ -657,6 +655,10 @@ case "\$1 \$2" in
     echo '{"id":"epica-300","clave":"DEVKIT-300","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
   "hijas epica-300")
     echo '[{"id":"card-302","clave":"DEVKIT-302","nivel":"Tarea","estado":"Lista","prioridad":"alta","orden":2,"agente":"claude","depende":[],"titulo":"hija backlog 2"}]' ;;
+  "epicas-backlog DEVKIT")
+    echo '[]' ;;
+  "sueltas-backlog DEVKIT")
+    echo '[]' ;;
 esac
 FIN
   chmod +x "$notion_segunda_pasada"
@@ -697,8 +699,8 @@ case "\$1 \$2" in
 esac
 FIN
   chmod +x "$notion_orden_pendiente"
-  got=$(env DEVKIT_NOTION_BIN="$notion_orden_pendiente" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
-  check "cola.backlog: hija en Orden 1 con Criterios pendientes se salta, elige la de Orden 2" "DEVKIT-322" "$got"
+  got=$(env DEVKIT_NOTION_BIN="$notion_orden_pendiente" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "Backlog: hija en Orden 1 con Criterios pendientes se salta, elige la de Orden 2" "DEVKIT-322" "$got"
 
   # H3 de pr-review (DEVKIT-122): tomar una suelta del grupo 4 (sin Épica,
   # grupo 3 vacío) también la mueve a Lista y la comenta, sin tocar ninguna
@@ -724,13 +726,13 @@ case "\$1 \$2" in
 esac
 FIN
   chmod +x "$notion_grupo4"
-  got=$(env DEVKIT_NOTION_BIN="$notion_grupo4" DEVKIT_WS="$ws_backlog" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
-  check "cola.backlog: grupo 3 vacío, toma la suelta del grupo 4" "DEVKIT-310" "$got"
-  check "cola.backlog: grupo 4 mueve la suelta elegida a Lista" 1 \
+  got=$(env DEVKIT_NOTION_BIN="$notion_grupo4" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  check "Backlog: grupo 3 vacío, toma la suelta del grupo 4" "DEVKIT-310" "$got"
+  check "Backlog: grupo 4 mueve la suelta elegida a Lista" 1 \
     "$(grep -c '^set card-310 Estado=Lista$' "$llamadas_grupo4")"
-  check "cola.backlog: grupo 4 comenta \"tomada por la cola\" en la suelta" 1 \
+  check "Backlog: grupo 4 comenta \"tomada por la cola\" en la suelta" 1 \
     "$(grep -c '^comentar card-310 tomada por la cola$' "$llamadas_grupo4")"
-  check "cola.backlog: grupo 4 no comenta en ninguna Épica" 0 \
+  check "Backlog: grupo 4 no comenta en ninguna Épica" 0 \
     "$(grep -c '^comentar epica-' "$llamadas_grupo4")"
 
   return $fail
