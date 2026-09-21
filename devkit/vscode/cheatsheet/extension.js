@@ -1,12 +1,16 @@
 // devkit: abre la chuleta de comandos (cheatsheet.html, generado por
-// gen-cheatsheet.sh) en un panel webview. Al arrancar, solo si no hay ningún
-// editor abierto -así reemplaza la marca de agua de fábrica (Show All
-// Commands, Go to File, Open Chat) sin pisar una sesión con archivos ya
-// abiertos-. El comando "devkit: comandos" la reabre en cualquier momento;
+// gen-cheatsheet.sh) en un panel webview. Al arrancar, solo si ninguna
+// pestaña abierta es un archivo -así reemplaza la marca de agua de fábrica
+// (Show All Commands, Go to File, Open Chat) sin pisar una sesión con
+// archivos ya abiertos, y Welcome o el walkthrough no cuentan como sesión
+// en curso-. El comando "devkit: comandos" la reabre en cualquier momento;
 // cerrarla no la vuelve a abrir sola hasta el próximo arranque del editor.
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+
+const VIEW_TYPE = 'devkit.cheatsheet';
+const TITULO = 'devkit: comandos';
 
 function leerHtml() {
   return fs.readFileSync(path.join(__dirname, 'cheatsheet.html'), 'utf8');
@@ -14,8 +18,8 @@ function leerHtml() {
 
 function mostrarChuleta() {
   const panel = vscode.window.createWebviewPanel(
-    'devkit.cheatsheet',
-    'devkit: comandos',
+    VIEW_TYPE,
+    TITULO,
     vscode.ViewColumn.One,
     { enableScripts: false }
   );
@@ -23,27 +27,37 @@ function mostrarChuleta() {
   return panel;
 }
 
-function activate(context) {
+function esPestañaDeArchivo(tab) {
+  return tab.input instanceof vscode.TabInputText
+    || tab.input instanceof vscode.TabInputTextDiff
+    || tab.input instanceof vscode.TabInputNotebook;
+}
+
+async function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('devkit.cheatsheet.show', mostrarChuleta)
   );
 
-  // Sin esto, recargar la ventana (la forma normal de volver en
-  // openvscode-server) restaura la pestaña "devkit: comandos" y el workbench
-  // falla con "No serializer found for 'devkit.cheatsheet'", dejándola en
-  // blanco.
   context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer('devkit.cheatsheet', {
+    vscode.window.registerWebviewPanelSerializer(VIEW_TYPE, {
       deserializeWebviewPanel: async (panel) => {
         panel.webview.html = leerHtml();
       },
     })
   );
 
-  const hayEditorAbierto = vscode.window.tabGroups.all.some((grupo) => grupo.tabs.length > 0);
-  if (!hayEditorAbierto) {
-    mostrarChuleta();
+  const pestañas = vscode.window.tabGroups.all.flatMap((grupo) => grupo.tabs);
+  if (pestañas.some(esPestañaDeArchivo)) return;
+
+  // openvscode-server no invoca el serializer de arriba al recargar la
+  // ventana: la pestaña "devkit: comandos" vuelve en la lista de pestañas
+  // pero sin contenido. Se cierra esa pestaña en blanco y se abre una nueva
+  // con el html en vez de confiar en que el serializer la repare.
+  const restaurada = pestañas.find((tab) => tab.label === TITULO);
+  if (restaurada) {
+    await vscode.window.tabGroups.close(restaurada);
   }
+  mostrarChuleta();
 }
 
 function deactivate() {}
