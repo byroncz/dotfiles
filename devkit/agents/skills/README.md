@@ -11,7 +11,7 @@ con `claude -p "/nombre argumentos"`.
 |---|---|---|
 | `project-init` | Alta de proyecto en Notion | Humano, una vez |
 | `epic-plan` | Épica en Lista → hijas en Lista | Humano, al aprobar una Épica |
-| `task-create` | Nace en Backlog | Humano o agente |
+| `task-create` | Nace en Por refinar | Humano o agente |
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `task-next.sh` |
 | `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |

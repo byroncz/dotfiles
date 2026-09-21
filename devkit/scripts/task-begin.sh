@@ -12,7 +12,7 @@
 # `Estado`, en ese orden -Notion antes que git, DEVKIT-76: así un
 # relanzamiento sobre una card que ya no es tomable responde en este mismo
 # turno pase lo que pase en `git status`-:
-#   Backlog                                    -> sale con 1, sin tocar git
+#   Backlog / Por refinar                      -> sale con 1, sin tocar git
 #                                                  ni Notion
 #   Hecha / Lista para merge / Revisión automática
 #                                               -> sale con 1, sin tocar git
@@ -67,6 +67,10 @@ pr=$(jq -r '.pr // ""' <<<"$card")
 case "$estado" in
   Backlog)
     err "$clave está en Backlog; el humano debe moverla a Lista."
+    exit 1
+    ;;
+  "Por refinar")
+    err "$clave está Por refinar; el humano debe moverla a Lista o Backlog."
     exit 1
     ;;
   Hecha|"Lista para merge"|"Revisión automática")

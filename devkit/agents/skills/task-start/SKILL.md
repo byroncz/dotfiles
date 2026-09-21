@@ -35,7 +35,8 @@ orden -los que amplían el alcance cuentan, DEVKIT-41-.
   exactamente igual que el bloque `## Card`. Si sale con 1, el motivo va en
   stderr; responde según cuál sea, sin tocar git ni Notion más allá de lo
   que ya hizo el script:
-  - `<Clave> está en Backlog; el humano debe moverla a Lista.` → responde
+  - `<Clave> está en Backlog; el humano debe moverla a Lista.` o `<Clave>
+    está Por refinar; el humano debe moverla a Lista o Backlog.` → responde
     eso y termina.
   - `<Clave> ya está en <Estado> ...; no hay nada que hacer.` (Hecha, Lista
     para merge o Revisión automática) → responde eso y termina.
