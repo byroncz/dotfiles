@@ -35,7 +35,7 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
      seis líneas de cambio, 93 turnos igual: el tamaño de la card, no el del
      cambio, dispara el costo.
    - El conjunto cubre todos los criterios de la Épica y nada más. Lo que
-     exceda el alcance va a una Épica nueva en Backlog vía `task-create`.
+     exceda el alcance va a una Épica nueva en Por refinar vía `task-create`.
    - Entre tres y ocho hijas. Si salen más, la Épica es demasiado grande:
      propón partirla y detente.
    - Dependencias. Para cada par de hijas, anota qué archivos va a tocar

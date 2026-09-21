@@ -4449,6 +4449,9 @@ FIN
   no_lanza_terminal "relanzamiento sobre Revisión automática" DEVKIT-9092 \
     '{"estado":"Revisión automática","pr":"https://github.com/o/r/pull/12"}' \
     'task-begin: DEVKIT-9092 ya está en Revisión automática (PR https://github.com/o/r/pull/12); no hay nada que hacer.'
+  no_lanza_terminal "relanzamiento sobre Por refinar" DEVKIT-9093 \
+    '{"estado":"Por refinar"}' \
+    'task-begin: DEVKIT-9093 está Por refinar; el humano debe moverla a Lista o Backlog.'
 
   # H7 del informe sobre el PR #64 (esta card): --test solo probaba que los
   # Estados terminales de arriba no bloqueaban; la rama real de bloqueo

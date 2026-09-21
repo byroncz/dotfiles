@@ -1,6 +1,6 @@
 ---
 name: task-create
-description: Crea una o varias cards en Notion en estado Backlog para el proyecto actual, con la plantilla de objetivo, criterios de aceptación y notas. Úsala cuando el humano pida registrar trabajo pendiente o cuando descubras una necesidad fuera del alcance de la card activa.
+description: Crea una o varias cards en Notion en estado Por refinar para el proyecto actual, con la plantilla de objetivo, criterios de aceptación y notas. Úsala cuando el humano pida registrar trabajo pendiente o cuando descubras una necesidad fuera del alcance de la card activa.
 ---
 
 # task-create
@@ -17,13 +17,13 @@ lenguaje natural de una o varias tareas, o una Épica.
 2. Para cada tarea pedida, decide `Nivel`: Épica si agrupa varios entregables
    o exige más de un día de trabajo; Tarea si cabe en una rama de menos de un
    día. Una Tarea suelta sin Épica es válida.
-3. Crea la página con estas propiedades: Título, Estado `Backlog`, Nivel,
-   Proyecto, Tipo (`feature`, `bug` o `chore`), Prioridad (`alta`, `media`
-   o `baja`), Agente `humano` si la creó un humano o el agente actual
-   (`claude` o `codex`) si nace de tu trabajo. Si es hija de una Épica,
-   relaciona `Padre` y asigna `Orden`.
-   Excepción al `Backlog`: si te invoca `epic-plan` (hijas de una Épica ya
-   aprobada) o `template-update` (a petición del humano), la card nace en
+3. Crea la página con estas propiedades: Título, Estado `Por refinar`,
+   Nivel, Proyecto, Tipo (`feature`, `bug` o `chore`), Prioridad (`alta`,
+   `media` o `baja`), Agente `humano` si la creó un humano o el agente
+   actual (`claude` o `codex`) si nace de tu trabajo. Si es hija de una
+   Épica, relaciona `Padre` y asigna `Orden`.
+   Excepción a `Por refinar`: si te invoca `epic-plan` (hijas de una Épica
+   ya aprobada) o `template-update` (a petición del humano), la card nace en
    `Lista`; la aprobación ya la dio el humano.
 4. Cuerpo de la card, siempre con estas tres secciones y en este orden:
 
@@ -44,6 +44,6 @@ lenguaje natural de una o varias tareas, o una Épica.
 
 - No crees cards duplicadas: busca antes por título en Tareas del mismo
   proyecto.
-- No muevas ninguna card fuera de Backlog: esa transición es del humano.
-  La única excepción es la del paso 3.
+- No muevas ninguna card fuera de Por refinar: esa transición es del
+  humano. La única excepción es la del paso 3.
 - Redacta según la guía de `AGENTS.md`: conciso, pedagógico, español neutro.
