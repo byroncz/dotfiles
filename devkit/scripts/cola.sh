@@ -42,11 +42,19 @@ PRIO_DEF='def prio: {"alta": 0, "media": 1, "baja": 2}[. // ""] // 3;'
 # Ningún `Depende de` de la card sigue sin `Hecha` (mismo criterio que
 # task-next.sh). Una llamada a `pagina` por dependencia: en la práctica una
 # card trae cero o una, así que no vale la pena una consulta batida aparte.
+# 0 = hecha, 1 = no hecha (dependencia legítima sin cerrar), 2 = no se pudo
+# leer Notion (DEVKIT-119, H1 de pr-review): un fallo de red no puede
+# confundirse con una dependencia pendiente, o `cola.sh` sugiere otra card
+# en vez de cortar.
 dependencias_hechas() {  # dependencias_hechas <card JSON>
   local item=$1 dep estado
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
-    estado=$("$NOTION" pagina "$dep" 2>/dev/null | jq -r '.estado // empty')
+    if ! estado=$("$NOTION" pagina "$dep" 2>&1); then
+      err "no pude leer Notion (pagina $dep): $estado"
+      return 2
+    fi
+    estado=$(jq -r '.estado // empty' <<<"$estado")
     [ "$estado" = "Hecha" ] || return 1
   done < <(jq -r '.depende[]? // empty' <<<"$item")
   return 0
@@ -61,7 +69,10 @@ armar_cola() {  # armar_cola <activas JSON>
   local epicas_cards=() clave c
   while IFS= read -r clave; do
     [ -n "$clave" ] || continue
-    c=$("$NOTION" card "$clave" 2>/dev/null) || continue
+    if ! c=$("$NOTION" card "$clave" 2>&1); then
+      err "no pude leer Notion (card $clave): $c"
+      return 1
+    fi
     epicas_cards+=("$c")
   done < <(jq -r '.[] | select(.nivel == "Épica" and .estado == "Lista") | .clave' <<<"$activas")
 
@@ -71,27 +82,41 @@ armar_cola() {  # armar_cola <activas JSON>
       sort_by([(.prioridad | prio), (.creado // "")])')
   fi
 
-  local epica_id epica_clave hijas elegibles item
+  local epica_id epica_clave hijas elegibles item rc
   while IFS=$'\t' read -r epica_id epica_clave; do
     [ -n "$epica_id" ] || continue
-    hijas=$("$NOTION" hijas "$epica_id" 2>/dev/null) || hijas='[]'
+    if ! hijas=$("$NOTION" hijas "$epica_id" 2>&1); then
+      err "no pude leer Notion (hijas $epica_id): $hijas"
+      return 1
+    fi
     elegibles=$(jq -c "$PRIO_DEF"'
       map(select(.nivel == "Tarea" and .estado == "Lista" and .agente != "humano"))
       | sort_by([(.orden // 1e9), (.prioridad | prio)])' <<<"$hijas")
     while IFS= read -r item; do
       [ -n "$item" ] || continue
-      dependencias_hechas "$item" && items+=("$(jq -c --arg g "$epica_clave" '. + {grupo: $g}' <<<"$item")")
+      dependencias_hechas "$item"; rc=$?
+      case $rc in
+        0) items+=("$(jq -c --arg g "$epica_clave" '. + {grupo: $g}' <<<"$item")") ;;
+        2) return 1 ;;
+      esac
     done < <(jq -c '.[]' <<<"$elegibles")
   done < <(jq -r '.[] | [.id, .clave] | @tsv' <<<"$epicas_ordenadas")
 
   local sueltas elegibles2
-  sueltas=$("$NOTION" sueltas "$(project_code)" 2>/dev/null) || sueltas='[]'
+  if ! sueltas=$("$NOTION" sueltas "$(project_code)" 2>&1); then
+    err "no pude leer Notion (sueltas): $sueltas"
+    return 1
+  fi
   elegibles2=$(jq -c "$PRIO_DEF"'
     map(select(.agente != "humano"))
     | sort_by([(.prioridad | prio), (.orden // 1e9), (.creado // "")])' <<<"$sueltas")
   while IFS= read -r item; do
     [ -n "$item" ] || continue
-    dependencias_hechas "$item" && items+=("$(jq -c '. + {grupo: "(sin Épica)"}' <<<"$item")")
+    dependencias_hechas "$item"; rc=$?
+    case $rc in
+      0) items+=("$(jq -c '. + {grupo: "(sin Épica)"}' <<<"$item")") ;;
+      2) return 1 ;;
+    esac
   done < <(jq -c '.[]' <<<"$elegibles2")
 
   if [ "${#items[@]}" -eq 0 ]; then
@@ -116,14 +141,15 @@ task_start_vivo() {  # task_start_vivo <activas JSON>
 }
 
 modo_siguiente() {
-  local codigo activas en_curso
+  local codigo activas en_curso cola
   codigo=$(project_code)
   [ -n "$codigo" ] || { err "no encuentro \"project\" en $WS/.devkit/devkit.toml"; exit 1; }
   activas=$("$NOTION" activas "$codigo" 2>&1) || { err "no pude leer Notion: $activas"; exit 1; }
   en_curso=$(jq -r '[.[] | select(.estado == "En progreso" or .estado == "Revisión automática")] | length' <<<"$activas")
   [ "$en_curso" -eq 0 ] || exit 0
   task_start_vivo "$activas" && exit 0
-  jq -r '.[0].clave // empty' <<<"$(armar_cola "$activas")"
+  cola=$(armar_cola "$activas") || exit 1
+  jq -r '.[0].clave // empty' <<<"$cola"
 }
 
 modo_lista() {
@@ -131,7 +157,7 @@ modo_lista() {
   codigo=$(project_code)
   [ -n "$codigo" ] || { err "no encuentro \"project\" en $WS/.devkit/devkit.toml"; exit 1; }
   activas=$("$NOTION" activas "$codigo" 2>&1) || { err "no pude leer Notion: $activas"; exit 1; }
-  cola=$(armar_cola "$activas")
+  cola=$(armar_cola "$activas") || exit 1
   jq -r '.[:10][] | "\(.clave)\t\(.grupo)\t\(.titulo // "")"' <<<"$cola" |
     while IFS=$'\t' read -r clave grupo titulo; do
       printf '%-12s %-14s %s\n' "$clave" "$grupo" "$(printf '%s' "$titulo" | cut -c1-60)"
@@ -223,6 +249,30 @@ DEVKIT-91" \
     "$(grep 'DEVKIT-51' <<<"$got" | grep -q 'DEVKIT-50' && echo si || echo no)"
   check "--lista: el grupo de una suelta es (sin Épica)" si \
     "$(grep 'DEVKIT-90' <<<"$got" | grep -q '(sin Épica)' && echo si || echo no)"
+
+  # DEVKIT-119, H1 de pr-review: si Notion falla al leer las hijas de la
+  # Épica (rate limit, timeout), cola.sh no puede degradarse a "no hay
+  # hijas" y sugerir otra card con exit 0: debe cortar sin nada en stdout y
+  # con exit distinto de 0, para que quien lo llame note el fallo.
+  local notion_falla_hijas="$tmp/notion-falla-hijas"
+  cat >"$notion_falla_hijas" <<FIN
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    cat "$tmp/activas.json" ;;
+  "card DEVKIT-50")
+    echo '{"id":"epica-50","clave":"DEVKIT-50","prioridad":"alta","creado":"2026-01-01T00:00:00.000Z"}' ;;
+  "hijas epica-50")
+    echo "rate limit" >&2
+    exit 1 ;;
+esac
+FIN
+  chmod +x "$notion_falla_hijas"
+  got=$(env DEVKIT_NOTION_BIN="$notion_falla_hijas" DEVKIT_WS="$ws" DEVKIT_PS_BIN="$ps_libre" bash "$HERE/cola.sh")
+  rc_falla_hijas=$?
+  check "Notion falla al leer hijas: sin salida, no sugiere otra card" "" "$got"
+  check "Notion falla al leer hijas: exit distinto de 0" si \
+    "$([ "$rc_falla_hijas" -ne 0 ] && echo si || echo no)"
 
   # Nada con una card en curso: DEVKIT-93 En progreso en el proyecto basta
   # para que cola.sh (sin argumento) no sugiera nada, aunque la cola de
