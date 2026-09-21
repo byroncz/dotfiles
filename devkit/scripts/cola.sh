@@ -160,7 +160,12 @@ modo_lista() {
   cola=$(armar_cola "$activas") || exit 1
   jq -r '.[:10][] | "\(.clave)\t\(.grupo)\t\(.titulo // "")"' <<<"$cola" |
     while IFS=$'\t' read -r clave grupo titulo; do
-      printf '%-12s %-14s %s\n' "$clave" "$grupo" "$(printf '%s' "$titulo" | cut -c1-60)"
+      # %-14s de printf rellena por bytes, no por caracteres: un grupo con
+      # acento (p.ej. "(sin Épica)") queda un espacio corto (DEVKIT-119, H3
+      # de pr-review). ${#grupo} sí cuenta caracteres en un locale UTF-8.
+      local relleno=$((14 - ${#grupo}))
+      [ "$relleno" -ge 1 ] || relleno=1
+      printf '%-12s %s%*s%s\n' "$clave" "$grupo" "$relleno" "" "$(printf '%s' "$titulo" | cut -c1-60)"
     done
 }
 
