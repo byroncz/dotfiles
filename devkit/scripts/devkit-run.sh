@@ -2544,16 +2544,24 @@ arranque_bucle_ts() {  # arranque_bucle_ts <watch.log>
 # cubre "sin lanzamientos registrados"- para no inventar una duración desde
 # `ahora`. Mismo formato de columnas que `estado_filas`, así fluye por el
 # mismo `formatear_fila` que el resto de la tabla.
-fila_en_espera() {  # fila_en_espera <watch.log> <ahora epoch>
-  local wlog=$1 ahora=$2 t0 edad detalle clave_merge
+# <bucle_texto> (DEVKIT-133 H2) es la salida de `senal_bucle`: con el bucle
+# MUERTO o SIN SEÑAL nadie va a tomar la cola, así que DETALLE dice "bucle
+# parado" en vez de "cola vacía"/"esperando aprobación de ...", que daría a
+# entender que el sistema sigue esperando trabajo.
+fila_en_espera() {  # fila_en_espera <watch.log> <ahora epoch> [bucle_texto]
+  local wlog=$1 ahora=$2 bucle_texto=${3:-} t0 edad detalle clave_merge
   t0=$(ultima_actividad_ts "$wlog") || t0=$(arranque_bucle_ts "$wlog") || return 1
   [ -n "$t0" ] || return 1
   edad=$((ahora - t0))
-  clave_merge=$(esperando_aprobacion)
-  if [ -n "$clave_merge" ]; then
-    detalle="esperando aprobación de $clave_merge"
+  if grep -qE 'MUERTO|SIN SEÑAL' <<<"$bucle_texto"; then
+    detalle="bucle parado"
   else
-    detalle="cola vacía"
+    clave_merge=$(esperando_aprobacion)
+    if [ -n "$clave_merge" ]; then
+      detalle="esperando aprobación de $clave_merge"
+    else
+      detalle="cola vacía"
+    fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "(en espera)" - bucle "$(hace "$edad")" "en espera" "$detalle" - "$(hace "$edad")" -
@@ -2583,7 +2591,7 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
   printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$((total - max))"
 }
 
-mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=]
+mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1] [color=] [filas=] [bucle_texto=]
   local permitir_refresco_cuota=${1:-1} idx=${2:-0} fijo=${3:-1} color_habilitado=${4:-}
   local filas skill clave origen edad estado detalle modelo duracion turnos
   # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
@@ -2598,6 +2606,11 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   else
     filas=$(estado_filas "$WATCH_LOG" "$ahora_estado")
   fi
+  # <bucle_texto> (DEVKIT-133 H2), sexto argumento: mismo <bucle> que ya
+  # calculó quien llama para la cabecera (`senal_bucle`), pasado tal cual a
+  # `fila_en_espera` para que DETALLE no diga "cola vacía" con el bucle
+  # parado.
+  local bucle_texto=${6:-}
   # Fila "(en espera)" (DEVKIT-133): sin ninguna en curso, se agrega al final
   # para medir el tiempo ocioso, con lo que el sistema espera en DETALLE.
   # `fila_en_espera` sale vacía (rc=1) sin ningún cierre ni arranque de bucle
@@ -2605,7 +2618,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   # igual que antes de esta card.
   if ! printf '%s\n' "$filas" | awk -F'\t' '$5=="en curso"{f=1} END{exit !f}'; then
     local fila_espera
-    if fila_espera=$(fila_en_espera "$WATCH_LOG" "$ahora_estado"); then
+    if fila_espera=$(fila_en_espera "$WATCH_LOG" "$ahora_estado" "$bucle_texto"); then
       if [ -n "$filas" ]; then filas="$filas"$'\n'"$fila_espera"; else filas=$fila_espera; fi
     fi
   fi
@@ -2801,7 +2814,7 @@ seguir_estado() {
     frame=$(printf 'devkit-run --estado  %s %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -2854,7 +2867,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
-    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas")
+    frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
     i=$((i + 1))
     if [ -t 1 ]; then
       cuadro_sin_parpadeo "$frame"
@@ -6818,6 +6831,14 @@ FIN
         fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
   check "fila_en_espera: sin watch.log, vacío (rc=1)" 1 \
     "$(fila_en_espera "$tmp/en-espera-inexistente/watch.log" "$espera_ahora" >/dev/null 2>&1; echo $?)"
+  check "fila_en_espera: DETALLE bucle parado con el bucle MUERTO, no cola vacía" "bucle parado" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" 'bucle: MUERTO, no encuentro watch.sh en ps' \
+        | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: DETALLE bucle parado con SIN SEÑAL, ni con card esperando aprobación" "bucle parado" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" 'bucle: SIN SEÑAL hace 10m' \
+        | awk -F'\t' '{print $6}')"
 
   pslist_espera="$tmp/ps-en-espera"
   printf '#!/usr/bin/env bash\n' >"$pslist_espera"
@@ -8115,7 +8136,7 @@ $card_md"
     printf 'devkit-run --estado  %s %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
       "$estado_bucle_una"
-    mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una"
+    mostrar_estado 1 0 1 "$estado_color" "$estado_filas_una" "$estado_bucle_una"
     exit 0
     ;;
   --tablero)
