@@ -2987,6 +2987,11 @@ run_tests() {
   # consulte la card real en Notion ni el PR real en GitHub.
   export RONDA_DIR="$tmp/ronda"
   mkdir -p "$RONDA_DIR"
+  # Repo aislado para pr_de_clave: sin card ni PR en los dobles, cae a buscar
+  # una rama `<tipo>/<Clave>-` en el workspace. Sin este repo vacío usaría el
+  # workspace real (WS por defecto) y una rama real que calzara con la Clave
+  # de prueba (DEVKIT-99) volvería flaky el caso "sin PR ni rama" (DEVKIT-104).
+  git init -q "$tmp/ronda-ws"
   cat >"$tmp/notion-doble" <<'FIN'
 #!/usr/bin/env bash
 case "$1" in
@@ -3894,7 +3899,7 @@ FIN
   }
   ronda_env() {  # ronda_env <función> <args...>, con la tabla de rondas
     CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles-rondas.toml" FRONTERA_CACHE_DIR="$tmp/frontera-rondas" \
-      WATCH_LOG="$tmp/rondas-watch.log" "$@"
+      WATCH_LOG="$tmp/rondas-watch.log" WS="$tmp/ronda-ws" "$@"
   }
   printf '{"pr":"https://github.com/o/r/pull/7","rama":"https://github.com/o/r/tree/feat/DEVKIT-7-algo"}' \
     >"$RONDA_DIR/card-DEVKIT-7.json"
