@@ -97,7 +97,11 @@ function esPestañaDeChuleta(tab) {
 }
 
 async function activate(context) {
-  await aplicarSettings();
+  // Sin await: aplicar settings.json nunca debe ser requisito para que el
+  // comando, el serializer o la reparación de la chuleta de abajo queden
+  // registrados. aplicarSettings ya atrapa sus propios errores (lectura del
+  // archivo y cada config.update), así que no hay excepción que perder aquí.
+  aplicarSettings();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('devkit.cheatsheet.show', () => mostrarChuleta())
