@@ -682,6 +682,11 @@ run_skill() {
     "$DEVKIT_RUN" --presupuesto-corte "$prompt" "$logf" "$presupuesto" "$turnos_reales" "$clave"
   fi
   work_state
+  # `$attempt` es el mismo contador para `quota_pause` y `transient_retry`
+  # (DEVKIT-124, H3): si una cuota agotada alterna con un 529 sobre el mismo
+  # lanzamiento, ambos gastan del mismo presupuesto de reintentos en vez de
+  # tener el suyo propio. Es un caso raro -las dos causas de corte son
+  # distintas- y no vale la pena separar los contadores para eso.
   if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then
     if quota_hit "$logf"; then
       quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
