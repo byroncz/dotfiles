@@ -396,6 +396,21 @@ role_of() {  # role_of <prompt>
   esac
 }
 
+# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
+# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
+# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
+# a partir del nombre del skill solo, para marcar filas ya cerradas en
+# `--costos`. Definida acá, junto a `role_field`/`role_of` de los que depende,
+# y no más abajo con el resto de `--costos` (DEVKIT-131 H3): ANCHO_TURNOS la
+# llama al cargar el script, antes de que existan las funciones que van
+# después en el archivo.
+presupuesto_de_skill() {  # presupuesto_de_skill <skill>
+  local skill=$1 valor
+  valor=$(role_field presupuesto "$skill")
+  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
+  printf '%s' "$valor"
+}
+
 # Si el modelo <alias> responde, con el resultado cacheado en
 # FRONTERA_CACHE_DIR para no repetir la llamada en cada lanzamiento (DEVKIT-54:
 # "una llamada mínima por modelo", "una vez por arranque"). Devuelve
@@ -2163,15 +2178,20 @@ ESTADOS_CON_GLIFO=(
   "⚠ sin registro" "! sin registro"
 )
 
-# MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera`
-# (roles.toml, DEVKIT-131: el alias, no un número a mano) y el resto en su
-# forma más larga real -"/medium r9": "medium" es el esfuerzo más largo que
-# acepta `--esfuerzo` (línea de uso, arriba) y una ronda de un dígito es la
-# que se ve en la práctica-.
+# MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera` (roles.toml,
+# DEVKIT-131: el alias, no un número a mano) y también de `implementacion.rondas`/
+# `revision.rondas` -alias:esfuerzo por elemento, DEVKIT-61-, porque esos dos
+# también son alias reales de roles.toml y `frontera` no los repite (DEVKIT-131
+# H3: MODELO solo tomaba los de `frontera` y un alias más largo en `.rondas`
+# desbordaba la columna sin que nada lo notara). El resto en su forma más larga
+# real -"/medium r9": "medium" es el esfuerzo más largo que acepta `--esfuerzo`
+# (línea de uso, arriba) y una ronda de un dígito es la que se ve en la
+# práctica-.
 mapfile -t ALIAS_FRONTERA < <(frontera_list)
 [ "${#ALIAS_FRONTERA[@]}" -gt 0 ] || ALIAS_FRONTERA=(fable opus sonnet)
+mapfile -t ALIAS_RONDAS < <({ toml_lista implementacion.rondas; toml_lista revision.rondas; } | sed -E 's/:.*$//')
 MODELOS_CON_ESFUERZO=()
-for _alias_frontera in "${ALIAS_FRONTERA[@]}"; do
+for _alias_frontera in "${ALIAS_FRONTERA[@]}" "${ALIAS_RONDAS[@]}"; do
   MODELOS_CON_ESFUERZO+=("$_alias_frontera/medium r9")
 done
 unset _alias_frontera
@@ -2185,10 +2205,22 @@ ANCHO_HACE=$(ancho_de "23h59m")
 ANCHO_DURO=$ANCHO_HACE
 ANCHO_ESTADO=$(ancho_de "${ESTADOS_CON_GLIFO[@]}")
 ANCHO_MODELO=$(ancho_de "${MODELOS_CON_ESFUERZO[@]}")
-# TURNOS: "<turnos_usados>/<presupuesto>[!]"; la forma más larga real hoy es
-# "125/120!" (8), contra `presupuesto.task-start` (roles.toml), el más alto
-# de las cinco skills de arriba -un exceso real no le suma un dígito más.
-ANCHO_TURNOS=$(ancho_de "125/120!")
+# TURNOS: "<turnos_usados>/<presupuesto>[!]", con <presupuesto> el mayor
+# `presupuesto_de_skill` entre las skills reales -`presupuesto.<skill>` de
+# roles.toml, o el `max_turns` de su rol si esa skill no lo anula- (DEVKIT-131
+# H3: antes era el literal "125/120!", y un roles.toml de proyecto con un
+# presupuesto de más dígitos desbordaba la columna sin que nada lo detectara).
+# <turnos_usados> puede llevar un dígito más que <presupuesto> por un exceso
+# real; de ahí el "9" de más en PRESUPUESTO_MAX_MAS_UNO.
+PRESUPUESTO_MAX=0
+for _skill_presupuesto in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+  _v_presupuesto=$(presupuesto_de_skill "$_skill_presupuesto")
+  case "$_v_presupuesto" in '' | *[!0-9]*) continue ;; esac
+  [ "$_v_presupuesto" -gt "$PRESUPUESTO_MAX" ] && PRESUPUESTO_MAX=$_v_presupuesto
+done
+unset _skill_presupuesto _v_presupuesto
+PRESUPUESTO_MAX_MAS_UNO=$(printf '9%.0s' $(seq 1 $((${#PRESUPUESTO_MAX} + 1))))
+ANCHO_TURNOS=$(ancho_de "${PRESUPUESTO_MAX_MAS_UNO}/${PRESUPUESTO_MAX}!")
 ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
@@ -3025,18 +3057,6 @@ costos_totales_card() {  # costos_totales_card <Clave>
   done < <(costos_filas "${COSTOS_LOG:-/dev/null}" "$clave")
   [ "$filas" = 1 ] || return 1
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
-}
-
-# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
-# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
-# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
-# a partir del nombre del skill solo, para marcar filas ya cerradas en
-# `--costos`.
-presupuesto_de_skill() {  # presupuesto_de_skill <skill>
-  local skill=$1 valor
-  valor=$(role_field presupuesto "$skill")
-  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
-  printf '%s' "$valor"
 }
 
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
