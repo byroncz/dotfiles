@@ -3546,6 +3546,114 @@ FIN
   check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
     "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
 
+  # --- review-publish.sh de verdad: "Qué hace" trae el primer párrafo
+  # completo de "## Qué cambia", no dos líneas físicas (DEVKIT-115) ----------
+  # task-submit.sh envuelve el cuerpo del PR a unos 75 caracteres: un párrafo
+  # real ocupa varias líneas físicas. El `head -2` original cortaba a media
+  # frase (evidencia del PR 81, comentario del 2026-09-21).
+  local rpub2_dir
+  rpub2_dir=$(mktemp -d "$tmp/rpub2.XXXXXX")
+  mkdir -p "$rpub2_dir/ws/.devkit"
+  cat >"$rpub2_dir/informe.md" <<'FIN'
+<!-- devkit-review sha=def456 verdict=OK -->
+Informe de prueba, todos los criterios verificados.
+FIN
+  printf '## Qué cambia\nEl caso "sin PR ni rama" del bloque de devkit-run.sh --test aislado\nusaba el workspace real (WS por defecto) para el git for-each-ref de\nramas, en vez de un workspace de prueba propio.\n\n## Cómo probarlo\nN/A\n' \
+    >"$rpub2_dir/cuerpo.md"
+  jq -Rs --arg titulo "DEVKIT-9305: probar review-publish.sh" '{title: $titulo, body: .}' \
+    "$rpub2_dir/cuerpo.md" >"$rpub2_dir/pr-view.json"
+  cat >"$rpub2_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9305"}' ;;
+  set) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub2_dir/notion-doble"
+  cat >"$rpub2_dir/gh-doble" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = api ] && exit 1
+if [ "\$1 \$2" = "pr view" ]; then
+  if printf '%s' "\$*" | grep -q reviews; then
+    printf '{"reviews":[]}'
+  else
+    cat "$rpub2_dir/pr-view.json"
+  fi
+  exit 0
+fi
+case "\$1 \$2" in
+  "pr review") exit 0 ;;
+  "pr edit") cat >/dev/null; exit 0 ;;
+  "pr comment") cat >"$rpub2_dir/comentario.md"; exit 0 ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub2_dir/gh-doble"
+  DEVKIT_WS="$rpub2_dir/ws" DEVKIT_GH_BIN="$rpub2_dir/gh-doble" DEVKIT_NOTION_BIN="$rpub2_dir/notion-doble" \
+    DEVKIT_REVIEW_WORKTREE_DIR="$rpub2_dir/worktrees" DEVKIT_RUN_DIR="$rpub2_dir/run" \
+    bash "$HERE/review-publish.sh" 9305 "$rpub2_dir/informe.md" >"$rpub2_dir/salida.out" 2>"$rpub2_dir/salida.err"
+  check "review-publish.sh de verdad: \"Qué hace\" trae el párrafo completo de un cuerpo envuelto a 75 columnas (DEVKIT-115)" 1 \
+    "$(grep -c 'ramas, en vez de un workspace de prueba propio\.' "$rpub2_dir/comentario.md" 2>/dev/null)"
+
+  # --- review-publish.sh de verdad: párrafo de más de 400 caracteres corta en
+  # el último punto seguido, no en el punto de un nombre de archivo (DEVKIT-115,
+  # H1) ------------------------------------------------------------------------
+  # Antes de esta card, `corte="${limite%.*}"` cortaba en el último punto de
+  # cualquier clase. Un párrafo con un nombre de archivo (con su propio punto,
+  # sin espacio detrás) después del último punto seguido reproducía el corte a
+  # media frase: "...review-publish. (…)". El párrafo de abajo pone ese punto de
+  # nombre de archivo dentro de los primeros 400 caracteres, después del único
+  # punto seguido real.
+  local rpub3_dir
+  rpub3_dir=$(mktemp -d "$tmp/rpub3.XXXXXX")
+  mkdir -p "$rpub3_dir/ws/.devkit"
+  local rpub3_sent1 rpub3_filler1 rpub3_filler2 rpub3_parrafo
+  rpub3_sent1="Esta oracion termina aqui de verdad. "
+  rpub3_filler1=$(printf 'x%.0s' $(seq 1 300))
+  rpub3_filler2=$(printf 'x%.0s' $(seq 1 80))
+  rpub3_parrafo="${rpub3_sent1}${rpub3_filler1} review-publish.sh ${rpub3_filler2}"
+  printf '## Qué cambia\n%s\n\n## Cómo probarlo\nN/A\n' "$rpub3_parrafo" >"$rpub3_dir/cuerpo.md"
+  jq -Rs --arg titulo "DEVKIT-9306: probar el corte de review-publish.sh" '{title: $titulo, body: .}' \
+    "$rpub3_dir/cuerpo.md" >"$rpub3_dir/pr-view.json"
+  cat >"$rpub3_dir/informe.md" <<'FIN'
+<!-- devkit-review sha=cafe123 verdict=OK -->
+Informe de prueba, todos los criterios verificados.
+FIN
+  cat >"$rpub3_dir/notion-doble" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  card) printf '{"id":"card-9306"}' ;;
+  set) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub3_dir/notion-doble"
+  cat >"$rpub3_dir/gh-doble" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = api ] && exit 1
+if [ "\$1 \$2" = "pr view" ]; then
+  if printf '%s' "\$*" | grep -q reviews; then
+    printf '{"reviews":[]}'
+  else
+    cat "$rpub3_dir/pr-view.json"
+  fi
+  exit 0
+fi
+case "\$1 \$2" in
+  "pr review") exit 0 ;;
+  "pr edit") cat >/dev/null; exit 0 ;;
+  "pr comment") cat >"$rpub3_dir/comentario.md"; exit 0 ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub3_dir/gh-doble"
+  DEVKIT_WS="$rpub3_dir/ws" DEVKIT_GH_BIN="$rpub3_dir/gh-doble" DEVKIT_NOTION_BIN="$rpub3_dir/notion-doble" \
+    DEVKIT_REVIEW_WORKTREE_DIR="$rpub3_dir/worktrees" DEVKIT_RUN_DIR="$rpub3_dir/run" \
+    bash "$HERE/review-publish.sh" 9306 "$rpub3_dir/informe.md" >"$rpub3_dir/salida.out" 2>"$rpub3_dir/salida.err"
+  check "review-publish.sh de verdad: el corte de más de 400 caracteres cae en el último punto seguido (DEVKIT-115, H1)" 1 \
+    "$(grep -c 'Esta oracion termina aqui de verdad\. (…)' "$rpub3_dir/comentario.md" 2>/dev/null)"
+  check "review-publish.sh de verdad: el corte no cae a mitad del nombre de archivo (DEVKIT-115, H1)" 0 \
+    "$(grep -c 'publish\. (…)' "$rpub3_dir/comentario.md" 2>/dev/null)"
+
   # --- Ciclo limpio: review-publish.sh + task-submit.sh no dejan residuos
   # (DEVKIT-99, H3) -----------------------------------------------------------
   # Un informe de pr-review sin publicar (o publicado y sin borrar) y un

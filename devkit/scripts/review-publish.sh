@@ -128,12 +128,28 @@ fi
 # (sección "## Qué cambia" del cuerpo del PR, DEVKIT-91) y lo que ya juzgó el
 # informe (Criterios "No verificado" y hallazgos baja del bloque
 # devkit-findings), sin redactar nada nuevo de criterio.
+#
+# El primer párrafo completo (hasta la primera línea en blanco), con las
+# líneas físicas unidas por espacios: task-submit.sh envuelve el cuerpo del
+# PR a unos 75 caracteres, así que una sola línea física es media frase
+# (DEVKIT-115).
 que_cambia=$(awk '
   $0 == "## Qué cambia" { activo = 1; next }
-  /^## / { activo = 0 }
-  activo && NF { print }
-' <<<"$cuerpo_pr" | head -2)
-[ -n "$que_cambia" ] || que_cambia="(el PR no trae la sección \"## Qué cambia\")"
+  activo && /^## / { exit }
+  activo && !NF { if (parrafo) exit; next }
+  activo { printf "%s ", $0; parrafo = 1 }
+' <<<"$cuerpo_pr" | sed -E 's/[[:space:]]+$//')
+if [ -z "$que_cambia" ]; then
+  que_cambia="(el PR no trae la sección \"## Qué cambia\")"
+elif [ "${#que_cambia}" -gt 400 ]; then
+  limite="${que_cambia:0:400}"
+  corte="${limite%. *}"
+  if [ "$corte" != "$limite" ]; then
+    que_cambia="$corte. (…)"
+  else
+    que_cambia="$limite (…)"
+  fi
+fi
 
 no_verificado=$(awk '
   /^### Criterios de aceptación/ { activo = 1; next }
