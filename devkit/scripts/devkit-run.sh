@@ -733,7 +733,12 @@ alarma_sin_notion() {  # alarma_sin_notion <prompt>
 # worktree aquí mismo, con el glob de bash, y se agrega un patrón literal por
 # cada uno. Por el mismo motivo, la lectura de git queda acotada a ese
 # worktree con `git -C <worktree>` en vez del `git diff`/`log`/`show` sin
-# argumentos que solo sirve sobre /workspace (H7).
+# argumentos que solo sirve sobre /workspace (H7). `bash -n` también va con
+# un patrón literal por script: `Bash(bash -n <worktree>:*)` no hacía match
+# con `<worktree>/devkit/scripts/x.sh`, y un `Bash(bash -n:*)` genérico
+# admitiría `bash -n +n x.sh`, que vuelve a activar la ejecución. `ruff
+# check` y `pytest` no llevan patrón propio: ya los autoriza `settings.json`
+# (`Bash(ruff:*)`, `Bash(pytest:*)`) sobre cualquier ruta.
 #
 # Imprime el modo de permiso en la primera línea y, una por línea, cada
 # argumento de `--allowedTools`, para que `run_claude` los junte con
@@ -760,9 +765,11 @@ perfil_de() {  # perfil_de <skill> [worktree de pr-review]
         printf 'Bash(git -C %s log:*)\n' "$worktree"
         printf 'Bash(git -C %s show:*)\n' "$worktree"
         printf 'Bash(git -C %s grep:*)\n' "$worktree"
-        printf 'Bash(bash -n %s:*)\n' "$worktree"
-        printf 'Bash(ruff check %s:*)\n' "$worktree"
-        printf 'Bash(pytest %s:*)\n' "$worktree"
+        for script in "$worktree"/*.sh "$worktree"/devkit/*.sh \
+                      "$worktree"/devkit/*/*.sh; do
+          [ -e "$script" ] || continue
+          printf 'Bash(bash -n %s:*)\n' "$script"
+        done
       fi
       ;;
     *)
@@ -3619,6 +3626,8 @@ mcp__claude_ai_Notion' \
   mkdir -p "$worktree_perfil/devkit/scripts"
   : >"$worktree_perfil/devkit/scripts/devkit-run.sh"
   : >"$worktree_perfil/devkit/scripts/pr-guard.sh"
+  : >"$worktree_perfil/devkit/entrypoint.sh"
+  : >"$worktree_perfil/new-project.sh"
   check "perfil_de: --test del worktree, un patrón literal por script real" \
     "Bash(bash $worktree_perfil/devkit/scripts/devkit-run.sh --test:*)
 Bash(bash $worktree_perfil/devkit/scripts/pr-guard.sh --test:*)
@@ -3626,19 +3635,20 @@ Bash(git -C $worktree_perfil diff:*)
 Bash(git -C $worktree_perfil log:*)
 Bash(git -C $worktree_perfil show:*)
 Bash(git -C $worktree_perfil grep:*)
-Bash(bash -n $worktree_perfil:*)
-Bash(ruff check $worktree_perfil:*)
-Bash(pytest $worktree_perfil:*)" \
-    "$(perfil_de pr-review "$worktree_perfil" | tail -9)"
-  check "perfil_de: sin scripts en el worktree, ningún --test, pero sí la lectura acotada" \
+Bash(bash -n $worktree_perfil/new-project.sh:*)
+Bash(bash -n $worktree_perfil/devkit/entrypoint.sh:*)
+Bash(bash -n $worktree_perfil/devkit/scripts/devkit-run.sh:*)
+Bash(bash -n $worktree_perfil/devkit/scripts/pr-guard.sh:*)" \
+    "$(perfil_de pr-review "$worktree_perfil" | tail -10)"
+  check "perfil_de: sin scripts en el worktree, ningún --test ni bash -n, pero sí la lectura acotada" \
     "Bash(git -C /tmp/devkit-review-vacio diff:*)
 Bash(git -C /tmp/devkit-review-vacio log:*)
 Bash(git -C /tmp/devkit-review-vacio show:*)
-Bash(git -C /tmp/devkit-review-vacio grep:*)
-Bash(bash -n /tmp/devkit-review-vacio:*)
-Bash(ruff check /tmp/devkit-review-vacio:*)
-Bash(pytest /tmp/devkit-review-vacio:*)" \
-    "$(perfil_de pr-review /tmp/devkit-review-vacio | tail -7)"
+Bash(git -C /tmp/devkit-review-vacio grep:*)" \
+    "$(perfil_de pr-review /tmp/devkit-review-vacio | tail -4)"
+  check "perfil_de: sin patrón bash -n, ruff check ni pytest sobre la raíz del worktree" \
+    0 "$(perfil_de pr-review "$worktree_perfil" \
+      | grep -cE "^Bash\((bash -n|ruff check|pytest) $worktree_perfil:")"
 
   # H5 de la revisión del PR 92: `--allowedTools` solo se suma a la lista
   # `allow` de `settings.json`, que sigue autorizando `git add/commit/push` y
