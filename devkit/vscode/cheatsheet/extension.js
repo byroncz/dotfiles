@@ -35,7 +35,7 @@ async function aplicarSettings() {
   }
   const config = vscode.workspace.getConfiguration();
   for (const [clave, valor] of Object.entries(declarados)) {
-    if (config.inspect(clave)?.globalValue === valor) continue;
+    if (JSON.stringify(config.inspect(clave)?.globalValue) === JSON.stringify(valor)) continue;
     try {
       await config.update(clave, valor, vscode.ConfigurationTarget.Global);
     } catch (error) {
