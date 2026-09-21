@@ -692,6 +692,7 @@ esac
 FIN
 cat >"$CICLO/devkit-run.sh" <<'FIN'
 #!/usr/bin/env bash
+[ "$1" = --otros-agentes ] && exit 0
 printf '%s\n' "$*" >>"$FAKE_NOTION/lanzamientos"
 FIN
 # Doble de cola.sh (DEVKIT-120): task-close.sh ya no elige la siguiente hija
@@ -970,6 +971,7 @@ FIN
 chmod +x "$IDEMP_COLA/cola"
 cat >"$IDEMP_COLA/devkit-run" <<FIN
 #!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
 printf '%s\n' "\$*" >>"$IDEMP_COLA/lanzamientos"
 touch "$IDEMP_COLA/lanzada"
 FIN
@@ -1010,6 +1012,7 @@ FIN
 chmod +x "$SUELTA/ps-vacio"
 cat >"$SUELTA/devkit-run" <<FIN
 #!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
 printf '%s\n' "\$*" >>"$SUELTA/lanzamientos"
 FIN
 chmod +x "$SUELTA/devkit-run"
@@ -1022,6 +1025,31 @@ check_igual "card suelta en Lista arranca sola" "task-start DEVKIT-90" \
   "$(cat "$SUELTA/lanzamientos" 2>/dev/null)"
 check_log "card suelta en Lista arranca sola: línea cola-<n> en watch.log" \
   'cola-90 terminado: bash, lanzada la siguiente card: task-start DEVKIT-90'
+
+# Workspace sucio: no se lanza nada, solo queda "cola-<n> espera" en
+# watch.log (DEVKIT-120, H1). Antes, un archivo sin commit hacía fallar
+# `task-start` en cada pasada del sondeo y `task_begin_fallo` bloqueaba la
+# card en Lista, y la siguiente pasada bloqueaba la que seguía: la cola
+# entera se apagaba card por card en minutos.
+SUCIO=$(mktemp -d -p "$TMP")
+mkdir -p "$SUCIO/run" "$SUCIO/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$SUCIO/ws/.devkit/devkit.toml"
+git init -q "$SUCIO/ws"
+touch "$SUCIO/ws/sin-commit.txt"
+cat >"$SUCIO/devkit-run" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
+printf '%s\n' "\$*" >>"$SUCIO/lanzamientos"
+FIN
+chmod +x "$SUCIO/devkit-run"
+env DEVKIT_NOTION_BIN="$SUELTA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
+    DEVKIT_RUN_BIN="$SUCIO/devkit-run" DEVKIT_RUN_DIR="$SUCIO/run" DEVKIT_WS="$SUCIO/ws" \
+  bash "$WATCH" --lanzar-cola 92 >"$SUCIO/watch.log" 2>&1
+OUT="$SUCIO/watch.log"
+check_igual "workspace sucio: no lanza task-start" "" \
+  "$(cat "$SUCIO/lanzamientos" 2>/dev/null)"
+check_log "workspace sucio: cola-<n> espera queda en watch.log" \
+  'cola-92 espera: workspace sucio'
 
 # Idempotente: con la card ya En progreso (lo que Notion reflejaría tras el
 # lanzamiento real), cola.sh no vuelve a sugerirla y una segunda pasada no

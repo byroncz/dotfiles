@@ -48,7 +48,7 @@ say() { printf 'task-close: %s\n' "$*"; }
 # `En progreso` o `Revisión automática` en el proyecto, o un `task-start`
 # vivo para una card en `Lista` -la guarda vive en cola.sh, no aquí.
 lanzar_cola() {  # lanzar_cola <n>
-  local n=$1 siguiente out rc estado
+  local n=$1 siguiente out rc estado sucio otros motivo
   siguiente=$("$COLA" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -57,6 +57,19 @@ lanzar_cola() {  # lanzar_cola <n>
     return
   fi
   [ -n "$siguiente" ] || return 0
+  # Mismo chequeo que watch.sh (DEVKIT-120, H1): sin él, un archivo sin
+  # commit o un `claude -p` ajeno hacía fallar `task-start` de la siguiente
+  # card justo después de cerrar esta.
+  sucio=$(git -C "$WS" status --porcelain --untracked-files=all 2>/dev/null)
+  if [ -n "$sucio" ]; then
+    motivo="workspace sucio: $(printf '%s' "$sucio" | tr '\n' ' ')"
+  elif ! otros=$("$DEVKIT_RUN" --otros-agentes 2>&1); then
+    motivo="otro agente: $(printf '%s' "$otros" | tr '\n' ' ')"
+  fi
+  if [ -n "${motivo:-}" ]; then
+    printf '%s cola-%s espera: %s\n' "$(date +%FT%T%:z)" "$n" "$motivo" >>"$WATCH_LOG"
+    return 0
+  fi
   out=$("$DEVKIT_RUN" task-start "$siguiente" 2>&1)
   rc=$?
   estado=terminado

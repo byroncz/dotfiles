@@ -906,8 +906,13 @@ caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
 # `En progreso` o `Revisión automática` en el proyecto, o un `task-start`
 # vivo para una card en `Lista` -la guarda vive en cola.sh, no aquí-, así
 # que dos llamadas seguidas no lanzan dos veces.
+#
+# Persiste entre pasadas del bucle principal, que vive en este mismo proceso
+# (DEVKIT-120, H1): guarda el último motivo por el que no se lanzó, para
+# avisar una sola vez por motivo y no en cada pasada del sondeo.
+LANZAR_COLA_ULTIMO_MOTIVO=""
 lanzar_cola() {  # lanzar_cola <n>
-  local n=$1 siguiente out rc estado
+  local n=$1 siguiente out rc estado sucio otros motivo
   siguiente=$("$COLA_BIN" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -915,6 +920,24 @@ lanzar_cola() {  # lanzar_cola <n>
     return
   fi
   [ -n "$siguiente" ] || return 0
+  # Mismo chequeo que task-begin.sh antes de tocar el workspace (DEVKIT-120,
+  # H1): sin él, un archivo sin commit o un `claude -p` ajeno hacía fallar
+  # `task-start` en cada pasada, y `task_begin_fallo` bloqueaba la cola
+  # entera card por card, minuto a minuto.
+  sucio=$(git -C "$WS" status --porcelain --untracked-files=all 2>/dev/null)
+  if [ -n "$sucio" ]; then
+    motivo="workspace sucio: $(printf '%s' "$sucio" | tr '\n' ' ')"
+  elif ! otros=$("$DEVKIT_RUN" --otros-agentes 2>&1); then
+    motivo="otro agente: $(printf '%s' "$otros" | tr '\n' ' ')"
+  fi
+  if [ -n "${motivo:-}" ]; then
+    if [ "$motivo" != "$LANZAR_COLA_ULTIMO_MOTIVO" ]; then
+      log "cola-$n espera: $motivo"
+      LANZAR_COLA_ULTIMO_MOTIVO=$motivo
+    fi
+    return 0
+  fi
+  LANZAR_COLA_ULTIMO_MOTIVO=""
   out=$(DEVKIT_ORIGEN=bucle "$DEVKIT_RUN" task-start "$siguiente" 2>&1)
   rc=$?
   printf '%s\n' "$out" >"$RUN_DIR/cola-$n.log"
