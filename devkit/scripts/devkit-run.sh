@@ -396,6 +396,21 @@ role_of() {  # role_of <prompt>
   esac
 }
 
+# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
+# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
+# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
+# a partir del nombre del skill solo, para marcar filas ya cerradas en
+# `--costos`. Definida acá, junto a `role_field`/`role_of` de los que depende,
+# y no más abajo con el resto de `--costos` (DEVKIT-131 H3): ANCHO_TURNOS la
+# llama al cargar el script, antes de que existan las funciones que van
+# después en el archivo.
+presupuesto_de_skill() {  # presupuesto_de_skill <skill>
+  local skill=$1 valor
+  valor=$(role_field presupuesto "$skill")
+  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
+  printf '%s' "$valor"
+}
+
 # Si el modelo <alias> responde, con el resultado cacheado en
 # FRONTERA_CACHE_DIR para no repetir la llamada en cada lanzamiento (DEVKIT-54:
 # "una llamada mínima por modelo", "una vez por arranque"). Devuelve
@@ -2081,9 +2096,12 @@ rellenar() {  # rellenar <texto> <ancho>
 # de watch.sh, esta autoprueba, todos sin tty pero a veces con `$TERM`
 # heredado): un tamaño grande a propósito, no uno chico. Un `tput` de respaldo
 # acá adentro devolvía 80/24 con `$TERM` definido pero sin tty -el caso más
-# común fuera de una terminal interactiva-, y esta tabla ya usa 77 columnas
-# fijas antes de DETALLE: quedaban 3 caracteres para DETALLE, mucho peor que
-# no recortar nada cuando no hay certeza real del tamaño.
+# común fuera de una terminal interactiva-, y esta tabla ya usa
+# `$ANCHO_COLUMNAS_FIJAS` columnas fijas antes de DETALLE (DEVKIT-131: se
+# calculan, no se fijan a mano; no repetir la cifra acá, que queda vieja en
+# cuanto un valor posible cambia): a 80 quedaban pocos caracteres para
+# DETALLE, mucho peor que no recortar nada cuando no hay certeza real del
+# tamaño.
 ancho_terminal() {
   local c=${COLUMNS:-}
   [ "$c" -gt 0 ] 2>/dev/null || c=200
@@ -2096,22 +2114,113 @@ alto_terminal() {
   printf '%s' "$l"
 }
 
-# Ancho de cada columna fija antes de DETALLE (DEVKIT-97, ESTADO ensanchada a
-# 16 en DEVKIT-106 H2, DURÓ y TURNOS sumadas en DEVKIT-107). Angostadas en
-# DEVKIT-107 H1 a lo que de verdad usan: SKILL 14 (task-document mide 13,
-# el nombre más largo), CARD 12 (DEVKIT-9999 mide 11, más un espacio de
-# separador -DEVKIT-107 H4: `rellenar` no lo agrega cuando el texto ya llena
-# el ancho, así que sin ese espacio de más "DEVKIT-1000" pegaba con LANZÓ),
-# LANZÓ 8 ("humano"/"bucle"), HACE y DURÓ 7 ("59m59s" no ocurre: HACE/DURÓ
-# usan minutos/horas, "23h59m" son 6), TURNOS 9 ("67/60!" son 6, con margen).
-ANCHO_SKILL=14
-ANCHO_CARD=12
-ANCHO_LANZO=8
-ANCHO_HACE=7
-ANCHO_DURO=7
-ANCHO_ESTADO=16
-ANCHO_MODELO=16
-ANCHO_TURNOS=9
+# Ancho de una columna fija: la longitud del valor posible más largo, más un
+# espacio de separación con la siguiente (DEVKIT-131). `rellenar` no agrega
+# ese espacio cuando el texto ya llena el ancho (DEVKIT-107 H4), así que tiene
+# que venir incluido acá. Sin este cálculo cada ANCHO_* se fijaba a mano
+# contra una foto de los valores del momento, y un valor nuevo la desbordaba
+# en silencio corriendo el resto de la fila -caso real: ANCHO_LANZO=8 no
+# alcanzaba para "task-close" (10).
+ancho_de() {  # ancho_de <valor>...
+  local max=0 v
+  for v in "$@"; do
+    [ "${#v}" -gt "$max" ] && max=${#v}
+  done
+  printf '%s' "$((max + 1))"
+}
+
+# SKILL: cualquier skill real que `devkit-run <skill> <arg>` pueda lanzar deja
+# línea "lanzando" en watch.log (autoprueba de /task-submit, línea ~6852);
+# task-close y task-block son bash, DEVKIT-55, y no aparecen aquí. Se leen los
+# directorios de skills instalados -$WS/.claude/skills, el símlink al
+# template (AGENTS.md)-, con $HERE/../agents/skills como alternativa en modo
+# dev (este mismo repo, antes de reinstalar la imagen); si ninguno de los dos
+# tiene skills, cae al listado fijo de siempre (DEVKIT-131 H1: una lista a
+# mano de cinco se quedó corta contra las 11 reales -template-propagate, la
+# más larga, desbordaba ANCHO_SKILL-). LANZÓ: quién pidió el lanzamiento
+# -"humano" es el respaldo de origen_de sin ancestro reconocido, "bucle" lo
+# pone run_skill de watch.sh, "task-close" lo exporta task-close.sh
+# (DEVKIT_ORIGEN) y también es el origen fijo que costos_filas asigna al
+# cierre bash del PR- o cualquiera de esas mismas skills como ancestro
+# (origen_de: un `claude -p /epic-plan` lanzando `task-start`, por ejemplo,
+# deja origen=epic-plan).
+skills_lanzables() {
+  local base dir encontrados=()
+  for base in "$WS/.claude/skills" "$HERE/../agents/skills"; do
+    encontrados=()
+    for dir in "$base"/*/; do
+      [ -f "${dir}SKILL.md" ] || continue
+      encontrados+=("$(basename "$dir")")
+    done
+    if [ "${#encontrados[@]}" -gt 0 ]; then
+      printf '%s\n' "${encontrados[@]}" | sort
+      return 0
+    fi
+  done
+  printf '%s\n' task-start pr-review task-fix task-document epic-plan
+}
+mapfile -t SKILLS_CON_LANZAMIENTO < <(skills_lanzables)
+ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
+
+# ESTADO: cada estado que arma estado_filas (comentario de esa función,
+# arriba: en curso, terminó, error, bloqueada, no arrancó, no lanzó, y "sin
+# registro" como único valor del caso por defecto) con su glifo -el de UTF-8
+# y el de respaldo ASCII (utf8_disponible), porque sin locale UTF-8 el
+# respaldo puede medir más que el icono real ("!! bloqueada" son 12, dos más
+# que "⊘ bloqueada"-.
+ESTADOS_CON_GLIFO=(
+  "⠿ en curso" "* en curso"
+  "✔ terminó" "ok terminó"
+  "✖ error" "x error"
+  "⊘ bloqueada" "!! bloqueada"
+  "○ no arrancó" "o no arrancó"
+  "○ no lanzó" "o no lanzó"
+  "⚠ sin registro" "! sin registro"
+)
+
+# MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera` (roles.toml,
+# DEVKIT-131: el alias, no un número a mano) y también de `implementacion.rondas`/
+# `revision.rondas` -alias:esfuerzo por elemento, DEVKIT-61-, porque esos dos
+# también son alias reales de roles.toml y `frontera` no los repite (DEVKIT-131
+# H3: MODELO solo tomaba los de `frontera` y un alias más largo en `.rondas`
+# desbordaba la columna sin que nada lo notara). El resto en su forma más larga
+# real -"/medium r9": "medium" es el esfuerzo más largo que acepta `--esfuerzo`
+# (línea de uso, arriba) y una ronda de un dígito es la que se ve en la
+# práctica-.
+mapfile -t ALIAS_FRONTERA < <(frontera_list)
+[ "${#ALIAS_FRONTERA[@]}" -gt 0 ] || ALIAS_FRONTERA=(fable opus sonnet)
+mapfile -t ALIAS_RONDAS < <({ toml_lista implementacion.rondas; toml_lista revision.rondas; } | sed -E 's/:.*$//')
+MODELOS_CON_ESFUERZO=()
+for _alias_frontera in "${ALIAS_FRONTERA[@]}" "${ALIAS_RONDAS[@]}"; do
+  MODELOS_CON_ESFUERZO+=("$_alias_frontera/medium r9")
+done
+unset _alias_frontera
+
+ANCHO_SKILL=$(ancho_de "${SKILLS_CON_LANZAMIENTO[@]}")
+ANCHO_CARD=12  # sin cambios (DEVKIT-107 H4): DEVKIT-9999 mide 11, más el espacio de separación.
+ANCHO_LANZO=$(ancho_de "${ORIGENES_LANZAMIENTO[@]}")
+# HACE/DURÓ: la forma más larga que devuelve `hace()` es "23h59m" (6);
+# "59m59s" no ocurre, `hace()` no combina minutos y segundos.
+ANCHO_HACE=$(ancho_de "23h59m")
+ANCHO_DURO=$ANCHO_HACE
+ANCHO_ESTADO=$(ancho_de "${ESTADOS_CON_GLIFO[@]}")
+ANCHO_MODELO=$(ancho_de "${MODELOS_CON_ESFUERZO[@]}")
+# TURNOS: "<turnos_usados>/<presupuesto>[!]", con <presupuesto> el mayor
+# `presupuesto_de_skill` entre las skills reales -`presupuesto.<skill>` de
+# roles.toml, o el `max_turns` de su rol si esa skill no lo anula- (DEVKIT-131
+# H3: antes era el literal "125/120!", y un roles.toml de proyecto con un
+# presupuesto de más dígitos desbordaba la columna sin que nada lo detectara).
+# <turnos_usados> puede llevar un dígito más que <presupuesto> por un exceso
+# real; de ahí el "9" de más en PRESUPUESTO_MAX_MAS_UNO.
+PRESUPUESTO_MAX=0
+for _skill_presupuesto in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+  _v_presupuesto=$(presupuesto_de_skill "$_skill_presupuesto")
+  case "$_v_presupuesto" in '' | *[!0-9]*) continue ;; esac
+  [ "$_v_presupuesto" -gt "$PRESUPUESTO_MAX" ] && PRESUPUESTO_MAX=$_v_presupuesto
+done
+unset _skill_presupuesto _v_presupuesto
+PRESUPUESTO_MAX_MAS_UNO=$(printf '9%.0s' $(seq 1 $((${#PRESUPUESTO_MAX} + 1))))
+ANCHO_TURNOS=$(ancho_de "${PRESUPUESTO_MAX_MAS_UNO}/${PRESUPUESTO_MAX}!")
 ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
@@ -2274,11 +2383,12 @@ punto_estado() {  # punto_estado <filas de estado_filas> <bucle de senal_bucle> 
 }
 
 encabezado_tabla() {
-  # ESTADO mide 16, no 12 (DEVKIT-81 H7, ensanchada en DEVKIT-106 H2):
-  # "⚠ sin registro" con icono y espacio ya mide 14, y sin margen queda
-  # pegado a la columna MODELO. DURÓ (junto a HACE) y TURNOS (antes de
-  # DETALLE) son de DEVKIT-107; sus anchos, angostados en DEVKIT-107 H1, están
-  # en las constantes `ANCHO_*` junto a `ANCHO_COLUMNAS_FIJAS`.
+  # Cada ANCHO_* sale de `ancho_de` contra los valores posibles reales de su
+  # columna (DEVKIT-131), no de una cifra fijada a mano: no repetir números
+  # acá, que quedan viejos en cuanto un valor posible cambia (caso real:
+  # "⚠ sin registro" ensanchó ESTADO en DEVKIT-106 H2, después de que
+  # DEVKIT-81 H7 ya la había ensanchado una vez). Las constantes `ANCHO_*`
+  # están junto a `ANCHO_COLUMNAS_FIJAS`, arriba.
   printf '%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
     "$(rellenar LANZÓ "$ANCHO_LANZO")" "$(rellenar HACE "$ANCHO_HACE")" "$(rellenar DURÓ "$ANCHO_DURO")" \
     "$(rellenar ESTADO "$ANCHO_ESTADO")" "$(rellenar MODELO "$ANCHO_MODELO")" \
@@ -2294,18 +2404,19 @@ encabezado_tabla() {
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 # <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
 # el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
-# directas de la autoprueba (sin esos tres argumentos) no cambian. ESTADO
-# ensanchada a 16 (DEVKIT-106 H2): "⚠ sin registro" con icono y espacio mide
-# 14, y sin margen quedaba pegado a MODELO. <duracion> y <turnos> (DEVKIT-107)
+# directas de la autoprueba (sin esos tres argumentos) no cambian. ANCHO_ESTADO
+# sale de `ancho_de` sobre los estados posibles (DEVKIT-131): "⚠ sin registro"
+# fue el que la ensanchó (DEVKIT-106 H2), sin margen quedaba pegado a MODELO.
+# <duracion> y <turnos> (DEVKIT-107)
 # ya llegan formateados desde `estado_filas` (o de la autoprueba, directo):
 # esta función solo alinea y colorea, no vuelve a calcularlos.
 #
 # La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
 # entra en el ancho de la terminal, se recorta completa con `recortar` -no
 # solo DETALLE- y recién ahí se pintan los colores con `pintar_rango`
-# (DEVKIT-107 H1): angostar las columnas fijas (89, antes 97) no alcanza en
-# una terminal de menos de 90 columnas, y ahí hace falta comerse parte de las
-# columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
+# (DEVKIT-107 H1): angostar `ANCHO_COLUMNAS_FIJAS` (calculado, DEVKIT-131) no
+# alcanza en una terminal más angosta que eso, y ahí hace falta comerse parte
+# de las columnas fijas de la derecha (TURNOS, MODELO), no solo DETALLE. Pintar
 # antes de ese recorte final correría el corte, como ya cuidaba DEVKIT-106 H3
 # para DETALLE por separado.
 formatear_fila() {  # formatear_fila <skill> <clave> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=]
@@ -2946,18 +3057,6 @@ costos_totales_card() {  # costos_totales_card <Clave>
   done < <(costos_filas "${COSTOS_LOG:-/dev/null}" "$clave")
   [ "$filas" = 1 ] || return 1
   printf '%s\t%s\t%s\t%s' "$turnos_tot" "$costo_tot" "$((dur_tot / 60))" "$revisiones"
-}
-
-# Presupuesto de turnos vigente en roles.toml para un skill (DEVKIT-94):
-# `presupuesto.<skill>`, o el `max_turns` de su rol si no hay anulación.
-# Misma regla que resuelve `model_effort_of` para un lanzamiento nuevo, pero
-# a partir del nombre del skill solo, para marcar filas ya cerradas en
-# `--costos`.
-presupuesto_de_skill() {  # presupuesto_de_skill <skill>
-  local skill=$1 valor
-  valor=$(role_field presupuesto "$skill")
-  [ -n "$valor" ] || valor=$(role_field "$(role_of "/$skill")" max_turns)
-  printf '%s' "$valor"
 }
 
 # Tabla de una card: una fila por lanzamiento y una fila TOTAL.
@@ -5757,6 +5856,44 @@ FIN
   check "columna CARD deja un espacio antes de LANZÓ con una Clave de 11 caracteres" si \
     "$(COLUMNS=200 formatear_fila task-start DEVKIT-9999 bucle 1m 9m terminó sonnet/high -/40 - 0 1 0 \
         | grep -qF 'DEVKIT-9999 bucle' && echo si || echo no)"
+
+  # DEVKIT-131: ANCHO_LANZO se fijaba a mano (8) y no le entraba "task-close"
+  # (10) -la fila entera se corría dos columnas hacia la derecha, y con ella
+  # el resto de la tabla-. Ahora sale de ORIGENES_LANZAMIENTO (junto a los
+  # demás ANCHO_*, arriba). Esta fila prueba el caso real: task-close como
+  # LANZÓ (no como SKILL, que ya cubría la fila de "estado más largo" de
+  # abajo), comparando contra el mismo desplazamiento que usa `encabezado_tabla`.
+  off_hace_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO))
+  fila_lanzo_131=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 task-close 5m 5m terminó opus/high 3/60 - 0 1 0)
+  check "LANZÓ=task-close: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_lanzo_131} - 1))"
+  check "LANZÓ=task-close no corre la columna HACE, alineada con la cabecera" \
+    "$(rellenar 5m "$ANCHO_HACE")" "${fila_lanzo_131:$off_hace_131:$ANCHO_HACE}"
+
+  # Misma prueba de alineación para el otro extremo: el estado más largo
+  # ("⚠ sin registro", 14) tampoco debe correr la columna que sigue a ESTADO
+  # (MODELO).
+  off_modelo_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
+  fila_estado_131=$(COLUMNS=200 formatear_fila task-document DEVKIT-9 humano 8m 8m "sin registro" fable/max -/40 - 0 1 0)
+  check "ESTADO=sin registro no corre la columna MODELO, alineada con la cabecera" \
+    "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
+  unset off_hace_131 fila_lanzo_131 off_modelo_131 fila_estado_131
+
+  # DEVKIT-131 H1: SKILL salía de una lista fija de cinco nombres, y
+  # template-propagate (18) ya no entraba en ANCHO_SKILL=14. El skill más
+  # largo se toma de SKILLS_CON_LANZAMIENTO, la misma lista que arma
+  # ANCHO_SKILL -si crece con un nombre más largo, este caso lo sigue sin
+  # tocarlo a mano.
+  skill_mas_largo_131=""
+  for _skill_131 in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+    [ "${#_skill_131}" -gt "${#skill_mas_largo_131}" ] && skill_mas_largo_131=$_skill_131
+  done
+  fila_skill_131=$(COLUMNS=200 formatear_fila "$skill_mas_largo_131" DEVKIT-13 humano 1m 1m terminó sonnet/high -/40 - 0 1 0)
+  check "SKILL=<skill más largo> no corre la columna CARD, alineada con la cabecera" \
+    "$(rellenar "$skill_mas_largo_131" "$ANCHO_SKILL")" "${fila_skill_131:0:$ANCHO_SKILL}"
+  check "SKILL=<skill más largo>: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_skill_131} - 1))"
+  unset _skill_131 skill_mas_largo_131 fila_skill_131
 
   # Respaldo ASCII (DEVKIT-106): un carácter equivalente por icono cuando
   # LANG/LC_ALL no declaran UTF-8 -bash cuenta bytes, no caracteres, fuera de
