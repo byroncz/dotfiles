@@ -57,10 +57,14 @@ Diseño y decisiones en la base Documentación de Notion (proyecto `DEVKIT`).
   `devkit/agents/skills/<skill>/SKILL.md`, nunca por `.claude/skills/`: ese
   directorio es un enlace al template y Claude Code no acepta escrituras bajo
   `.claude/` sin confirmación del humano, que en headless nadie da.
-- El humano decide qué entra a Lista (mover cards de Por refinar a Backlog o
-  Lista, y Épicas de Backlog a Lista) y aprobar el PR; el bucle toma las
-  cards en el orden de `devkit-run --cola`. Todo lo demás lo haces tú, sin
-  preguntar, siguiendo las skills.
+- El ciclo tiene tres bandejas (DEVKIT-128): `Por refinar` es lo que propone
+  un agente y nadie ejecuta solo; `Backlog` es reserva ya aprobada por el
+  humano, y el bucle la hace en cuanto `Lista` se vacía, sin bandera;
+  `Lista` es lo que corre con prioridad. El humano decide qué entra a Lista
+  (mover cards de Por refinar a Backlog o Lista, y Épicas de Backlog a
+  Lista) y aprobar el PR; el bucle toma las cards en el orden de
+  `devkit-run --cola`. Todo lo demás lo haces tú, sin preguntar, siguiendo
+  las skills.
 - Una hija en Backlog de una Épica ya en Lista o En progreso no se queda
   atrás: el bucle la arrastra a Lista en cada pasada, salvo que sus Criterios
   de aceptación sigan pendientes de definir.
