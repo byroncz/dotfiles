@@ -3,12 +3,14 @@
 #  devkit: instanciar un proyecto desde el Mac. Solo necesita Docker y curl.
 #
 #    curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.sh \
-#      | sh -s -- <proyecto> [--version 0.1.0 | --ref <rama>]
+#      | sh -s -- <proyecto> [--version 0.1.0 | --ref <rama>] \
+#                  [--vscode-port <puerto>] [--oauth-port <puerto>]
 #
 #  Deja en ~/.devkit/<proyecto>/:
 #    template/    copia del template (contexto de build)
 #    compose.yaml
-#    .env         variables de compose (proyecto, versión, ruta del token)
+#    .env         variables de compose (proyecto, versión, ruta del token,
+#                  puertos de host del editor y del retorno OAuth)
 #    devkit.env   variables del contenedor: EDÍTALO antes del primer arranque
 #  y el comando ~/.devkit/bin/devkit.
 #
@@ -31,9 +33,17 @@ while [ $# -gt 0 ]; do
     *) echo "opción desconocida: $1" >&2; exit 1 ;;
   esac
 done
-[ -n "$proj" ] || { echo "uso: new-project.sh <proyecto> [--version X.Y.Z | --ref rama]" >&2; exit 1; }
+[ -n "$proj" ] || { echo "uso: new-project.sh <proyecto> [--version X.Y.Z | --ref rama] [--vscode-port puerto] [--oauth-port puerto]" >&2; exit 1; }
 command -v docker >/dev/null || { echo "falta Docker" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "falta el plugin compose de Docker" >&2; exit 1; }
+for p in "$vscode_port" "$oauth_port"; do
+  [ -z "$p" ] && continue
+  case "$p" in
+    ''|*[!0-9]*) valido=0 ;;
+    *) [ "$p" -ge 1 ] && [ "$p" -le 65535 ] && valido=1 || valido=0 ;;
+  esac
+  [ "$valido" -eq 1 ] || { echo "puerto inválido: $p (debe ser un entero entre 1 y 65535)" >&2; exit 1; }
+done
 
 if [ -n "$ref" ]; then
   tarball="https://github.com/$REPO/archive/refs/heads/$ref.tar.gz"; label="$ref"
@@ -49,6 +59,17 @@ if [ ! -s "$ROOT/bws-token" ]; then
   echo "aviso: $ROOT/bws-token está vacío; el contenedor arrancará sin secretos" >&2
 fi
 
+# Valor numérico de <var> en <file>, o falla si el archivo no existe, no
+# trae la variable o su valor no es un entero.
+port_from_env() {  # port_from_env <file> <var>
+  [ -f "$1" ] || return 1
+  val="$(sed -n "s/^${2}=//p" "$1" | head -1)"
+  case "$val" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  echo "$val"
+}
+
 # Primer puerto libre de una familia (DEVKIT_VSCODE_PORT o DEVKIT_OAUTH_PORT):
 # recorre el .env de los demás proyectos en ~/.devkit, toma el mayor puerto ya
 # usado y suma 1. Sin otros proyectos, arranca en $2 (3000 o 54545, los mismos
@@ -58,19 +79,19 @@ next_port() {  # next_port <var> <base>
   for env in "$ROOT"/*/.env; do
     [ -f "$env" ] || continue
     [ "$env" = "$dir/.env" ] && continue
-    val="$(sed -n "s/^${var}=//p" "$env" | head -1)"
     # Un .env sin la variable (todo proyecto instalado antes de este cambio)
     # sigue arrancando con $base por default en compose.yaml: cuenta como si
     # ya la usara, o el siguiente proyecto choca contra él (DEVKIT-155, H1).
-    case "$val" in
-      ''|*[!0-9]*) val="$base" ;;
-    esac
+    val="$(port_from_env "$env" "$var")" || val="$base"
     [ "$val" -gt "$max" ] && max="$val"
   done
   [ "$max" -eq 0 ] && echo "$base" || echo $((max + 1))
 }
-[ -n "$vscode_port" ] || vscode_port="$(next_port DEVKIT_VSCODE_PORT 3000)"
-[ -n "$oauth_port" ]  || oauth_port="$(next_port DEVKIT_OAUTH_PORT 54545)"
+# Reinstalar un proyecto existente conserva su puerto: si se recalculara
+# contra los demás .env cada vez, cambiaría según qué otros proyectos estén
+# instalados en ese momento (DEVKIT-155, H3).
+[ -n "$vscode_port" ] || vscode_port="$(port_from_env "$dir/.env" DEVKIT_VSCODE_PORT)" || vscode_port="$(next_port DEVKIT_VSCODE_PORT 3000)"
+[ -n "$oauth_port" ]  || oauth_port="$(port_from_env "$dir/.env" DEVKIT_OAUTH_PORT)"  || oauth_port="$(next_port DEVKIT_OAUTH_PORT 54545)"
 
 echo "devkit: descargando template ($label)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
