@@ -230,6 +230,10 @@ RUN rm -f "$HOME/.openvscode-server/extensions/extensions.json" \
 # a diferencia de /opt/devkit; escribir ahí como $USERNAME corta el build con
 # permiso denegado (H2 de la revisión).
 USER root
+# SHELL a bash solo para este RUN: contenido="${contenido//$VIEJO/$NUEVO}" es
+# sustitución de patrones de bash, que dash (el /bin/sh de Debian) no
+# implementa y corta el build con "Bad substitution" (DEVKIT-145).
+SHELL ["/bin/bash", "-c"]
 RUN set -eu; \
     SVG_CLARO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-light.svg"; \
     SVG_OSCURO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-dark.svg"; \
@@ -258,6 +262,7 @@ RUN set -eu; \
     contenido="${contenido//$VIEJO_WATERMARK/$NUEVO_WATERMARK}"; \
     contenido="${contenido//$VIEJO_LETTERPRESS/$NUEVO_LETTERPRESS}"; \
     printf '%s' "$contenido" > "$CSS"
+SHELL ["/bin/sh", "-c"]
 USER $USERNAME
 
 # Copia de referencia de lo que solo entra por imagen. `entrypoint.sh` la
