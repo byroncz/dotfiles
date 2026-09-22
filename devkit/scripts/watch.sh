@@ -237,6 +237,15 @@ NOTION_BIN="${DEVKIT_NOTION_BIN:-$SCRIPTS_DIR/notion.sh}"
 # primero (DEVKIT-101, ampliación del 2026-09-18 18:20: antes solo mandaba
 # sobre un OK, y con CAMBIOS vigente el comentario se ignoraba).
 #
+# Excepción a lo anterior (DEVKIT-142): si el último devkit-fix sobre el head
+# vigente descartó un hallazgo con la frase fija "necesita aprobación humana"
+# (SKILL.md de task-fix) y no hay una revisión nueva todavía sin responder,
+# el ciclo se corta -sin marcador devkit-block- igual que un bloqueo: sin
+# comentario humano nuevo, `nada` (ni pr-review ni task-fix se relanzan sobre
+# el mismo hallazgo); con uno, `fix-humano`, aunque el informe siga en
+# CAMBIOS. `decide` no consulta Notion -task-block.sh deja la card Bloqueada
+# ahí, no en el PR- así que se guía solo por esa frase en el propio PR.
+#
 # La guarda de tres ciclos (DEVKIT-56). Un ciclo es un informe CAMBIOS que el
 # corrector respondió con su `devkit-fix`. `bloquear` sale solo cuando ya hay
 # `max` ciclos y el último informe es CAMBIOS sobre el head vigente: un
@@ -256,6 +265,23 @@ def markers($re; $ts):
 | (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
+# Hallazgo descartado por necesitar aprobación humana (DEVKIT-142): task-fix lo
+# marca con la frase fija "descartado | necesita aprobación humana" en la
+# línea del hallazgo, dentro del bloque devkit-fixes (SKILL.md de task-fix),
+# en vez de resolverlo o descartarlo en silencio. Se busca solo ahí -no en el
+# cuerpo completo del comentario- para no confundir esa espera con otra línea
+# que solo mencione la aprobación de pasada (por ejemplo, un hallazgo
+# "atendido" tras resolverse la decisión). Se busca en el último devkit-fix de
+# la cuenta máquina sobre el propio $head -no sobre el sha del último
+# informe: un task-fix que sí empujó commits para otros hallazgos deja el
+# head vigente distinto del sha que revisó pr-review, y aun así el hallazgo
+# sigue pendiente.
+| ((.comments // [])
+   | map(select(.author.login == $bot and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))))
+   | sort_by(.createdAt) | last | .body // "") as $head_fix_body
+| ($head_fix_body
+   | test("<!-- devkit-fixes -->[\\s\\S]*?\\n\\S+ \\| descartado \\| necesita aprobaci[oó]n humana[\\s\\S]*?<!-- /devkit-fixes -->"; "i")
+  ) as $needs_approval
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
 | ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
@@ -289,12 +315,24 @@ def markers($re; $ts):
    and $fix_after == 0) as $pending_fix
 | ($last != null and $last.verdict == "CAMBIOS" and $last.sha == $head
    and $fix_after > 0) as $fix_responded
+# Ciclo cortado en espera de una decisión humana (DEVKIT-142), sin marcador
+# devkit-block: mientras $needs_approval siga vigente y no haya una revisión
+# nueva sin responder ($pending_fix manda sobre esto, no al revés: un informe
+# fresco sí hay que corregirlo), el bucle no relanza pr-review ni task-fix
+# sobre el mismo hallazgo. Se resuelve solo: el próximo devkit-fix sobre el
+# head vigente (la respuesta de fix-humano a la decisión, o un push nuevo)
+# reemplaza a $head_fix_body y, si ya no repite la frase, $needs_approval cae
+# sola en la siguiente vuelta.
+| ($needs_approval and ($pending_fix | not)) as $approval_pending
 | ($human | map(.body) | join("\n\n") | @base64) as $human_text
 | (($human | last | .at) // "-") as $human_at
 | ($last.at // "-") as $informe
 | if $blocked then
     (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text, $informe]
      else ["bloqueado", $head, $block_at, "-", $informe] end)
+  elif $approval_pending then
+    (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text, $informe]
+     else ["nada", $head, ($last.verdict // "-"), "-", $informe] end)
   elif ($human | length) > 0 and $last != null and $last.sha == $head then
     ["fix-humano", $head, $human_at, $human_text, $informe]
   elif $ciclos >= $max and $last != null and $last.verdict == "CAMBIOS" and $last.sha == $head then

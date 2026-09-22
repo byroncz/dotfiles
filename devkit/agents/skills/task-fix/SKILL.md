@@ -18,9 +18,15 @@ trabajo de `pr-review`.
    (DEVKIT-102: `devkit-run task-fix 68` tomó "68" como si fuera DEVKIT-68,
    una card distinta ya Hecha, y salió sin avisar del error de uso).
    Si es una Clave, localiza la card por `ID` y `Proyecto`. Su `Estado` debe
-   ser `Revisión automática` o `Lista para merge`; en otro caso responde el
-   estado y termina. Toma el número de PR de la propiedad `PR`; si está
-   vacía, comenta en la card que falta el PR y termina.
+   ser `Revisión automática` o `Lista para merge`. Si es `Bloqueada` y llegó
+   texto como argumento (un comentario humano), sigue igual: es justo el
+   bloqueo que deja la excepción del paso 9 cuando un hallazgo necesitó
+   aprobación humana, y el paso 9 ya devuelve la card a `Revisión automática`
+   al terminar (DEVKIT-142: sin esto, `fix-humano` nunca la atendía y el
+   comentario del humano quedaba atascado). En cualquier otro estado, o sin
+   texto como argumento, responde el estado y termina. Toma el número de PR
+   de la propiedad `PR`; si está vacía, comenta en la card que falta el PR y
+   termina.
 2. Lee el PR: `gh pr view <N> --json state,url,headRefName,headRefOid,reviews,comments`.
    Si `state` no es `OPEN`, responde "PR no abierto" y termina.
 3. Decide qué atender, en este orden:
@@ -101,6 +107,12 @@ trabajo de `pr-review`.
    - Si un hallazgo es incorrecto, ambiguo o queda fuera del alcance de la
      card, no lo fuerces: se responde `descartado` con el motivo en una
      frase. El revisor decide en el siguiente ciclo.
+   - Si un hallazgo exige una decisión que no te corresponde tomar -una
+     elección de diseño, un trade-off de negocio, acceso a un secreto- no lo
+     descartes como los anteriores ni lo apliques a ciegas: responde
+     `descartado | necesita aprobación humana: <detalle de la decisión que
+     falta>`, con esa frase tal cual (`decide` en watch.sh la reconoce,
+     DEVKIT-142). Sigue con el resto de los hallazgos normalmente.
    - Si un hallazgo pide retirar un dato porque el revisor no pudo
      verificarlo, y ese dato vive en un comentario de la card (el revisor
      tiene prohibido leerlos), no lo retires: cita la fuente exacta en el
@@ -156,6 +168,16 @@ trabajo de `pr-review`.
    motivo; termina sin repetir el paso 9.
 9. `Estado` de la card = `Revisión automática`, venga de ahí o de
    `Lista para merge`. No comentes en la card: el ciclo vive en el PR.
+   Excepción (DEVKIT-142): si tu respuesta publicada trae al menos un
+   hallazgo `descartado | necesita aprobación humana: ...`, no dejes la card
+   en `Revisión automática` -bloquéala en su lugar:
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave>
+   "<hallazgo> necesita una decisión que no me corresponde: <detalle>.
+   Responde en el PR <url>, no aquí en la card: el bucle retoma solo en
+   cuanto comentes ahí."`. `decide` en watch.sh reconoce la frase fija del
+   hallazgo y trata tu siguiente comentario humano en el PR como si
+   respondiera a un bloqueo, aunque el informe siga en CAMBIOS y el PR no
+   tenga marcador `devkit-block`; no hace falta relanzar nada a mano.
 10. Limpia la copia de trabajo si la creaste (paso 4).
 11. `touch /run/devkit/poke`. Despierta a `watch.sh`, que duerme en tramos de
     5 s, para que no espere el resto del intervalo antes de revisar la
