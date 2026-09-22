@@ -26,7 +26,7 @@ gs | gs | Alias de `git status -sb`.
 gl | gl | Alias de `git log` gráfico.
 ll | ll | Alias de `ls -lah`.
 c | c | Alias de `clear`.
-devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle.
+devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias corto: `dk`, mismo script y mismos argumentos.
 devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
 devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
 devkit-run --cola | devkit-run --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.

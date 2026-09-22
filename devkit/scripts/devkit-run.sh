@@ -6205,6 +6205,16 @@ FIN
   timeout 5 bash "$HERE/devkit-run.sh" --esfuerzo >/dev/null 2>&1; rc=$?
   check "--esfuerzo sin valor no cuelga" 64 "$rc"
 
+  # DEVKIT-144: la línea de uso debe distinguir los dos sentidos de --seguir
+  # (lanzar y seguir un lanzamiento vs. refrescar un monitor); antes aparecían
+  # los dos sin explicación y parecían un error.
+  local uso_out
+  uso_out="$(bash "$HERE/devkit-run.sh" 2>&1 1>/dev/null)"
+  check "uso: explica --seguir del lanzamiento" si \
+    "$(printf '%s\n' "$uso_out" | grep -qF 'lanza y se queda mostrando el avance de ESTE lanzamiento' && echo si || echo no)"
+  check "uso: explica --seguir del monitor" si \
+    "$(printf '%s\n' "$uso_out" | grep -qF 'no lanza nada: refresca el monitor' && echo si || echo no)"
+
   # .devkit/roles.toml anula la tabla del template (DEVKIT-53, H3): se prioriza
   # sobre la de ../agents y la del template fallback.
   mkdir -p "$tmp/.devkit"
@@ -9172,7 +9182,9 @@ falta_valor() {  # falta_valor <valor>
 
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
+  echo "       --seguir aquí lanza y se queda mostrando el avance de ESTE lanzamiento hasta que termine." >&2
   echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
+  echo "       --seguir aquí no lanza nada: refresca el monitor (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C." >&2
   echo "     devkit-run --pausa | --alto | --reanudar" >&2
 }
 
