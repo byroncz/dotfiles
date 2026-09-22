@@ -771,7 +771,7 @@ entorno_hijo() {
 # hijo, todas las skills piden autorizar el conector y no avanzan. Mejor
 # avisarlo antes que dejarlo fallar a medias.
 alarma_sin_notion() {  # alarma_sin_notion <prompt>
-  printf 'devkit-run: el servidor de Notion no está conectado en el entorno del lanzamiento ("%s mcp list"); no se lanza "%s".\n' \
+  printf 'dk: el servidor de Notion no está conectado en el entorno del lanzamiento ("%s mcp list"); no se lanza "%s".\n' \
     "$CLAUDE_BIN" "$1" >&2
   printf '%s devkit-run "%s" ALARMA: sin Notion conectado (claude mcp list); no se lanza\n' \
     "$(date +%FT%T%:z)" "$1" >> "$WATCH_LOG" 2>/dev/null
@@ -1527,7 +1527,7 @@ result_sin_notion() {  # result_sin_notion <logf>
 # lanzar y decirlo: motivo por stderr, ALARMA en watch.log y código falso.
 modelo_valido() {  # modelo_valido <modelo> <prompt>
   case "$1" in ''|-) ;; *) return 0 ;; esac
-  printf 'devkit-run: no se pudo resolver un modelo para "%s" (roles.toml: %s); no se lanza. Revisa `frontera` y el rol.\n' \
+  printf 'dk: no se pudo resolver un modelo para "%s" (roles.toml: %s); no se lanza. Revisa `frontera` y el rol.\n' \
     "$2" "$ROLES_FILE" >&2
   printf '%s devkit-run "%s" ALARMA: modelo vacío al resolver el rol (roles.toml: %s); no se lanza\n' \
     "$(date +%FT%T%:z)" "$2" "$ROLES_FILE" >> "$WATCH_LOG" 2>/dev/null
@@ -1724,7 +1724,7 @@ linea_lanzando() {  # linea_lanzando <id> <origen> <prompt> <log> <modelo> <esfu
 esperar_arranque() {  # esperar_arranque <prompt>
   [ -e "$READY_FILE" ] && return 0
   local t=0
-  printf 'devkit-run: esperando a que termine el arranque del contenedor' >&2
+  printf 'dk: esperando a que termine el arranque del contenedor' >&2
   while [ ! -e "$READY_FILE" ] && [ "$t" -lt "$READY_TIMEOUT" ]; do
     sleep 1
     t=$((t + 1))
@@ -1732,7 +1732,7 @@ esperar_arranque() {  # esperar_arranque <prompt>
   done
   printf '\n' >&2
   [ -e "$READY_FILE" ] && return 0
-  printf 'devkit-run: el arranque del contenedor no terminó en %ss (falta %s); no se lanza "%s".\n' \
+  printf 'dk: el arranque del contenedor no terminó en %ss (falta %s); no se lanza "%s".\n' \
     "$READY_TIMEOUT" "$READY_FILE" "$1" >&2
   printf 'Mira qué pasó con `devkit logs <proyecto>` desde el host y vuelve a lanzar cuando termine.\n' >&2
   printf '%s devkit-run "%s" ALARMA: arranque del contenedor sin terminar tras %ss; no se lanza\n' \
@@ -1751,12 +1751,12 @@ esperar_arranque() {  # esperar_arranque <prompt>
 avisar_atras_de_origin() {  # avisar_atras_de_origin <prompt>
   local atras
   if ! timeout 5 git -C "$WS" fetch -q origin main 2>/dev/null; then
-    printf 'devkit-run: no se pudo comprobar si el workspace está detrás de origin/main (git fetch falló).\n' >&2
+    printf 'dk: no se pudo comprobar si el workspace está detrás de origin/main (git fetch falló).\n' >&2
     return 0
   fi
   atras=$(git -C "$WS" rev-list --count main..origin/main 2>/dev/null) || return 0
   case "$atras" in ''|0) return 0 ;; esac
-  printf 'devkit-run: el workspace está %s commit(s) detrás de origin/main; puede estar lanzando con código viejo (git switch main && git pull --ff-only).\n' \
+  printf 'dk: el workspace está %s commit(s) detrás de origin/main; puede estar lanzando con código viejo (git switch main && git pull --ff-only).\n' \
     "$atras" >&2
   printf '%s devkit-run "%s" ALARMA: workspace %s commit(s) detrás de origin/main; puede lanzar con código viejo\n' \
     "$(date +%FT%T%:z)" "$(prompt_en_linea "$1")" "$atras" >> "$WATCH_LOG" 2>/dev/null
@@ -1818,7 +1818,7 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
     if [ -n "$claude_pid" ]; then
       echo "arrancó: claude -p vivo (pid $claude_pid)"
     else
-      echo "arrancó: el worker (pid $pid) espera el candado; síguelo con devkit-run --estado"
+      echo "arrancó: el worker (pid $pid) espera el candado; síguelo con dk --estado"
     fi
     return 0
   fi
@@ -1827,7 +1827,7 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
     case "$cierre" in
       *"no lanzó: "*)
         motivo_no_lanzo=${cierre#*no lanzó: }
-        printf 'devkit-run: "%s" no lanzó: %s\n' "$prompt" "$motivo_no_lanzo" >&2
+        printf 'dk: "%s" no lanzó: %s\n' "$prompt" "$motivo_no_lanzo" >&2
         return 2
         ;;
     esac
@@ -1835,7 +1835,7 @@ confirmar_arranque() {  # confirmar_arranque <pid del worker> <prompt> <log>
     return 0
   fi
   {
-    printf 'devkit-run: "%s" no arrancó: el worker murió en sus primeros %ss sin terminar.\n' "$prompt" "$ARRANQUE_ESPERA"
+    printf 'dk: "%s" no arrancó: el worker murió en sus primeros %ss sin terminar.\n' "$prompt" "$ARRANQUE_ESPERA"
     printf 'Últimas líneas de %s:\n' "$logf"
     if [ -s "$logf" ]; then
       tail -n 20 "$logf" | sed 's/^/  /'
@@ -3002,7 +3002,7 @@ imprimir_tabla() {  # imprimir_tabla <fila formateada>...
     [[ "${filas[i]}" =~ ^-+$ ]] || restantes=$((restantes + 1))
   done
   printf '%s\n' "${filas[@]:ini}"
-  printf '… %s filas más antiguas (devkit-run --estado --todo para verlas)\n' "$restantes"
+  printf '… %s filas más antiguas (dk --estado --todo para verlas)\n' "$restantes"
 }
 
 # Reordena <filas> (formato de `estado_filas`) agrupando por CARD -columna
@@ -3311,7 +3311,7 @@ seguir_estado() {
     # `printf`, la sustitución se comía las dos líneas en blanco antes de que
     # `frame+=` pegara la tabla, y la fila de títulos quedaba pegada a la
     # cabecera. El separador se agrega aparte, después de la sustitución.
-    frame=$(printf 'devkit-run --estado  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
+    frame=$(printf 'dk --estado  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$punto" "$(texto_modo "$color_tty")" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
     frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
@@ -3349,7 +3349,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
-    printf "devkit-run: Ctrl-C cierra el monitor; el lanzamiento \"%s\" sigue en curso (síguelo con devkit-run --estado)\n" "$id"
+    printf "dk: Ctrl-C cierra el monitor; el lanzamiento \"%s\" sigue en curso (síguelo con dk --estado)\n" "$id"
     exit 130
   ' INT TERM
   while true; do
@@ -3364,7 +3364,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
     punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
     # el separador va aparte de la sustitución que trae senal_bucle.
-    frame=$(printf 'devkit-run --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
+    frame=$(printf 'dk --seguir %s  %s %s  (cada %ss; Ctrl-C solo cierra el monitor)\n%s' \
       "$id" "$(date +%T)" "$punto" "$ESTADO_INTERVALO" "$bucle")
     frame+=$'\n\n'
     frame+=$(mostrar_estado "$(calcular_permitir_refresco_cuota "$desde" "$ahora")" "$i" 0 "$color_tty" "$filas" "$bucle")
@@ -3385,7 +3385,7 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
         muerto_desde=$ahora
       elif [ "$((ahora - muerto_desde))" -ge "$MARGEN_LANZAMIENTO_MUERTO" ]; then
         [ -t 1 ] && tput cnorm 2>/dev/null
-        printf 'devkit-run: el lanzamiento "%s" murió sin dejar resumen en %s\n' "$id" "$WATCH_LOG"
+        printf 'dk: el lanzamiento "%s" murió sin dejar resumen en %s\n' "$id" "$WATCH_LOG"
         return 71
       fi
     else
@@ -3437,11 +3437,11 @@ mostrar_tablero() {  # mostrar_tablero [idx=0] [fijo=1] [color=]
   local codigo filas
   codigo=$(project_code)
   if [ -z "$codigo" ]; then
-    echo "devkit-run --tablero: no encuentro \"project\" en $WS/.devkit/devkit.toml"
+    echo "dk --tablero: no encuentro \"project\" en $WS/.devkit/devkit.toml"
     return 1
   fi
   if ! filas=$("$NOTION_BIN" activas "$codigo" 2>&1); then
-    printf 'devkit-run --tablero: no se pudo leer Notion: %s\n' "$filas" >&2
+    printf 'dk --tablero: no se pudo leer Notion: %s\n' "$filas" >&2
     return 1
   fi
   if [ "$(jq 'length' <<<"$filas" 2>/dev/null)" = 0 ]; then
@@ -3517,7 +3517,7 @@ seguir_tablero() {
     punto=$(punto_estado "$filas" "$bucle" "$i" 0 "$utf" "$color_tty")
     # Mismo recorte de "$(...)" que en seguir_estado (DEVKIT-97/DEVKIT-85):
     # el separador va aparte de la sustitución que trae senal_bucle.
-    frame=$(printf 'devkit-run --tablero  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
+    frame=$(printf 'dk --tablero  %s %s  %s  (cada %ss; Ctrl-C para salir)\n%s' \
       "$(date +%T)" "$punto" "$(texto_modo "$color_tty")" "$TABLERO_INTERVALO" "$bucle")
     frame+=$'\n\n'
     frame+=$(mostrar_tablero "$i" 0 "$color_tty")
@@ -7306,7 +7306,7 @@ FIN
   check "imprimir_tabla: se queda con las más recientes" 1 \
     "$(printf '%s\n' "$salida_40" | grep -c '^fila-40$')"
   check "imprimir_tabla: línea de resumen con cuántas quedaron afuera" 1 \
-    "$(printf '%s\n' "$salida_40" | grep -c '… 29 filas más antiguas (devkit-run --estado --todo para verlas)')"
+    "$(printf '%s\n' "$salida_40" | grep -c '… 29 filas más antiguas (dk --estado --todo para verlas)')"
   local salida_40_todo
   salida_40_todo=$(LINES=20 DEVKIT_ESTADO_TODO=1 imprimir_tabla "${filas_40[@]}")
   check "imprimir_tabla: --todo desactiva el recorte, aparecen todas" "1|1|0" \
@@ -8094,7 +8094,7 @@ FIN
   # la cabecera con el punto fijo, no solo la tabla.
   check "--estado (foto única) muestra la cabecera con el punto" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
-        bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^devkit-run --estado  .*[●*]' && echo si || echo no)"
+        bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^dk --estado  .*[●*]' && echo si || echo no)"
 
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
   # queda mostrando --estado hasta que termina; la última línea es el
@@ -8139,7 +8139,7 @@ FIN
   ) &
   pid_seguir=$!
   for intento in $(seq 1 20); do
-    grep -qE 'devkit-run --seguir task-start-[0-9]+' "$out_seguir" 2>/dev/null && break
+    grep -qE 'dk --seguir task-start-[0-9]+' "$out_seguir" 2>/dev/null && break
     sleep 0.3
   done
   kill -INT "$pid_seguir" 2>/dev/null
@@ -8147,7 +8147,7 @@ FIN
   vivo_tras=$(pgrep -f "$doble_lento" >/dev/null 2>&1 && echo si || echo no)
   check "Ctrl-C en --seguir: sale con 130" 130 "$rc_seguir"
   check "Ctrl-C en --seguir: avisa que cierra el monitor sin matar el lanzamiento" si \
-    "$(grep -qE 'Ctrl-C cierra el monitor.*sigue en curso.*devkit-run --estado' "$out_seguir" && echo si || echo no)"
+    "$(grep -qE 'Ctrl-C cierra el monitor.*sigue en curso.*dk --estado' "$out_seguir" && echo si || echo no)"
   check "Ctrl-C en --seguir: el agente (doble de claude) sigue vivo" si "$vivo_tras"
   pkill -f "$doble_lento" 2>/dev/null
   wait 2>/dev/null
@@ -8416,7 +8416,7 @@ FIN
   check "--tablero (foto única) muestra el modo junto al punto" si \
     "$(DEVKIT_NOTION_BIN="$notion_tablero_vacio" DEVKIT_WS="$tablero_ws" DEVKIT_RUN_DIR="$modo_run" \
         bash "$HERE/devkit-run.sh" --tablero | head -1 \
-        | grep -qE '^devkit-run --tablero  .*[●*].*modo: trabajo' && echo si || echo no)"
+        | grep -qE '^dk --tablero  .*[●*].*modo: trabajo' && echo si || echo no)"
 
   # En alto, `devkit-run <skill> <Clave>` lanzado a mano por un humano se
   # rechaza con el motivo, antes de escribir la línea "lanzando"; en pausa
@@ -9239,7 +9239,7 @@ $card_md"
     estado_filas_una=$(estado_filas "$WATCH_LOG" "$estado_ahora_una")
     estado_bucle_una=$(senal_bucle "$WATCH_LOG" "$estado_ahora_una" "$estado_color")
     estado_utf_una=0; utf8_disponible && estado_utf_una=1
-    printf 'devkit-run --estado  %s %s  %s\n%s\n\n' "$(date +%T)" \
+    printf 'dk --estado  %s %s  %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$estado_filas_una" "$estado_bucle_una" 0 1 "$estado_utf_una" "$estado_color")" \
       "$(texto_modo "$estado_color")" \
       "$estado_bucle_una"
@@ -9256,7 +9256,7 @@ $card_md"
     tablero_filas_una=$(estado_filas "$WATCH_LOG" "$tablero_ahora_una")
     tablero_bucle_una=$(senal_bucle "$WATCH_LOG" "$tablero_ahora_una" "$tablero_color")
     tablero_utf_una=0; utf8_disponible && tablero_utf_una=1
-    printf 'devkit-run --tablero  %s %s  %s\n%s\n\n' "$(date +%T)" \
+    printf 'dk --tablero  %s %s  %s\n%s\n\n' "$(date +%T)" \
       "$(punto_estado "$tablero_filas_una" "$tablero_bucle_una" 0 1 "$tablero_utf_una" "$tablero_color")" \
       "$(texto_modo "$tablero_color")" \
       "$tablero_bucle_una"
@@ -9313,11 +9313,11 @@ $card_md"
     exit $?
     ;;
   --pausa)
-    escribir_modo pausa "modo: pausa — los lanzamientos manuales (devkit-run <skill> <Clave>) siguen permitidos; el bucle dejará de tomar cards nuevas de la cola cuando la obedezca."
+    escribir_modo pausa "modo: pausa — los lanzamientos manuales (dk <skill> <Clave>) siguen permitidos; el bucle dejará de tomar cards nuevas de la cola cuando la obedezca."
     exit 0
     ;;
   --alto)
-    escribir_modo alto "modo: alto — devkit-run <skill> <Clave> lanzado a mano se rechaza; el bucle se detendrá del todo cuando la obedezca."
+    escribir_modo alto "modo: alto — dk <skill> <Clave> lanzado a mano se rechaza; el bucle se detendrá del todo cuando la obedezca."
     exit 0
     ;;
   --reanudar)
@@ -9399,7 +9399,7 @@ prompt="/$skill $clave"
 # DEVKIT-136). Que watch.sh de verdad obedezca el modo -deteniéndose en vez
 # de reintentar en alto- es DEVKIT-137.
 if [ "$(modo_actual)" = alto ] && [ "$(origen_lanzamiento)" = humano ]; then
-  echo "devkit-run: modo alto, no se lanza \"$prompt\" a mano; usa \`devkit-run --pausa\` o \`devkit-run --reanudar\` para levantarlo." >&2
+  echo "dk: modo alto, no se lanza \"$prompt\" a mano; usa \`dk --pausa\` o \`dk --reanudar\` para levantarlo." >&2
   exit 66
 fi
 
@@ -9412,7 +9412,7 @@ if [ -z "$forzar" ]; then
   if dup_pid=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | lanzamiento_duplicado "$prompt"); then
     dup_log=$(grep -F ": \"$(prompt_en_linea "$prompt")\" log=" "$WATCH_LOG" 2>/dev/null \
       | tail -1 | grep -oE 'log=.*$' | sed 's/^log=//')
-    echo "devkit-run: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid, log ${dup_log:-desconocido}); síguelo con \`devkit-run --estado\` (o usa --forzar para lanzarlo igual)." >&2
+    echo "dk: ya hay un lanzamiento de \"$prompt\" en curso (pid $dup_pid, log ${dup_log:-desconocido}); síguelo con \`dk --estado\` (o usa --forzar para lanzarlo igual)." >&2
     exit 68
   fi
 fi
