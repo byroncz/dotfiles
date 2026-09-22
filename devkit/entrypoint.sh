@@ -273,6 +273,10 @@ fi
 # simplemente no arranca.
 VSCODE_TOKEN="$RUN_DIR/vscode-token"
 if [ -s "$VSCODE_TOKEN" ]; then
+  # El volumen editor-<proyecto> solo hereda los permisos de la imagen en el
+  # primer montaje: un proyecto que ya haya recreado antes de este chmod se
+  # queda con el modo viejo para siempre si no se repite en cada arranque.
+  chmod 700 "$HOME/.openvscode-server/data"
   # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server
   # imprime "Web UI available at ...?tkn=<token>" al levantar, y ese grep -v
   # lo saca del log para que un tail no filtre el token (ver DEVKIT-51).
