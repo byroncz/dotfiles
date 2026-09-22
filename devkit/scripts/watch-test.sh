@@ -48,6 +48,10 @@ fixm() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 manual=1 -->"; }
 # (DEVKIT-142): el cuerpo completo, marcador y bloque de hallazgos, como lo
 # publica task-fix (SKILL.md, paso 8), no solo el marcador.
 fix_na() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->\n<!-- devkit-fixes -->\n$4 | descartado | necesita aprobación humana: elegir el enfoque\n<!-- /devkit-fixes -->"; }
+# devkit-fix cuyo único hallazgo quedó atendido, pero cuyo motivo menciona
+# "aprobación humana" de pasada (DEVKIT-142, H2): no debe confundirse con un
+# hallazgo todavía pendiente de esa aprobación.
+fix_ok_na() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->\n<!-- devkit-fixes -->\n$4 | atendido | $5 (opción B, tras la aprobación humana)\n<!-- /devkit-fixes -->"; }
 block() { comment "$BOT" "$1" "<!-- devkit-block sha=$2 -->"; }
 closed() { comment "$BOT" "$1" "<!-- devkit-closed sha=$2 -->"; }
 doc() { comment "$BOT" "$1" "<!-- devkit-doc sha=$2 -->"; }
@@ -213,6 +217,12 @@ check "DEVKIT-142: head nuevo con el mismo hallazgo pendiente, comentario humano
 # haya cambiado (una re-revisión sin código nuevo).
 check "DEVKIT-142: informe nuevo sin responder manda sobre la espera" fix a1 \
   "$(rev T01 a1 CAMBIOS)" "$(rev T04 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)"
+# H2: un devkit-fix posterior sobre un head nuevo, con la aprobación ya
+# resuelta (hallazgo "atendido" que solo menciona "aprobación humana" en el
+# motivo), no debe quedarse esperando para siempre: el head cambió y toca
+# revisar de nuevo.
+check "DEVKIT-142 H2: fix-humano atendido que menciona la aprobación no bloquea revisar" revisar c3 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)" "$(fix_ok_na T03 c3 a1 C1 c3)"
 
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,

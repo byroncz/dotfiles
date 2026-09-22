@@ -266,16 +266,22 @@ def markers($re; $ts):
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
 # Hallazgo descartado por necesitar aprobación humana (DEVKIT-142): task-fix lo
-# marca con la frase fija "necesita aprobación humana" en la línea del
-# hallazgo (SKILL.md de task-fix), en vez de resolverlo o descartarlo en
-# silencio. Se busca en el cuerpo completo del último devkit-fix sobre el
-# propio $head -no sobre el sha del último informe: un task-fix que sí empujó
-# commits para otros hallazgos deja el head vigente distinto del sha que
-# revisó pr-review, y aun así el hallazgo sigue pendiente.
+# marca con la frase fija "descartado | necesita aprobación humana" en la
+# línea del hallazgo, dentro del bloque devkit-fixes (SKILL.md de task-fix),
+# en vez de resolverlo o descartarlo en silencio. Se busca solo ahí -no en el
+# cuerpo completo del comentario- para no confundir esa espera con otra línea
+# que solo mencione la aprobación de pasada (por ejemplo, un hallazgo
+# "atendido" tras resolverse la decisión). Se busca en el último devkit-fix de
+# la cuenta máquina sobre el propio $head -no sobre el sha del último
+# informe: un task-fix que sí empujó commits para otros hallazgos deja el
+# head vigente distinto del sha que revisó pr-review, y aun así el hallazgo
+# sigue pendiente.
 | ((.comments // [])
-   | map(select((.body // "") | test("<!-- devkit-fix sha=" + $head + " ")))
+   | map(select(.author.login == $bot and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))))
    | sort_by(.createdAt) | last | .body // "") as $head_fix_body
-| ($head_fix_body | test("aprobaci[oó]n humana"; "i")) as $needs_approval
+| ($head_fix_body
+   | test("<!-- devkit-fixes -->[\\s\\S]*?\\n\\S+ \\| descartado \\| necesita aprobaci[oó]n humana[\\s\\S]*?<!-- /devkit-fixes -->"; "i")
+  ) as $needs_approval
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
 | ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
