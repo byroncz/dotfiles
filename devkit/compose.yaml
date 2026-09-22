@@ -67,14 +67,18 @@ services:
     ports:
       # Retorno OAuth de los MCP (plugin de Notion). Docker no publica puertos
       # de contenedores que solo están en una red interna, así que entra por el
-      # proxy: host localhost:${DEVKIT_OAUTH_PORT} -> proxy:54546 -> dev:54546 ->
+      # proxy: host localhost:${DEVKIT_OAUTH_PORT} -> proxy:45454 -> dev:45454 ->
       # 127.0.0.1:${MCP_OAUTH_CALLBACK_PORT} dentro de dev, donde escucha Claude
       # Code (mismo número que DEVKIT_OAUTH_PORT). Cada salto lo hace socat.
-      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:54546"
+      # El relé interno (45454) es un puerto fijo ajeno a la familia
+      # 54545/54546/... de DEVKIT_OAUTH_PORT: si coincidieran, el socat de
+      # dev intentaría reenviarse a sí mismo (DEVKIT-155, H5).
+      - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:45454"
       # Editor VS Code (openvscode-server), gateado por token de conexión:
-      # Mac localhost:3000 -> proxy:3001 -> dev:3001 -> 127.0.0.1:3000 dentro
-      # de dev, donde escucha el servidor. Mismo patrón que el OAuth de
-      # arriba. `devkit code <proyecto>` arma la URL con el token.
+      # Mac localhost:${DEVKIT_VSCODE_PORT} -> proxy:3001 -> dev:3001 ->
+      # 127.0.0.1:3000 dentro de dev, donde escucha el servidor. Mismo patrón
+      # que el OAuth de arriba. `devkit code <proyecto>` arma la URL con el
+      # token.
       - "127.0.0.1:${DEVKIT_VSCODE_PORT:-3000}:3001"
     networks:
       - internal

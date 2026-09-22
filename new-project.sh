@@ -44,6 +44,15 @@ for p in "$vscode_port" "$oauth_port"; do
   esac
   [ "$valido" -eq 1 ] || { echo "puerto inválido: $p (debe ser un entero entre 1 y 65535)" >&2; exit 1; }
 done
+# DEVKIT_OAUTH_PORT también fija el puerto donde Claude Code escucha dentro
+# de dev (MCP_OAUTH_CALLBACK_PORT, ver compose.yaml): no puede coincidir con
+# un puerto interno fijo del contenedor, o el relé de socat se reenviaría a
+# sí mismo (DEVKIT-155, H5).
+if [ -n "$oauth_port" ]; then
+  case "$oauth_port" in
+    3000|3001|45454) echo "puerto OAuth inválido: $oauth_port coincide con un puerto interno fijo del contenedor dev (3000, 3001 o 45454)" >&2; exit 1 ;;
+  esac
+fi
 
 if [ -n "$ref" ]; then
   tarball="https://github.com/$REPO/archive/refs/heads/$ref.tar.gz"; label="$ref"

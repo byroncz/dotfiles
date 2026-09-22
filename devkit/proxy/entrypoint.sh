@@ -17,8 +17,10 @@ else
   echo "[proxy] lista blanca activa: $(wc -l < /etc/tinyproxy/allowlist) dominios" >&2
 fi
 touch /var/log/tinyproxy/tinyproxy.log; chown tinyproxy:tinyproxy /var/log/tinyproxy/tinyproxy.log
-# Retorno OAuth de MCP: lo que llega del Mac al 54546 va al contenedor dev.
-socat TCP-LISTEN:54546,fork,reuseaddr TCP:dev:54546 &
+# Retorno OAuth de MCP: lo que llega del Mac al 45454 va al contenedor dev.
+# Puerto fijo, ajeno a la familia 54545/54546/... de DEVKIT_OAUTH_PORT
+# (DEVKIT-155, H5).
+socat TCP-LISTEN:45454,fork,reuseaddr TCP:dev:45454 &
 # Editor VS Code: lo que llega del Mac al 3001 va al contenedor dev, mismo
 # patrón que el retorno OAuth.
 socat TCP-LISTEN:3001,fork,reuseaddr TCP:dev:3001 &
