@@ -701,8 +701,15 @@ run_skill() {
   # comprueba antes de resolver modelo/candado (para no gastar la sonda de
   # `--rol` en vano) y otra vez justo después de tomar el candado, porque la
   # espera de `flock` puede tardar y el modo cambiar mientras tanto.
+  #
+  # `unmark`: quien llama (`caso_fix`/`caso_revisar`/`caso_fix_humano`,
+  # `quota_pause`/`transient_retry`) ya marcó `$key` en `launched` antes de
+  # este `run_skill` que corta sin lanzar nada. Sin desmarcarla, la próxima
+  # pasada en trabajo la ve marcada y `avisar_si_lanzada` deja el PR "ya
+  # lanzada; esperando" para siempre (H6 de la revisión sobre el PR #103).
   if [ "$(modo_actual)" = alto ]; then
     log "$name no se lanza: modo alto"
+    [ "$key" = - ] || unmark "$key"
     return 76
   fi
   logf="$RUN_DIR/$name.log"
@@ -733,6 +740,7 @@ run_skill() {
   fi
   if [ "$(modo_actual)" = alto ]; then
     log "$name no se lanza: modo alto (tras esperar el candado)"
+    [ "$key" = - ] || unmark "$key"
     flock -u 9
     exec 9>&-
     return 76
@@ -1012,10 +1020,17 @@ decision_fresca() {  # decision_fresca <num>
 # cuota (quota_pause) reescribiría una clave que no coincide con la que
 # `caso_fix` marcó en `launched`, y la reanudación se perdería.
 atender_fix() {  # atender_fix <num> <Clave> <url> <head> <ref> [clave de launched]
-  local num=$1 key=$2 url=$3 head=$4 ref=$5 lkey=${6:-} name accion head_ahora siguiente
+  local num=$1 key=$2 url=$3 head=$4 ref=$5 lkey=${6:-} name accion head_ahora siguiente rc
   [ -n "$lkey" ] || lkey="fix:$num:$ref"
   name="task-fix-$num-${head:0:7}"
   run_skill "$name" "/task-fix $key" "$lkey"
+  rc=$?
+  # rc=76 (DEVKIT-137, H6 de la revisión sobre el PR #103): modo alto, no
+  # corrió nada. `run_skill` ya desmarcó `$lkey` para que la próxima pasada
+  # en trabajo lo relance; seguir con `decision_fresca`/`fix_vacio` sobre un
+  # log vacío gastaría un `gh pr view` en vano y, peor, podría relanzar
+  # task-fix con otro modelo como si el primero hubiera respondido vacío.
+  [ "$rc" -eq 76 ] && return 0
   IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
   fix_vacio "$RUN_DIR/$name.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
   siguiente=$("$DEVKIT_RUN" --siguiente-modelo "$ULTIMO_MODELO")

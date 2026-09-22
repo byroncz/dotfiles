@@ -2007,4 +2007,47 @@ PATH="$PROC_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
 check_igual "alto: procesar_pr corta antes de consultar gh" 0 \
   "$(wc -l <"$PROC_ALTO/watch.log" | tr -d ' ')"
 
+# --- run_skill desmarca la clave que ya tenía puesta quien llama al cortar en
+# alto (H6 de la revisión sobre el PR #103) ----------------------------------
+# Antes, `caso_fix`/`caso_revisar`/`caso_fix_humano` (y el relanzamiento de
+# `quota_pause`/`transient_retry`) marcaban la clave en `launched` antes de
+# llamar a `run_skill`; si este cortaba en alto sin lanzar nada, la marca
+# quedaba puesta y la próxima pasada en trabajo la veía "ya lanzada;
+# esperando" para siempre, sin relanzar ni bloquear la card.
+UNMARK_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$UNMARK_ALTO/run"
+printf alto >"$UNMARK_ALTO/run/modo"
+echo "fix:9:abc1234" > "$UNMARK_ALTO/run/launched"
+DEVKIT_RUN_DIR="$UNMARK_ALTO/run" DEVKIT_WS="$UNMARK_ALTO" \
+  bash "$WATCH" --run-skill "prueba-alto-unmark" "/noop" "fix:9:abc1234" >/dev/null 2>&1
+check_igual "H6: run_skill desmarca la clave de launched al no lanzar en alto" "" \
+  "$(grep -xF 'fix:9:abc1234' "$UNMARK_ALTO/run/launched" 2>/dev/null)"
+
+# `atender_fix` no debe seguir con `decision_fresca` (consulta el PR) ni con
+# el reintento de "fix vacío" cuando `run_skill` cortó por modo alto: sobre un
+# log vacío, `fix_vacio` podría malinterpretar la ausencia de resultado como
+# una respuesta vacía y relanzar task-fix con otro modelo, como si el primero
+# hubiera corrido de verdad.
+FIX_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$FIX_ALTO/run" "$FIX_ALTO/bin"
+printf alto >"$FIX_ALTO/run/modo"
+echo "fix:9:abc1234" > "$FIX_ALTO/run/launched"
+cat >"$FIX_ALTO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1" = pr ] && [ "$2" = view ]; then
+  echo "gh pr view no debería llamarse (H6)" >&2
+  exit 1
+fi
+exit 0
+FIN
+chmod +x "$FIX_ALTO/bin/gh"
+PATH="$FIX_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  DEVKIT_RUN_DIR="$FIX_ALTO/run" DEVKIT_WS="$FIX_ALTO" \
+  bash "$WATCH" --fix 9 DEVKIT-9 https://github.com/o/r/pull/9 abc1234 abc1234 \
+  >"$FIX_ALTO/watch.log" 2>&1
+check_igual "H6: atender_fix corta en alto sin consultar el PR ni reintentar" 1 \
+  "$(wc -l <"$FIX_ALTO/watch.log" | tr -d ' ')"
+check_igual "H6: atender_fix también desmarca la clave que ya había puesto caso_fix" "" \
+  "$(grep -xF 'fix:9:abc1234' "$FIX_ALTO/run/launched" 2>/dev/null)"
+
 exit $fail
