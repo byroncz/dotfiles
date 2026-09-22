@@ -18,9 +18,15 @@ trabajo de `pr-review`.
    (DEVKIT-102: `devkit-run task-fix 68` tomó "68" como si fuera DEVKIT-68,
    una card distinta ya Hecha, y salió sin avisar del error de uso).
    Si es una Clave, localiza la card por `ID` y `Proyecto`. Su `Estado` debe
-   ser `Revisión automática` o `Lista para merge`; en otro caso responde el
-   estado y termina. Toma el número de PR de la propiedad `PR`; si está
-   vacía, comenta en la card que falta el PR y termina.
+   ser `Revisión automática` o `Lista para merge`. Si es `Bloqueada` y llegó
+   texto como argumento (un comentario humano), sigue igual: es justo el
+   bloqueo que deja la excepción del paso 9 cuando un hallazgo necesitó
+   aprobación humana, y el paso 9 ya devuelve la card a `Revisión automática`
+   al terminar (DEVKIT-142: sin esto, `fix-humano` nunca la atendía y el
+   comentario del humano quedaba atascado). En cualquier otro estado, o sin
+   texto como argumento, responde el estado y termina. Toma el número de PR
+   de la propiedad `PR`; si está vacía, comenta en la card que falta el PR y
+   termina.
 2. Lee el PR: `gh pr view <N> --json state,url,headRefName,headRefOid,reviews,comments`.
    Si `state` no es `OPEN`, responde "PR no abierto" y termina.
 3. Decide qué atender, en este orden:
