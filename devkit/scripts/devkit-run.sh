@@ -9077,7 +9077,7 @@ falta_valor() {  # falta_valor <valor>
 
 uso() {
   echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
-  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --costos [<Clave>] | --test" >&2
+  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
   echo "     devkit-run --pausa | --alto | --reanudar" >&2
 }
 
