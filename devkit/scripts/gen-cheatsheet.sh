@@ -27,17 +27,24 @@ SALIDA_SVG_CLARO="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO:-$HERE/vscode/cheatsh
 SALIDA_SVG_OSCURO="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO:-$HERE/vscode/cheatsheet/cheatsheet-dark.svg}"
 
 BLOQUES_ORDEN="contenedor agentes cards Python"
+# BLOQUES_ORDEN son claves de una sola palabra (se recorren con `for bloque in
+# $BLOQUES_ORDEN`, que separa por espacio); el rótulo visible de cada bloque
+# vive en BLOQUES_TITULO y sí puede llevar espacios. Un bloque sin entrada
+# acá muestra su clave tal cual (ver el `${BLOQUES_TITULO[$bloque]:-$bloque}`
+# en armar() y armar_svg()).
+declare -A BLOQUES_TITULO
+BLOQUES_TITULO[contenedor]="En el host"
 declare -A BLOQUES
 BLOQUES[contenedor]="devkit code <proyecto>
 devkit shell <proyecto>
 devkit recreate <proyecto>
 devkit rebuild <proyecto>
 devkit awake <proyecto>"
-BLOQUES[agentes]="devkit-run --estado [--seguir]
-devkit-run --tablero [--seguir]
-devkit-run <skill> <Clave>
-devkit-run pr-review <N>
-devkit-run task-fix <N>"
+BLOQUES[agentes]="dk --estado [--seguir]
+dk --tablero [--seguir]
+dk <skill> <Clave>
+dk pr-review <N>
+dk task-fix <N>"
 BLOQUES[cards]="task-close.sh <Clave> [PR]
 task-block.sh <Clave> <motivo>
 devkit-net-denied"
@@ -186,7 +193,7 @@ HTML_HEAD
 
   local bloque comando fila ejemplo descripcion
   for bloque in $BLOQUES_ORDEN; do
-    echo "<h2>$(escapar "$bloque")</h2>"
+    echo "<h2>$(escapar "${BLOQUES_TITULO[$bloque]:-$bloque}")</h2>"
     while IFS= read -r comando; do
       [ -n "$comando" ] || continue
       fila="${FILAS[$comando]}"
@@ -250,7 +257,7 @@ SVG_HEAD
     row=$(( i / 2 ))
     x=${xs[$col]}
     y=${ys[$row]}
-    printf '<text x="%s" y="%s" class="g">%s</text>\n' "$x" "$y" "$(escapar "$bloque")"
+    printf '<text x="%s" y="%s" class="g">%s</text>\n' "$x" "$y" "$(escapar "${BLOQUES_TITULO[$bloque]:-$bloque}")"
     j=0
     while IFS= read -r comando; do
       [ -n "$comando" ] || continue

@@ -7,7 +7,7 @@
   .d { font-size: 13px; fill: #3b3b3b; fill-opacity: .32; }
 </style>
 <text x="60" y="70" class="t">devkit: comandos</text>
-<text x="60" y="150" class="g">contenedor</text>
+<text x="60" y="150" class="g">En el host</text>
 <text x="60" y="184" class="c">devkit code &lt;proyecto&gt;</text>
 <text x="60" y="202" class="d">Abre el editor VS Code del proyecto en el navegador. Úsal…</text>
 <text x="60" y="230" class="c">devkit shell &lt;proyecto&gt;</text>
@@ -19,15 +19,15 @@
 <text x="60" y="368" class="c">devkit awake &lt;proyecto&gt;</text>
 <text x="60" y="386" class="d">Impide que el Mac se suspenda mientras el contenedor esté…</text>
 <text x="620" y="150" class="g">agentes</text>
-<text x="620" y="184" class="c">devkit-run --estado [--seguir]</text>
+<text x="620" y="184" class="c">dk --estado [--seguir]</text>
 <text x="620" y="202" class="d">Muestra todos los agentes del contenedor y se refresca ca…</text>
-<text x="620" y="230" class="c">devkit-run --tablero [--seguir]</text>
+<text x="620" y="230" class="c">dk --tablero [--seguir]</text>
 <text x="620" y="248" class="d">Muestra las cards activas del proyecto en una tabla y se …</text>
-<text x="620" y="276" class="c">devkit-run &lt;skill&gt; &lt;Clave&gt;</text>
+<text x="620" y="276" class="c">dk &lt;skill&gt; &lt;Clave&gt;</text>
 <text x="620" y="294" class="d">Lanza una skill en segundo plano y se queda mostrando su …</text>
-<text x="620" y="322" class="c">devkit-run pr-review &lt;N&gt;</text>
+<text x="620" y="322" class="c">dk pr-review &lt;N&gt;</text>
 <text x="620" y="340" class="d">Revisa el PR número &lt;N&gt; como revisor independiente y publ…</text>
-<text x="620" y="368" class="c">devkit-run task-fix &lt;N&gt;</text>
+<text x="620" y="368" class="c">dk task-fix &lt;N&gt;</text>
 <text x="620" y="386" class="d">Corrige el PR número &lt;N&gt; según los hallazgos de la última…</text>
 <text x="60" y="430" class="g">cards</text>
 <text x="60" y="464" class="c">task-close.sh &lt;Clave&gt; [PR]</text>

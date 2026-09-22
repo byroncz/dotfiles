@@ -4,7 +4,7 @@
 # por `## ` abre un grupo nuevo (se vuelve un `###` en el README). Los
 # comentarios (`#` sin `|`) y las líneas vacías se ignoran.
 
-## En el Mac: `devkit`
+## En el host: `devkit`
 devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta).
 devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor.
 devkit code <proyecto> | devkit code ventas | Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.
@@ -26,19 +26,19 @@ gs | gs | Alias de `git status -sb`.
 gl | gl | Alias de `git log` gráfico.
 ll | ll | Alias de `ls -lah`.
 c | c | Alias de `clear`.
-devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias corto: `dk`, mismo script y mismos argumentos.
-devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
-devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
-devkit-run --cola | devkit-run --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
-devkit-run --agentes-vivos | devkit-run --agentes-vivos | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano.
-devkit-run --pausa | devkit-run --pausa | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido.
-devkit-run --alto | devkit-run --alto | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente.
-devkit-run --reanudar | devkit-run --reanudar | Vuelve el interruptor al modo trabajo.
-devkit-run pr-review <N> | devkit-run pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.
-devkit-run task-fix <N> | devkit-run task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.
-devkit-run --otros-agentes | devkit-run --otros-agentes | Dice si otro agente ya ocupa el workspace.
-devkit-run task-close <Clave> [PR] | devkit-run task-close DEVKIT-42 118 | Cierra una card con el PR mergeado, en bash.
-devkit-run task-block <Clave> <motivo> | devkit-run task-block DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card con un motivo, en bash.
+dk <skill> <Clave> | dk --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias largo: `devkit-run`, mismo script y mismos argumentos; los agentes lo invocan así.
+dk --estado [--seguir] | dk --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
+dk --tablero [--seguir] | dk --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
+dk --cola | dk --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
+dk --agentes-vivos | dk --agentes-vivos | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano.
+dk --pausa | dk --pausa | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido.
+dk --alto | dk --alto | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente.
+dk --reanudar | dk --reanudar | Vuelve el interruptor al modo trabajo.
+dk pr-review <N> | dk pr-review 42 | Revisa el PR número `<N>` como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.
+dk task-fix <N> | dk task-fix 42 | Corrige el PR número `<N>` según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.
+dk --otros-agentes | dk --otros-agentes | Dice si otro agente ya ocupa el workspace.
+dk task-close <Clave> [PR] | dk task-close DEVKIT-42 118 | Cierra una card con el PR mergeado, en bash.
+dk task-block <Clave> <motivo> | dk task-block DEVKIT-42 "Qué intenté: ... Qué necesito: ..." | Bloquea una card con un motivo, en bash.
 
 ## Python
 uv add <paquete> | uv add polars | Agrega una dependencia al proyecto y la fija en `pyproject.toml`. Úsalo para instalar una librería nueva.

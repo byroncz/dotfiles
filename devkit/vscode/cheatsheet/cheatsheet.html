@@ -49,7 +49,7 @@
 <body>
 <h1>devkit: comandos</h1>
 <p class="intro">Generada de <code>devkit/scripts/comandos.txt</code> por <code>gen-cheatsheet.sh</code>. Ctrl+Shift+P → <code>devkit: comandos</code> la vuelve a abrir.</p>
-<h2>contenedor</h2>
+<h2>En el host</h2>
 <div class="tarjeta">
   <div class="comando">devkit code &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit code ventas</div>
@@ -77,28 +77,28 @@
 </div>
 <h2>agentes</h2>
 <div class="tarjeta">
-  <div class="comando">devkit-run --estado [--seguir]</div>
-  <div class="ejemplo">$ devkit-run --estado --seguir</div>
+  <div class="comando">dk --estado [--seguir]</div>
+  <div class="ejemplo">$ dk --estado --seguir</div>
   <p class="descripcion">Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run --tablero [--seguir]</div>
-  <div class="ejemplo">$ devkit-run --tablero --seguir</div>
+  <div class="comando">dk --tablero [--seguir]</div>
+  <div class="ejemplo">$ dk --tablero --seguir</div>
   <p class="descripcion">Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run &lt;skill&gt; &lt;Clave&gt;</div>
-  <div class="ejemplo">$ devkit-run --seguir task-start DEVKIT-42</div>
-  <p class="descripcion">Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias corto: <code>dk</code>, mismo script y mismos argumentos.</p>
+  <div class="comando">dk &lt;skill&gt; &lt;Clave&gt;</div>
+  <div class="ejemplo">$ dk --seguir task-start DEVKIT-42</div>
+  <p class="descripcion">Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias largo: <code>devkit-run</code>, mismo script y mismos argumentos; los agentes lo invocan así.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run pr-review &lt;N&gt;</div>
-  <div class="ejemplo">$ devkit-run pr-review 42</div>
+  <div class="comando">dk pr-review &lt;N&gt;</div>
+  <div class="ejemplo">$ dk pr-review 42</div>
   <p class="descripcion">Revisa el PR número <code>&lt;N&gt;</code> como revisor independiente y publica el veredicto. Úsalo para forzar una revisión sin esperar al bucle.</p>
 </div>
 <div class="tarjeta">
-  <div class="comando">devkit-run task-fix &lt;N&gt;</div>
-  <div class="ejemplo">$ devkit-run task-fix 42</div>
+  <div class="comando">dk task-fix &lt;N&gt;</div>
+  <div class="ejemplo">$ dk task-fix 42</div>
   <p class="descripcion">Corrige el PR número <code>&lt;N&gt;</code> según los hallazgos de la última revisión. Úsalo para forzar una corrección sin esperar al bucle.</p>
 </div>
 <h2>cards</h2>
