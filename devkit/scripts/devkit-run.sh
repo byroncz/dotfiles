@@ -2486,8 +2486,8 @@ color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
 # Modo del interruptor de tres posiciones (DEVKIT-136), leído de MODO_FILE:
 # "trabajo" (el valor por defecto, sin archivo), "pausa" o "alto". Por ahora
 # solo `devkit-run.sh` lo obedece, rechazando un lanzamiento manual en alto
-# (ver el `case "$skill"` al final del archivo); que `watch.sh` también lo
-# respete queda para otra card.
+# (ver el `if` que sigue a `prompt="/$skill $clave"`, cerca del final del
+# archivo); que `watch.sh` también lo respete queda para otra card.
 modo_actual() {
   local m
   m=$(tr -d '[:space:]' 2>/dev/null < "$MODO_FILE")
