@@ -49,6 +49,12 @@ services:
       - claude:/home/dev/.claude
       - history:/commandhistory
       - proxy-log:/var/log/devkit-proxy:ro
+      # Datos del editor VS Code (openvscode-server): sesiones de extensiones
+      # como GitHub Pull Requests (DEVKIT-68), guardadas del lado del
+      # servidor. Sin este volumen, cada recreate borra la sesión OAuth del
+      # humano y la extensión vuelve a pedir login (DEVKIT-158). No incluye
+      # extensions/, que ya viene en la imagen.
+      - editor:/home/dev/.openvscode-server/data
     networks:
       - internal
     depends_on:
@@ -96,6 +102,8 @@ volumes:
     name: history-${DEVKIT_PROJECT}
   proxy-log:
     name: proxylog-${DEVKIT_PROJECT}
+  editor:
+    name: editor-${DEVKIT_PROJECT}
 
 secrets:
   bws_token:

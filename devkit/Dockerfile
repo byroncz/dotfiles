@@ -97,7 +97,7 @@ RUN groupadd --gid "$USER_GID" "$USERNAME" \
 
 # Puntos de montaje pre-creados con el owner correcto. Docker los crearía
 # como root si no existieran en la imagen.
-RUN mkdir -p "/home/$USERNAME/.claude" /commandhistory /workspace /opt/devkit /run/devkit \
+RUN mkdir -p "/home/$USERNAME/.claude" "/home/$USERNAME/.openvscode-server/data" /commandhistory /workspace /opt/devkit /run/devkit \
  && touch /commandhistory/.zsh_history \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory /workspace /opt/devkit /run/devkit \
  && chmod 700 "/home/$USERNAME/.claude" /run/devkit
