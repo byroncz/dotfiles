@@ -18,6 +18,12 @@ El primer comando instala `~/.devkit/bin/devkit` y deja el proyecto listo en
 imagen la primera vez. El tercero abre el editor en el navegador, ya
 autenticado con un token por proyecto.
 
+Si el editor responde `403 Forbidden` en vez de abrir, no es que el token se
+haya perdido ni que el contenedor falle: la cookie de sesión de
+openvscode-server vence a los 7 días sin una carga real de la página (una
+pestaña ya abierta no cuenta, sigue por websocket). `devkit code <proyecto>`
+vuelve a inyectar el token y renueva la cookie por otros 7 días.
+
 ## Stack
 
 {{STACK}}
