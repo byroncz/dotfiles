@@ -5223,6 +5223,33 @@ FIN
     "espera: otra skill ocupa el workspace" \
     "$(grep -oE 'espera: otra skill ocupa el workspace' "$tmp/run/watch.log" | head -1)"
 
+  # DEVKIT-137, H7 de la revisión sobre el PR #103: si el modo pasa a alto
+  # mientras el `--worker` espera el candado, al tomarlo no debe correr
+  # `claude -p`. Antes seguía adelante igual, y `vigilar_alto_once` lo mataba
+  # y bloqueaba su card segundos después -un lanzamiento que alto debía
+  # evitar, no limpiar después.
+  (
+    exec 9>"$tmp/run/skill.lock"
+    flock 9
+    sleep 0.6
+  ) &
+  tenedor=$!
+  sleep 0.1  # deja que el subshell de arriba tome el candado primero
+  printf alto >"$tmp/run/modo"
+  DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" --worker '/task-document DEVKIT-2' "$tmp/run/modo-alto.log" \
+      modelo-barato low 15 >/dev/null 2>&1
+  rc=$?
+  wait "$tenedor" 2>/dev/null
+  printf trabajo >"$tmp/run/modo"
+  check "worker: no corre claude -p si el modo pasó a alto mientras esperaba el candado" \
+    "modo alto" "$(cat "$tmp/run/modo-alto.log" 2>/dev/null)"
+  check "worker: sale con 76 en vez de correr la skill" 76 "$rc"
+  check "worker: deja \"no lanzó: modo alto\" en watch.log" \
+    "no lanzó: modo alto" \
+    "$(grep -oE 'no lanzó: modo alto' "$tmp/run/watch.log" | tail -1)"
+
   # El resumen avisa cuando se pasa del presupuesto de turnos.
   printf '{"result":"listo","total_cost_usd":0.5,"num_turns":99}\n' >"$tmp/exceso.log"
   check "avisa cuando se excede el presupuesto de turnos" 'excede el presupuesto de 15 turnos' \
@@ -8710,6 +8737,25 @@ case "${1:-}" in
     if ! flock -n 9; then
       printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
       flock 9
+    fi
+    # Guarda de modo (DEVKIT-137, H7 de la revisión sobre el PR #103): el
+    # `--worker` puede haber nacido (con `setsid`) antes de que el modo pasara
+    # a alto, y quedarse esperando el candado con otra skill corriendo. Sin
+    # esta comprobación, al fin tomar el candado seguía adelante y corría
+    # `claude -p` en pleno alto; `vigilar_alto_once` lo mataba segundos
+    # después y bloqueaba su card -un lanzamiento y un bloqueo que alto debía
+    # evitar, no limpiar después-. Misma forma que el corte de task-begin.sh
+    # de más abajo, para que `confirmar_arranque` lo lea como un cierre
+    # limpio.
+    if [ "$(modo_actual)" = alto ]; then
+      linea_fin=$(printf '%s devkit-run "%s" %s [%s]: %s' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" terminado \
+        "$(basename "$logf" .log)" "no lanzó: modo alto")
+      printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
+      costos_log "$linea_fin"
+      printf 'modo alto\n' > "$logf" 2>/dev/null
+      flock -u 9
+      exec 9>&-
+      exit 76
     fi
     # task-begin.sh (DEVKIT-90, H1+H2 del informe sobre el PR #64): corre acá,
     # ya con el candado tomado, para que `--otros-agentes` no confunda a un
