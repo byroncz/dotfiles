@@ -139,6 +139,10 @@ case "${1:-}" in
       "test -d /workspace/devkit") [ -d "$DEVKIT_TEST_WS/devkit" ]; exit $? ;;
       "cat /workspace/.devkit/devkit.toml") cat "$DEVKIT_TEST_WS/.devkit/devkit.toml" 2>/dev/null; exit $? ;;
       "cat /run/devkit/vscode-token") printf '%s' "${DEVKIT_TEST_TOKEN:-}"; exit 0 ;;
+      # DEVKIT-138: `devkit-run.sh --agentes-vivos` vía sh -c, no el alias
+      # devkit-run (ver el comentario de agentes_vivos en devkit.sh).
+      *devkit-run.sh*--agentes-vivos*)
+        printf '%s\n' "${DEVKIT_TEST_AGENTES_VIVOS:-sin agentes vivos}"; exit 0 ;;
       *) exit 0 ;;   # test -f ready, zsh, ...
     esac ;;
 esac
@@ -176,15 +180,16 @@ escenario() {
   printf 'DEVKIT_PROJECT=p\nDEVKIT_VERSION=%s\n' "$1" > "$TMP/root/p/.env"
 }
 
-# corre <comando> [caído]: ejecuta `devkit <comando> p` contra el doble,
-# respondiendo "si" a la confirmación. Deja la salida en $OUT.
+# corre <comando> [caído] [token] [extra]: ejecuta `devkit <comando> p
+# [extra]` contra el doble, respondiendo "si" a la confirmación. `extra`
+# (DEVKIT-138) es para "--force". Deja la salida en $OUT.
 OUT="$TMP/salida"
 corre() {
   : > "$DEVKIT_TEST_LOG"
   printf 'si\n' | env DEVKIT_HOME="$TMP/root" DEVKIT_TEST_WS="$TMP/ws" \
     DEVKIT_TEST_LOG="$DEVKIT_TEST_LOG" DEVKIT_TEST_DOWN="${2:-0}" \
     DEVKIT_TEST_TOKEN="${3:-}" \
-    sh "$DEVKIT" "$1" p >"$OUT" 2>&1
+    sh "$DEVKIT" "$1" p ${4:-} >"$OUT" 2>&1
   ESTADO=$?
 }
 
@@ -292,6 +297,55 @@ escenario dev; corre up 1
 check        "primer up sin contenedor conserva la copia" MARCA-VIEJA "$(marca)"
 check_salida "primer up sin contenedor avisa" "el contenedor no responde"
 check        "primer up sin contenedor no falla" 0 "$ESTADO"
+
+# --- Guarda de agentes vivos (DEVKIT-138) ------------------------------------
+# `devkit-run --agentes-vivos`, consultado antes de destruir nada, decide si
+# recreate/rebuild se niegan: con algún agente vivo abortan con el listado y
+# la sugerencia de pausar el bucle, sin tocar el contexto de build ni
+# reconstruir; --force salta la guarda; sin contenedor que responda (los dos
+# escenarios de arriba, con DEVKIT_TEST_DOWN=1) la guarda ni se consulta.
+#
+# DEVKIT-138 H4: sin DEVKIT_TEST_AGENTES_VIVOS, el doble de `docker exec`
+# responde "sin agentes vivos" por defecto -esa respuesta, no la falta de
+# contenedor, es lo que hacía pasar los dos escenarios de arriba, aunque la
+# guarda sí se hubiera consultado. Este caso fija DEVKIT_TEST_AGENTES_VIVOS
+# con un agente vivo y confirma que recreate sigue igual: el contenedor caído
+# hace que `docker exec` falle antes de llegar a esa respuesta, así que la
+# guarda de verdad no se consulta.
+escenario dev
+export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
+corre recreate 1
+unset DEVKIT_TEST_AGENTES_VIVOS
+check        "sin contenedor con agente vivo: la guarda ni se consulta" 0 "$ESTADO"
+check_docker "sin contenedor con agente vivo: recreate igual reconstruye" si 'up -d --build --force-recreate'
+
+escenario dev
+export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
+corre recreate
+unset DEVKIT_TEST_AGENTES_VIVOS
+check        "agente vivo: recreate se niega" 1 "$ESTADO"
+check_salida "agente vivo: lista el agente en el aviso" "DEVKIT-46.*task-fix"
+check_salida "agente vivo: sugiere pausar el bucle" "devkit-run --pausa"
+check_docker "agente vivo: recreate no reconstruye" no 'up -d --build --force-recreate'
+check        "agente vivo: no toca el contexto de build" MARCA-VIEJA "$(marca)"
+
+escenario dev
+export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
+corre rebuild
+unset DEVKIT_TEST_AGENTES_VIVOS
+check        "agente vivo: rebuild también se niega" 1 "$ESTADO"
+check_docker "agente vivo: rebuild no reconstruye" no 'build --no-cache'
+
+escenario dev; corre recreate
+check        "sin agentes vivos: recreate sigue" 0 "$ESTADO"
+check_docker "sin agentes vivos: recreate reconstruye" si 'up -d --build --force-recreate'
+
+escenario dev
+export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
+corre recreate 0 "" --force
+unset DEVKIT_TEST_AGENTES_VIVOS
+check        "--force: recreate sigue con un agente vivo" 0 "$ESTADO"
+check_docker "--force: recreate igual reconstruye" si 'up -d --build --force-recreate'
 
 # --- Fuera de modo dev ------------------------------------------------------
 escenario 0.1.0; corre recreate

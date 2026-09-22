@@ -63,12 +63,12 @@
 <div class="tarjeta">
   <div class="comando">devkit recreate &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit recreate ventas</div>
-  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar <code>.devkit/devkit.toml</code> o, en modo dev, el propio <code>devkit/</code>.</p>
+  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar <code>.devkit/devkit.toml</code> o, en modo dev, el propio <code>devkit/</code>. Se niega si hay un agente en curso; <code>--force</code> salta la guarda.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit rebuild &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit rebuild ventas</div>
-  <p class="descripcion">Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; <code>recreate</code> no alcanza.</p>
+  <p class="descripcion">Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; <code>recreate</code> no alcanza. Misma guarda de agentes en curso que <code>recreate</code>.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit awake &lt;proyecto&gt;</div>
