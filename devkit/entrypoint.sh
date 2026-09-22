@@ -248,8 +248,9 @@ if [ -d "$TEMPLATE_DIR/agents" ]; then
   cp -f "$TEMPLATE_DIR/agents/settings.json" "$HOME/.claude/settings.json"
 fi
 # Reenvío del retorno OAuth: Docker entrega en la IP del contenedor (54546) y
-# Claude Code escucha en 127.0.0.1:54545. socat une ambos extremos.
-nohup socat TCP-LISTEN:54546,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:54545 >/dev/null 2>&1 &
+# Claude Code escucha en 127.0.0.1:$MCP_OAUTH_CALLBACK_PORT (mismo número que
+# DEVKIT_OAUTH_PORT: ver compose.yaml). socat une ambos extremos.
+nohup socat TCP-LISTEN:54546,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:"${MCP_OAUTH_CALLBACK_PORT:-54545}" >/dev/null 2>&1 &
 # Plugin oficial de Notion, por proyecto (queda en el volumen ~/.claude).
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   if claude plugin list 2>/dev/null | grep -q '^notion@'; then
