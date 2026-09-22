@@ -100,7 +100,7 @@ RUN groupadd --gid "$USER_GID" "$USERNAME" \
 RUN mkdir -p "/home/$USERNAME/.claude" "/home/$USERNAME/.openvscode-server/data" /commandhistory /workspace /opt/devkit /run/devkit \
  && touch /commandhistory/.zsh_history \
  && chown -R "$USER_UID:$USER_GID" "/home/$USERNAME" /commandhistory /workspace /opt/devkit /run/devkit \
- && chmod 700 "/home/$USERNAME/.claude" /run/devkit
+ && chmod 700 "/home/$USERNAME/.claude" "/home/$USERNAME/.openvscode-server/data" /run/devkit
 
 USER $USERNAME
 ENV HOME="/home/${USERNAME}" \
