@@ -949,6 +949,45 @@ check_igual "ciclo: lanza la siguiente card de la cola" "task-start DEVKIT-4" \
 env "${ciclo_env[@]}" bash "$WATCH" --merged-once >>"$CICLO/watch.log" 2>&1
 check_igual "ciclo: una segunda pasada no vuelve a cerrar" 1 "$(grep -c 'task-close-40 terminado' "$OUT")"
 
+# --- Guarda de modo en lanzar_cola (DEVKIT-137, H1 de la revisión sobre el
+# PR #103) --------------------------------------------------------------
+# En pausa (o en alto), un merge sigue cerrando la card -Hecha, Documentación,
+# marcador, limpieza-, pero no debe arrancar la siguiente: la guarda vive
+# dentro de `lanzar_cola`, no en el script entero. Antes, `check_merged_prs`
+# -> `close_pr` -> task-close.sh -> `lanzar_cola` llamaba a cola.sh igual.
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
+jq '.state = "MERGED" | .comments = []' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+printf 'DEVKIT-4\n' >"$N/cola-siguiente"
+printf pausa >"$CICLO/run/modo"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close en pausa: la card cierra igual (Hecha)" "set card-3 Estado=Hecha Cierre=2026-09-16 PR=https://github.com/o/r/pull/40" \
+  "$(grep '^set card-3' "$N/llamadas" | head -1)"
+check_igual "task-close en pausa: no lanza la siguiente card" 0 \
+  "$(grep -c '^task-start' "$N/lanzamientos" 2>/dev/null)"
+OUT="$CICLO/run/watch.log"
+check_log "task-close en pausa: lanzar_cola avisa el motivo en watch.log" \
+  'cola-40 no se llama: modo pausa'
+: >"$CICLO/run/modo"
+
+# --- check_merged_prs no hace nada en alto (H4 de la revisión sobre el
+# PR #103) ---------------------------------------------------------------
+# Cerrar un PR mergeado puede lanzar el agente task-document de una Épica o
+# la siguiente card de la cola (dentro de task-close.sh, vía cerrar_epica y
+# lanzar_cola); en alto no debe nacer ninguna skill nueva, así que la pasada
+# entera se salta, sin marcar `cerrar:<n>` -para que se retome sola, sin
+# intervención, en cuanto el bucle vuelva a trabajo.
+: >"$N/llamadas"; : >"$N/lanzamientos"
+printf '41\thttps://github.com/o/r/pull/41\t%s\tDEVKIT-3 algo\n' "$MERGED_AT" >"$CICLO/gh/mergeados"
+printf alto >"$CICLO/run/modo"
+env "${ciclo_env[@]}" bash "$WATCH" --merged-once >"$CICLO/merged-alto.log" 2>&1
+check_igual "alto: check_merged_prs no cierra nada" "" "$(cat "$N/llamadas" 2>/dev/null)"
+check_igual "alto: no marca cerrar:<n>, se reintenta al volver a trabajo" 0 \
+  "$(grep -cx 'cerrar:41' "$CICLO/run/launched" 2>/dev/null)"
+: >"$CICLO/run/modo"
+: >"$CICLO/gh/mergeados"
+
 # task-close.sh idempotente: card ya Hecha y marcador publicado -> no toca nada.
 : >"$N/llamadas"; : >"$N/lanzamientos"; : >"$CICLO/gh/comentarios"
 tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
@@ -1697,5 +1736,318 @@ check_igual "procesar_pr: OK encadena vía cola.sh (lanzar_cola) una sola vez, e
 # `nada`, sin seguir consultando GitHub.
 check_igual "procesar_pr: se detiene tras llegar a nada, sin de más" 6 \
   "$(grep -c '^pr view$' "$PP_STATE/gh-calls" 2>/dev/null || echo 0)"
+
+# --- DEVKIT-137: watch.sh obedece el modo -----------------------------------
+# modo_actual() (copia de la de devkit-run.sh): trabajo por defecto, pausa y
+# alto desde MODO_FILE, cualquier otro valor cae a trabajo.
+MODO_TMP=$(mktemp -d -p "$TMP")
+check_igual "modo_actual sin archivo: trabajo" trabajo \
+  "$(DEVKIT_RUN_DIR="$MODO_TMP" bash "$WATCH" --modo-actual)"
+printf pausa >"$MODO_TMP/modo"
+check_igual "modo_actual con pausa" pausa "$(DEVKIT_RUN_DIR="$MODO_TMP" bash "$WATCH" --modo-actual)"
+printf alto >"$MODO_TMP/modo"
+check_igual "modo_actual con alto" alto "$(DEVKIT_RUN_DIR="$MODO_TMP" bash "$WATCH" --modo-actual)"
+printf basura >"$MODO_TMP/modo"
+check_igual "modo_actual con un valor que no reconoce: trabajo" trabajo \
+  "$(DEVKIT_RUN_DIR="$MODO_TMP" bash "$WATCH" --modo-actual)"
+
+# --- Pausa: `intentar_lanzar_cola` es la única guarda (criterio 1) ----------
+# La misma guarda que usan tanto el sondeo sin nada en curso como el
+# encadenamiento tras documentar (dentro de `procesar_pr`): en pausa no
+# llama a cola.sh, y sale con 75 (código propio, no el de `lanzar_cola`) para
+# que quien llama sepa que no se intentó de verdad, no que cola.sh respondió
+# vacío.
+GATE=$(mktemp -d -p "$TMP")
+mkdir -p "$GATE/run"
+cat >"$GATE/cola" <<'FIN'
+#!/usr/bin/env bash
+echo DEVKIT-90
+FIN
+chmod +x "$GATE/cola"
+cat >"$GATE/devkit-run" <<FIN
+#!/usr/bin/env bash
+[ "\$1" = --otros-agentes ] && exit 0
+printf '%s\n' "\$*" >>"$GATE/lanzamientos"
+FIN
+chmod +x "$GATE/devkit-run"
+printf pausa >"$GATE/run/modo"
+rc_gate=0
+env DEVKIT_COLA_BIN="$GATE/cola" DEVKIT_RUN_BIN="$GATE/devkit-run" \
+    DEVKIT_RUN_DIR="$GATE/run" DEVKIT_WS="$GATE" \
+  bash "$WATCH" --intentar-lanzar-cola 1 >/dev/null 2>&1 || rc_gate=$?
+check_igual "pausa: intentar_lanzar_cola no llama a cola.sh" "" "$(cat "$GATE/lanzamientos" 2>/dev/null)"
+check_igual "pausa: intentar_lanzar_cola sale con su propio código (75)" 75 "$rc_gate"
+
+printf alto >"$GATE/run/modo"
+rc_gate=0
+env DEVKIT_COLA_BIN="$GATE/cola" DEVKIT_RUN_BIN="$GATE/devkit-run" \
+    DEVKIT_RUN_DIR="$GATE/run" DEVKIT_WS="$GATE" \
+  bash "$WATCH" --intentar-lanzar-cola 1 >/dev/null 2>&1 || rc_gate=$?
+check_igual "alto: intentar_lanzar_cola tampoco llama a cola.sh" "" "$(cat "$GATE/lanzamientos" 2>/dev/null)"
+check_igual "alto: intentar_lanzar_cola sale con su propio código (76)" 76 "$rc_gate"
+
+printf trabajo >"$GATE/run/modo"
+env DEVKIT_COLA_BIN="$GATE/cola" DEVKIT_RUN_BIN="$GATE/devkit-run" \
+    DEVKIT_RUN_DIR="$GATE/run" DEVKIT_WS="$GATE" \
+  bash "$WATCH" --intentar-lanzar-cola 2 >/dev/null 2>&1
+check_igual "reanudar: la siguiente pasada toma de la cola" "task-start DEVKIT-90" \
+  "$(cat "$GATE/lanzamientos" 2>/dev/null)"
+
+# --- Pausa de punta a punta: la revisión corre, la cola no, un solo aviso --
+# `--pasada-n 3` corre tres pasadas seguidas en el mismo proceso (como el
+# bucle real): con un PR CAMBIOS pendiente, cada pasada sigue atendiendo el
+# ciclo de pr-review/task-fix de la card en curso -"la revisión corre"-, pero
+# ninguna llama a cola.sh, y el aviso "modo pausa: no se toma la siguiente"
+# sale una sola vez, no en cada pasada.
+PAUSA=$(mktemp -d -p "$TMP")
+mkdir -p "$PAUSA/run" "$PAUSA/bin" "$PAUSA/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$PAUSA/ws/.devkit/devkit.toml"
+git init -q "$PAUSA/ws"
+printf pausa >"$PAUSA/run/modo"
+cat >"$PAUSA/notion.sh" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "epicas-abiertas DEVKIT") echo '[]' ;;
+esac
+FIN
+chmod +x "$PAUSA/notion.sh"
+cat >"$PAUSA/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr list") printf '81\thttps://github.com/o/r/pull/81\tDEVKIT-81 algo\n' ;;
+  "pr view") printf '{"headRefOid":"a1","reviews":[{"author":{"login":"humano"},"state":"COMMENTED","submittedAt":"T01","body":"<!-- devkit-review sha=a1 verdict=CAMBIOS -->"}],"comments":[],"body":""}' ;;
+  "api user") echo bot ;;
+  *) exit 1 ;;
+esac
+FIN
+chmod +x "$PAUSA/bin/gh"
+cat >"$PAUSA/devkit-run" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  --rol) echo "sonnet medium - 1" ;;
+  --sync) printf '{"result":"listo","total_cost_usd":0.01,"num_turns":2}\n' ;;
+  --resumen) echo resumen ;;
+  --guardar-transcripcion) exit 0 ;;
+  --pregunta-abierta) exit 1 ;;
+  --presupuesto-corte) exit 0 ;;
+  --otros-agentes) exit 0 ;;
+  *) exit 0 ;;
+esac
+FIN
+chmod +x "$PAUSA/devkit-run"
+cat >"$PAUSA/cola" <<'FIN'
+#!/usr/bin/env bash
+echo llamada >>"$PAUSA_COLA_LLAMADAS"
+echo DEVKIT-99
+FIN
+chmod +x "$PAUSA/cola"
+
+PAUSA_COLA_LLAMADAS="$PAUSA/cola-llamadas" DEVKIT_NOTION_BIN="$PAUSA/notion.sh" \
+DEVKIT_RUN_BIN="$PAUSA/devkit-run" DEVKIT_COLA_BIN="$PAUSA/cola" DEVKIT_WATCH_BOT=bot \
+GH_TOKEN=x PATH="$PAUSA/bin:$PATH" DEVKIT_RUN_DIR="$PAUSA/run" DEVKIT_WS="$PAUSA/ws" \
+  bash "$WATCH" --pasada-n 3 >"$PAUSA/watch.log" 2>&1
+OUT="$PAUSA/watch.log"
+check_log "pausa: la revisión/corrección de la card en curso sigue corriendo" \
+  'CAMBIOS en a1: lanzando task-fix'
+check_igual "pausa: nunca llama a cola.sh, ni en tres pasadas" "" \
+  "$(cat "$PAUSA/cola-llamadas" 2>/dev/null)"
+check_igual "pausa: el aviso de modo sale una sola vez, no en cada pasada" 1 \
+  "$(grep -c 'modo pausa: no se toma la siguiente' "$OUT")"
+
+# --- Alto: mata la skill en curso, libera el candado y bloquea la card -----
+# (criterio de aceptación 2). El doble de `claude` (`$DOBLE`, definido más
+# arriba para las pruebas de cuota) duerme `DEVKIT_TEST_SLEEP` segundos antes
+# de responder: tiempo de sobra para que la prueba mueva MODO_FILE a alto y
+# dispare una pasada del vigilante mientras la skill sigue "en curso".
+ALTO_DIR=$(mktemp -d -p "$TMP")
+mkdir -p "$ALTO_DIR/run"
+BLOQUEO_ALTO="$ALTO_DIR/task-block"
+cat >"$BLOQUEO_ALTO" <<'FIN'
+#!/usr/bin/env bash
+printf '%s|' "$@" >>"$DEVKIT_TEST_BLOQUEO"
+FIN
+chmod +x "$BLOQUEO_ALTO"
+BLOQUEO_ALTO_LOG="$ALTO_DIR/bloqueo.args"
+
+DEVKIT_TEST_COUNT="$ALTO_DIR/llamadas" DEVKIT_TEST_SLEEP=8 DEVKIT_TEST_FAILS=0 \
+DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$ALTO_DIR/run" DEVKIT_WS="$ALTO_DIR" \
+DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_ALTO" DEVKIT_TEST_BLOQUEO="$BLOQUEO_ALTO_LOG" \
+  bash "$WATCH" --run-skill "pr-review-81-abc1234" "/pr-review 81" "revisar:81:abc1234" "DEVKIT-81" \
+  >"$ALTO_DIR/salida.log" 2>&1 &
+alto_run_pid=$!
+
+# Espera a que run_skill deje EN_CURSO escrito: el candado ya tomado y el
+# `claude -p` doble durmiendo.
+for ((i = 0; i < 50; i++)); do
+  [ -s "$ALTO_DIR/run/en-curso" ] && break
+  sleep 0.1
+done
+en_curso_linea=$(cat "$ALTO_DIR/run/en-curso" 2>/dev/null)
+en_curso_pid=$(printf '%s' "$en_curso_linea" | cut -f3)
+check_igual "alto: EN_CURSO trae el nombre y la Clave de la skill en curso" "pr-review-81-abc1234	DEVKIT-81" \
+  "$(printf '%s' "$en_curso_linea" | cut -f1,2)"
+check_igual "alto: skill.lock ocupado mientras la skill corre" ocupado \
+  "$( (exec 8>"$ALTO_DIR/run/skill.lock"; flock -n 8 && echo libre || echo ocupado) )"
+
+printf alto >"$ALTO_DIR/run/modo"
+DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_ALTO" DEVKIT_TEST_BLOQUEO="$BLOQUEO_ALTO_LOG" \
+  DEVKIT_RUN_DIR="$ALTO_DIR/run" DEVKIT_WS="$ALTO_DIR" \
+  bash "$WATCH" --vigilar-alto-once >"$ALTO_DIR/vigilante.log" 2>&1
+
+check_igual "alto: el claude -p en curso muere" no \
+  "$(kill -0 "${en_curso_pid:-0}" 2>/dev/null && echo si || echo no)"
+OUT="$ALTO_DIR/vigilante.log"
+check_log "alto: registra modo alto: detenido <skill> <Clave>" \
+  'modo alto: detenido pr-review-81-abc1234 DEVKIT-81'
+check_igual "alto: task-block.sh recibe la Clave y \"alto del humano\"" "DEVKIT-81|alto del humano|" \
+  "$(cat "$BLOQUEO_ALTO_LOG" 2>/dev/null)"
+
+wait "$alto_run_pid" 2>/dev/null
+check_igual "alto: skill.lock libre tras matar la skill" libre \
+  "$( (exec 8>"$ALTO_DIR/run/skill.lock"; flock -n 8 && echo libre || echo ocupado) )"
+check_igual "alto: EN_CURSO se borra" 0 \
+  "$([ -e "$ALTO_DIR/run/en-curso" ] && echo 1 || echo 0)"
+
+# Sin skill en curso, una pasada del vigilante no hace nada (ni ALARMA ni
+# task-block.sh): EN_CURSO no existe.
+VIGILANTE_VACIO=$(mktemp -d -p "$TMP")
+mkdir -p "$VIGILANTE_VACIO/run"
+printf alto >"$VIGILANTE_VACIO/run/modo"
+: >"$VIGILANTE_VACIO/bloqueo"
+DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_ALTO" DEVKIT_TEST_BLOQUEO="$VIGILANTE_VACIO/bloqueo" \
+  DEVKIT_RUN_DIR="$VIGILANTE_VACIO/run" DEVKIT_WS="$VIGILANTE_VACIO" \
+  bash "$WATCH" --vigilar-alto-once
+check_igual "alto: sin skill en curso, el vigilante no hace nada" "" \
+  "$(cat "$VIGILANTE_VACIO/bloqueo" 2>/dev/null)"
+
+# --- Alto también mata un --worker vivo, no solo lo que ve por --sync ------
+# (H2 de la revisión sobre el PR #103): task-start, task-close, epic-plan o
+# un lanzamiento manual corren con `devkit-run.sh --worker`, nacido con
+# `setsid` en su propia sesión, fuera del camino de `run_skill`/EN_CURSO. Con
+# el mismo EN_CURSO que ahora escribe `--worker` (devkit-run.sh), el
+# vigilante ya probado arriba lo alcanza igual, sin lógica nueva de su lado.
+WORKER_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$WORKER_ALTO/run"
+BLOQUEO_WORKER="$WORKER_ALTO/task-block"
+cat >"$BLOQUEO_WORKER" <<'FIN'
+#!/usr/bin/env bash
+printf '%s|' "$@" >>"$DEVKIT_TEST_BLOQUEO"
+FIN
+chmod +x "$BLOQUEO_WORKER"
+BLOQUEO_WORKER_LOG="$WORKER_ALTO/bloqueo.args"
+
+DEVKIT_TEST_COUNT="$WORKER_ALTO/llamadas" DEVKIT_TEST_SLEEP=8 DEVKIT_TEST_FAILS=0 \
+DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$WORKER_ALTO/run" DEVKIT_WS="$WORKER_ALTO" \
+DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+  bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-140' "$WORKER_ALTO/run/task-fix-1.log" \
+  modelo-x esfuerzo-x 10 >"$WORKER_ALTO/salida.log" 2>&1 &
+worker_run_pid=$!
+
+for ((i = 0; i < 50; i++)); do
+  [ -s "$WORKER_ALTO/run/en-curso" ] && break
+  sleep 0.1
+done
+en_curso_worker=$(cat "$WORKER_ALTO/run/en-curso" 2>/dev/null)
+en_curso_worker_pid=$(printf '%s' "$en_curso_worker" | cut -f3)
+check_igual "worker: EN_CURSO trae el nombre y la Clave del --worker en curso" "task-fix-1	DEVKIT-140" \
+  "$(printf '%s' "$en_curso_worker" | cut -f1,2)"
+
+printf alto >"$WORKER_ALTO/run/modo"
+DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_WORKER" DEVKIT_TEST_BLOQUEO="$BLOQUEO_WORKER_LOG" \
+  DEVKIT_RUN_DIR="$WORKER_ALTO/run" DEVKIT_WS="$WORKER_ALTO" \
+  bash "$WATCH" --vigilar-alto-once >"$WORKER_ALTO/vigilante.log" 2>&1
+
+check_igual "worker: el claude -p del --worker muere en alto" no \
+  "$(kill -0 "${en_curso_worker_pid:-0}" 2>/dev/null && echo si || echo no)"
+check_igual "worker: task-block.sh recibe la Clave y \"alto del humano\"" "DEVKIT-140|alto del humano|" \
+  "$(cat "$BLOQUEO_WORKER_LOG" 2>/dev/null)"
+
+wait "$worker_run_pid" 2>/dev/null
+check_igual "worker: EN_CURSO se borra tras matar el --worker" 0 \
+  "$([ -e "$WORKER_ALTO/run/en-curso" ] && echo 1 || echo 0)"
+
+# --- Alto corta antes de lanzar, no solo mata lo que ya corría (H3 de la
+# revisión sobre el PR #103) -------------------------------------------
+# Antes, un alto llegado a mitad de una pasada no impedía que `run_skill`
+# lanzara una skill nueva, ni que `procesar_pr` siguiera su cadena sobre el
+# mismo PR o el `while read` de `pasada` pasara al PR siguiente.
+RUN_SKILL_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$RUN_SKILL_ALTO/run"
+printf alto >"$RUN_SKILL_ALTO/run/modo"
+cat >"$RUN_SKILL_ALTO/devkit-run" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$DEVKIT_TEST_LLAMADAS"
+FIN
+chmod +x "$RUN_SKILL_ALTO/devkit-run"
+DEVKIT_TEST_LLAMADAS="$RUN_SKILL_ALTO/llamadas" DEVKIT_RUN_BIN="$RUN_SKILL_ALTO/devkit-run" \
+  DEVKIT_RUN_DIR="$RUN_SKILL_ALTO/run" DEVKIT_WS="$RUN_SKILL_ALTO" \
+  bash "$WATCH" --run-skill "prueba-alto" "/noop" - >"$RUN_SKILL_ALTO/watch.log" 2>&1
+OUT="$RUN_SKILL_ALTO/watch.log"
+check_log "alto: run_skill no lanza nada, lo registra" 'prueba-alto no se lanza: modo alto'
+check_igual "alto: run_skill no llega a resolver rol ni a lanzar devkit-run" "" \
+  "$(cat "$RUN_SKILL_ALTO/llamadas" 2>/dev/null)"
+
+# `procesar_pr` corta en la primera vuelta de su cadena, antes de consultar
+# `gh` siquiera: con un `gh` que falla si lo llaman, cualquier consulta
+# quedaría como evidencia en watch.log.
+PROC_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$PROC_ALTO/run" "$PROC_ALTO/bin"
+printf alto >"$PROC_ALTO/run/modo"
+cat >"$PROC_ALTO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+echo "gh no debería llamarse en alto" >&2
+exit 1
+FIN
+chmod +x "$PROC_ALTO/bin/gh"
+PATH="$PROC_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  DEVKIT_RUN_DIR="$PROC_ALTO/run" DEVKIT_WS="$PROC_ALTO" \
+  bash "$WATCH" --procesar-pr 81 https://github.com/o/r/pull/81 "DEVKIT-81 algo" DEVKIT \
+  >"$PROC_ALTO/watch.log" 2>&1
+check_igual "alto: procesar_pr corta antes de consultar gh" 0 \
+  "$(wc -l <"$PROC_ALTO/watch.log" | tr -d ' ')"
+
+# --- run_skill desmarca la clave que ya tenía puesta quien llama al cortar en
+# alto (H6 de la revisión sobre el PR #103) ----------------------------------
+# Antes, `caso_fix`/`caso_revisar`/`caso_fix_humano` (y el relanzamiento de
+# `quota_pause`/`transient_retry`) marcaban la clave en `launched` antes de
+# llamar a `run_skill`; si este cortaba en alto sin lanzar nada, la marca
+# quedaba puesta y la próxima pasada en trabajo la veía "ya lanzada;
+# esperando" para siempre, sin relanzar ni bloquear la card.
+UNMARK_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$UNMARK_ALTO/run"
+printf alto >"$UNMARK_ALTO/run/modo"
+echo "fix:9:abc1234" > "$UNMARK_ALTO/run/launched"
+DEVKIT_RUN_DIR="$UNMARK_ALTO/run" DEVKIT_WS="$UNMARK_ALTO" \
+  bash "$WATCH" --run-skill "prueba-alto-unmark" "/noop" "fix:9:abc1234" >/dev/null 2>&1
+check_igual "H6: run_skill desmarca la clave de launched al no lanzar en alto" "" \
+  "$(grep -xF 'fix:9:abc1234' "$UNMARK_ALTO/run/launched" 2>/dev/null)"
+
+# `atender_fix` no debe seguir con `decision_fresca` (consulta el PR) ni con
+# el reintento de "fix vacío" cuando `run_skill` cortó por modo alto: sobre un
+# log vacío, `fix_vacio` podría malinterpretar la ausencia de resultado como
+# una respuesta vacía y relanzar task-fix con otro modelo, como si el primero
+# hubiera corrido de verdad.
+FIX_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$FIX_ALTO/run" "$FIX_ALTO/bin"
+printf alto >"$FIX_ALTO/run/modo"
+echo "fix:9:abc1234" > "$FIX_ALTO/run/launched"
+cat >"$FIX_ALTO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+if [ "$1" = pr ] && [ "$2" = view ]; then
+  echo "gh pr view no debería llamarse (H6)" >&2
+  exit 1
+fi
+exit 0
+FIN
+chmod +x "$FIX_ALTO/bin/gh"
+PATH="$FIX_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  DEVKIT_RUN_DIR="$FIX_ALTO/run" DEVKIT_WS="$FIX_ALTO" \
+  bash "$WATCH" --fix 9 DEVKIT-9 https://github.com/o/r/pull/9 abc1234 abc1234 \
+  >"$FIX_ALTO/watch.log" 2>&1
+check_igual "H6: atender_fix corta en alto sin consultar el PR ni reintentar" 1 \
+  "$(wc -l <"$FIX_ALTO/watch.log" | tr -d ' ')"
+check_igual "H6: atender_fix también desmarca la clave que ya había puesto caso_fix" "" \
+  "$(grep -xF 'fix:9:abc1234' "$FIX_ALTO/run/launched" 2>/dev/null)"
 
 exit $fail

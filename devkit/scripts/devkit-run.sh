@@ -202,6 +202,16 @@ MODEL_RETRY="${DEVKIT_MODEL_RETRY:-600}"
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
+# Mismo archivo que `run_skill` en watch.sh (DEVKIT-137, H2 de la revisión
+# sobre el PR #103): un `--worker` (task-start, task-close, epic-plan o un
+# lanzamiento manual) también toma `$LOCK` antes de correr `claude -p`, así
+# que a lo sumo uno de los dos -un `--sync` del bucle o un `--worker`- lo
+# tiene tomado a la vez. Escribir aquí el mismo `EN_CURSO` deja que el
+# vigilante de modo alto de watch.sh (`vigilar_alto_once`) también encuentre
+# y mate un `--worker`, sin lógica nueva de su lado: antes solo veía lo que
+# `run_skill` anotaba, y un `--worker` corre siempre fuera de ese camino,
+# nace con `setsid` en su propia sesión y sigue vivo en alto.
+EN_CURSO="${DEVKIT_EN_CURSO_FILE:-$RUN_DIR/en-curso}"
 # Mismas alarmas de DEVKIT-46 que `run_skill` en watch.sh, para que un
 # lanzamiento por `--worker` (manual o desde task-close/epic-plan) avise
 # igual que el bucle: skill lenta, con el mismo umbral y sondeo.
@@ -2572,10 +2582,13 @@ color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
 }
 
 # Modo del interruptor de tres posiciones (DEVKIT-136), leído de MODO_FILE:
-# "trabajo" (el valor por defecto, sin archivo), "pausa" o "alto". Por ahora
-# solo `devkit-run.sh` lo obedece, rechazando un lanzamiento manual en alto
-# (ver el `if` que sigue a `prompt="/$skill $clave"`, cerca del final del
-# archivo); que `watch.sh` también lo respete queda para otra card.
+# "trabajo" (el valor por defecto, sin archivo), "pausa" o "alto".
+# `devkit-run.sh` lo obedece rechazando un lanzamiento manual en alto (ver el
+# `if` que sigue a `prompt="/$skill $clave"`, cerca del final del archivo);
+# watch.sh (DEVKIT-137) tiene su propia copia de esta función -los dos
+# scripts no se importan entre sí- y es quien de verdad frena el ciclo
+# automático: en pausa deja terminar lo que ya está en curso y no toma la
+# siguiente card, en alto además mata la skill que esté corriendo.
 modo_actual() {
   local m
   m=$(tr -d '[:space:]' 2>/dev/null < "$MODO_FILE")
@@ -5210,6 +5223,33 @@ FIN
     "espera: otra skill ocupa el workspace" \
     "$(grep -oE 'espera: otra skill ocupa el workspace' "$tmp/run/watch.log" | head -1)"
 
+  # DEVKIT-137, H7 de la revisión sobre el PR #103: si el modo pasa a alto
+  # mientras el `--worker` espera el candado, al tomarlo no debe correr
+  # `claude -p`. Antes seguía adelante igual, y `vigilar_alto_once` lo mataba
+  # y bloqueaba su card segundos después -un lanzamiento que alto debía
+  # evitar, no limpiar después.
+  (
+    exec 9>"$tmp/run/skill.lock"
+    flock 9
+    sleep 0.6
+  ) &
+  tenedor=$!
+  sleep 0.1  # deja que el subshell de arriba tome el candado primero
+  printf alto >"$tmp/run/modo"
+  DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    bash "$HERE/devkit-run.sh" --worker '/task-document DEVKIT-2' "$tmp/run/modo-alto.log" \
+      modelo-barato low 15 >/dev/null 2>&1
+  rc=$?
+  wait "$tenedor" 2>/dev/null
+  printf trabajo >"$tmp/run/modo"
+  check "worker: no corre claude -p si el modo pasó a alto mientras esperaba el candado" \
+    "modo alto" "$(cat "$tmp/run/modo-alto.log" 2>/dev/null)"
+  check "worker: sale con 76 en vez de correr la skill" 76 "$rc"
+  check "worker: deja \"no lanzó: modo alto\" en watch.log" \
+    "no lanzó: modo alto" \
+    "$(grep -oE 'no lanzó: modo alto' "$tmp/run/watch.log" | tail -1)"
+
   # El resumen avisa cuando se pasa del presupuesto de turnos.
   printf '{"result":"listo","total_cost_usd":0.5,"num_turns":99}\n' >"$tmp/exceso.log"
   check "avisa cuando se excede el presupuesto de turnos" 'excede el presupuesto de 15 turnos' \
@@ -5938,6 +5978,36 @@ FIN
     "$([ -f "$trans2_dir/run/task-fix-1-transcript.jsonl" ] && echo 1 || echo 0)"
   check "--worker: la transcripción trae el primer mensaje de usuario" 1 \
     "$(grep -c 'task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1-transcript.jsonl" 2>/dev/null)"
+
+  # --worker escribe el mismo EN_CURSO que `run_skill` en watch.sh (DEVKIT-137,
+  # H2 de la revisión sobre el PR #103): antes, el vigilante de modo alto solo
+  # veía lo que lanzaba el bucle con `--sync`, y un `--worker` -task-start,
+  # task-close, epic-plan o un lanzamiento manual, nacido con `setsid` en su
+  # propia sesión- seguía vivo en alto. Un doble que duerme deja ver el
+  # archivo mientras el `claude -p` sigue corriendo, y su limpieza al terminar.
+  local en_curso_dir en_curso_doble en_curso_pid
+  en_curso_dir=$(mktemp -d "$tmp/en-curso.XXXXXX")
+  mkdir -p "$en_curso_dir/run"
+  en_curso_doble="$tmp/claude-en-curso-sleep"
+  cat >"$en_curso_doble" <<'FIN'
+#!/usr/bin/env bash
+sleep 2
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$en_curso_doble"
+  DEVKIT_CLAUDE_BIN="$en_curso_doble" DEVKIT_RUN_DIR="$en_curso_dir/run" DEVKIT_WS="$en_curso_dir" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-137' "$en_curso_dir/run/task-fix-1.log" \
+    modelo-x high 40 >/dev/null 2>&1 &
+  en_curso_pid=$!
+  for ((i = 0; i < 50; i++)); do
+    [ -s "$en_curso_dir/run/en-curso" ] && break
+    sleep 0.1
+  done
+  check "--worker escribe EN_CURSO con el nombre y la Clave" "task-fix-1	DEVKIT-137" \
+    "$(cat "$en_curso_dir/run/en-curso" 2>/dev/null | cut -f1,2)"
+  wait "$en_curso_pid" 2>/dev/null
+  check "--worker borra EN_CURSO al terminar" 0 \
+    "$([ -e "$en_curso_dir/run/en-curso" ] && echo 1 || echo 0)"
 
   # Sin Notion conectada (un doble que no entiende `mcp list` se ve igual que
   # un servidor caído), no corre el `claude -p` real y queda la alarma en vez
@@ -8668,6 +8738,25 @@ case "${1:-}" in
       printf '%s devkit-run "%s" espera: otra skill ocupa el workspace\n' "$(date +%FT%T%:z)" "$prompt" >> "$WATCH_LOG"
       flock 9
     fi
+    # Guarda de modo (DEVKIT-137, H7 de la revisión sobre el PR #103): el
+    # `--worker` puede haber nacido (con `setsid`) antes de que el modo pasara
+    # a alto, y quedarse esperando el candado con otra skill corriendo. Sin
+    # esta comprobación, al fin tomar el candado seguía adelante y corría
+    # `claude -p` en pleno alto; `vigilar_alto_once` lo mataba segundos
+    # después y bloqueaba su card -un lanzamiento y un bloqueo que alto debía
+    # evitar, no limpiar después-. Misma forma que el corte de task-begin.sh
+    # de más abajo, para que `confirmar_arranque` lo lea como un cierre
+    # limpio.
+    if [ "$(modo_actual)" = alto ]; then
+      linea_fin=$(printf '%s devkit-run "%s" %s [%s]: %s' "$(date +%FT%T%:z)" "$(prompt_en_linea "$prompt")" terminado \
+        "$(basename "$logf" .log)" "no lanzó: modo alto")
+      printf '%s\n' "$linea_fin" >> "$WATCH_LOG"
+      costos_log "$linea_fin"
+      printf 'modo alto\n' > "$logf" 2>/dev/null
+      flock -u 9
+      exec 9>&-
+      exit 76
+    fi
     # task-begin.sh (DEVKIT-90, H1+H2 del informe sobre el PR #64): corre acá,
     # ya con el candado tomado, para que `--otros-agentes` no confunda a un
     # task-start que solo esperaba este mismo candado con un conflicto real.
@@ -8712,10 +8801,16 @@ $card_md"
     # sabe por DEVKIT_LOCK_HELD y guarda el wip sin volver a pedirlo.
     DEVKIT_LOCK_HELD=1 run_claude "$prompt_pleno" "$modelo" "$esfuerzo" >"$logf" 2>&1 &
     skill_pid=$!
+    # EN_CURSO (DEVKIT-137, H2): mismo formato de tres campos que escribe
+    # `run_skill` en watch.sh, para que `vigilar_alto_once` mate este
+    # `--worker` en modo alto igual que mata lo que lanza el bucle.
+    clave_en_curso=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+    printf '%s\t%s\t%s\n' "$(basename "$logf" .log)" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
     watch_long_running "$prompt" "$skill_pid" &
     watcher_pid=$!
     wait "$skill_pid"
     rc=$?
+    rm -f "$EN_CURSO"
     kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
     flock -u 9
     exec 9>&-

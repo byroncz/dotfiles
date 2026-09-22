@@ -105,6 +105,19 @@
 # bloquea la card. Cada lanzamiento deja antes una línea "<nombre> lanzando
 # (origen=bucle): ..." que `devkit-run --estado` usa para mostrarlo en curso
 # aunque su `claude -p` todavía no exista.
+#
+# Interruptor de tres posiciones (DEVKIT-136/DEVKIT-137), leído de MODO_FILE
+# con `devkit-run --pausa/--alto/--reanudar`: en pausa, `pasada` (el cuerpo
+# de cada vuelta) deja de llamar a `intentar_lanzar_cola` -no toma la
+# siguiente card- pero sigue encadenando pr-review/task-fix/task-document de
+# las cards ya en curso; en alto, `pasada` ni siquiera consulta GitHub, y un
+# vigilante aparte (`vigilar_alto_once`, en su propio proceso porque el
+# principal queda bloqueado en `wait` durante una skill síncrona) mata la
+# skill que `run_skill` tenga corriendo -SIGTERM y, a los 10 s, SIGKILL-,
+# libera skill.lock y bloquea su card con `task-block.sh <Clave> "alto del
+# humano"`. Los hooks `--modo-actual`, `--intentar-lanzar-cola`,
+# `--vigilar-alto-once`, `--pasada` y `--pasada-n` prueban cada pieza sin
+# tocar GitHub; ver watch-test.sh.
 set -u
 WS="${DEVKIT_WS:-/workspace}"
 RUN_DIR="${DEVKIT_RUN_DIR:-/run/devkit}"
@@ -112,6 +125,18 @@ LAUNCHED="$RUN_DIR/launched"
 POKE="$RUN_DIR/poke"
 LOCK="$RUN_DIR/skill.lock"
 WATCH_LOG_FILE="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
+# Interruptor de tres posiciones (DEVKIT-136/DEVKIT-137): mismo archivo que
+# escribe `devkit-run --pausa/--alto/--reanudar`. devkit-run.sh ya lo obedece
+# para un lanzamiento manual (rechaza en alto); este bucle es quien de
+# verdad lo hace parar -pausa deja terminar lo que ya está en curso y no toma
+# la siguiente card, alto además mata la skill que esté corriendo-.
+MODO_FILE="${DEVKIT_MODO_FILE:-$RUN_DIR/modo}"
+# La skill que `run_skill` tiene en curso ahora mismo -nombre, Clave y pid
+# del proceso que lanzó `devkit-run --sync`, con su `claude -p` como
+# descendiente-, para que el vigilante de modo alto sepa a quién matar y qué
+# card bloquear (DEVKIT-137). Vive en tmpfs, como skill.lock: sobra entre
+# lanzamientos y un `devkit recreate` no necesita arrastrarla.
+EN_CURSO="${DEVKIT_EN_CURSO_FILE:-$RUN_DIR/en-curso}"
 # Copia de las líneas `lanzando`/`terminado` fuera de tmpfs (DEVKIT-89): sin
 # ella, la única evidencia de costo por card muere en cada `devkit recreate`.
 # devkit-run.sh no se importa de este archivo: repite la misma variable y las
@@ -359,6 +384,19 @@ log() {
   costos_log "$linea"
 }
 
+# Copia de `modo_actual()` de devkit-run.sh (DEVKIT-137): los dos scripts no
+# se importan entre sí, mismo patrón que `costos_log`/`INTERVALO_BUCLE`. Lee
+# MODO_FILE y responde "trabajo" (por defecto, sin archivo o con un valor que
+# no reconoce), "pausa" o "alto".
+modo_actual() {
+  local m
+  m=$(tr -d '[:space:]' 2>/dev/null < "$MODO_FILE")
+  case "$m" in
+    pausa|alto) printf '%s' "$m" ;;
+    *) printf trabajo ;;
+  esac
+}
+
 # `cuota:<clave>` es la misma entrada, reescrita mientras la skill espera a que
 # se reinicie la cuota (DEVKIT-27): para el bucle cuenta como lanzada, así que
 # no nace una segunda copia en paralelo, y el relanzamiento la restituye al
@@ -586,6 +624,60 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
   done
 }
 
+# --- Modo alto: terminar la skill en curso (DEVKIT-137) --------------------
+# `run_skill` lanza `devkit-run --sync` en segundo plano y espera con `wait`
+# (más abajo): un SIGTERM al pid que guarda no basta, bash no lo reenvía a
+# sus hijos, y el `claude -p` real es descendiente de ese proceso, no el
+# proceso mismo. `matar_arbol` baja por `pgrep -P` antes de matar cada nivel,
+# de las hojas hacia la raíz, para no perder de vista a un hijo cuyo padre ya
+# murió.
+matar_arbol() {  # matar_arbol <pid> <señal>
+  local pid=$1 senal=$2 hijo
+  for hijo in $(pgrep -P "$pid" 2>/dev/null); do
+    matar_arbol "$hijo" "$senal"
+  done
+  kill -s "$senal" "$pid" 2>/dev/null
+}
+
+# SIGTERM al árbol completo y, si sigue vivo a los ALTO_KILL_WAIT segundos
+# (10 por defecto, criterio de aceptación de DEVKIT-137), SIGKILL.
+ALTO_KILL_WAIT="${DEVKIT_WATCH_ALTO_KILL_WAIT:-10}"
+detener_arbol() {  # detener_arbol <pid raíz>
+  local pid=$1 esperado=0
+  matar_arbol "$pid" TERM
+  while [ "$esperado" -lt "$ALTO_KILL_WAIT" ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    esperado=$((esperado + 1))
+  done
+  kill -0 "$pid" 2>/dev/null && matar_arbol "$pid" KILL
+  return 0
+}
+
+# Una pasada del vigilante de modo alto: si hay una skill en curso (EN_CURSO,
+# que `run_skill` escribe y borra) y el modo es alto, la mata, libera
+# skill.lock -al morir el pid que `run_skill` espera con `wait`, ese mismo
+# proceso sigue su curso normal y suelta el candado él solo, sin que este
+# vigilante lo toque- y bloquea la card con el motivo del humano. Corre en un
+# proceso aparte del bucle principal (más abajo, junto a MERGED_PID): el
+# bucle está bloqueado en `wait` durante toda la skill, así que nada dentro
+# de él puede notar el cambio de modo a tiempo.
+vigilar_alto_once() {
+  [ "$(modo_actual)" = alto ] || return 0
+  [ -f "$EN_CURSO" ] || return 0
+  local name clave pid
+  IFS=$'\t' read -r name clave pid < "$EN_CURSO"
+  if [ -z "${pid:-}" ] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$EN_CURSO"
+    return 0
+  fi
+  detener_arbol "$pid"
+  log "modo alto: detenido $name ${clave:--}"
+  if [ -n "$clave" ] && [ "$clave" != - ]; then
+    "$TASK_BLOCK" "$clave" "alto del humano" >/dev/null 2>&1
+  fi
+  rm -f "$EN_CURSO"
+}
+
 # run_skill <nombre del log> <prompt> [clave de launched] [intento]. Lanza el
 # prompt con `devkit-run.sh --sync`, que resuelve modelo y esfuerzo por rol y
 # corre `claude -p`; la última línea de su JSON trae costo, tokens y turnos,
@@ -602,7 +694,24 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
 # ("/task-fix DEVKIT-94 ..."); pr-review no ("/pr-review 68"), así que quien
 # la conoce por el título del PR la pasa aparte.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales clave_en_curso
+  # Guarda de modo (DEVKIT-137, H3 de la revisión sobre el PR #103): en alto
+  # no se lanza nada, ni siquiera un relanzamiento ya programado por
+  # `quota_pause`/`transient_retry` que despierta después del corte. Se
+  # comprueba antes de resolver modelo/candado (para no gastar la sonda de
+  # `--rol` en vano) y otra vez justo después de tomar el candado, porque la
+  # espera de `flock` puede tardar y el modo cambiar mientras tanto.
+  #
+  # `unmark`: quien llama (`caso_fix`/`caso_revisar`/`caso_fix_humano`,
+  # `quota_pause`/`transient_retry`) ya marcó `$key` en `launched` antes de
+  # este `run_skill` que corta sin lanzar nada. Sin desmarcarla, la próxima
+  # pasada en trabajo la ve marcada y `avisar_si_lanzada` deja el PR "ya
+  # lanzada; esperando" para siempre (H6 de la revisión sobre el PR #103).
+  if [ "$(modo_actual)" = alto ]; then
+    log "$name no se lanza: modo alto"
+    [ "$key" = - ] || unmark "$key"
+    return 76
+  fi
   logf="$RUN_DIR/$name.log"
   # `--rol` antes de la línea "lanzando" (DEVKIT-81): la fila de --estado
   # muestra modelo y esfuerzo desde que aparece, no solo al terminar. Costo:
@@ -629,6 +738,13 @@ run_skill() {
     log "$name espera: otra skill ocupa el workspace"
     flock 9
   fi
+  if [ "$(modo_actual)" = alto ]; then
+    log "$name no se lanza: modo alto (tras esperar el candado)"
+    [ "$key" = - ] || unmark "$key"
+    flock -u 9
+    exec 9>&-
+    return 76
+  fi
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
   # DEVKIT_LANZADOR=watch le dice a task-fix que lo lanzó el bucle: sin ella,
@@ -638,10 +754,17 @@ run_skill() {
   DEVKIT_LOCK_HELD=1 DEVKIT_LANZADOR=watch DEVKIT_MODELO_FORZADO="$forzado" DEVKIT_RONDA="${ronda:-}" \
     "$DEVKIT_RUN" --sync "$prompt" >"$logf" 2>&1 &
   skill_pid=$!
+  # Clave del EN_CURSO: la que ya nos pasaron (pr-review, que no la trae en
+  # su propio prompt) o la que aparece en el prompt (task-fix/task-document,
+  # que sí la traen, DEVKIT-137). El vigilante de modo alto la usa para
+  # bloquear la card correcta.
+  clave_en_curso=${clave:-$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)}
+  printf '%s\t%s\t%s\n' "$name" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!
   wait "$skill_pid"
   rc=$?
+  rm -f "$EN_CURSO"
   kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
   flock -u 9
   exec 9>&-
@@ -897,10 +1020,17 @@ decision_fresca() {  # decision_fresca <num>
 # cuota (quota_pause) reescribiría una clave que no coincide con la que
 # `caso_fix` marcó en `launched`, y la reanudación se perdería.
 atender_fix() {  # atender_fix <num> <Clave> <url> <head> <ref> [clave de launched]
-  local num=$1 key=$2 url=$3 head=$4 ref=$5 lkey=${6:-} name accion head_ahora siguiente
+  local num=$1 key=$2 url=$3 head=$4 ref=$5 lkey=${6:-} name accion head_ahora siguiente rc
   [ -n "$lkey" ] || lkey="fix:$num:$ref"
   name="task-fix-$num-${head:0:7}"
   run_skill "$name" "/task-fix $key" "$lkey"
+  rc=$?
+  # rc=76 (DEVKIT-137, H6 de la revisión sobre el PR #103): modo alto, no
+  # corrió nada. `run_skill` ya desmarcó `$lkey` para que la próxima pasada
+  # en trabajo lo relance; seguir con `decision_fresca`/`fix_vacio` sobre un
+  # log vacío gastaría un `gh pr view` en vano y, peor, podría relanzar
+  # task-fix con otro modelo como si el primero hubiera respondido vacío.
+  [ "$rc" -eq 76 ] && return 0
   IFS=$'\t' read -r accion head_ahora < <(decision_fresca "$num")
   fix_vacio "$RUN_DIR/$name.log" "${accion:-}" "${head_ahora:-}" "$head" || return 0
   siguiente=$("$DEVKIT_RUN" --siguiente-modelo "$ULTIMO_MODELO")
@@ -1107,6 +1237,31 @@ lanzar_cola() {  # lanzar_cola <n>
   [ "$rc" -eq 0 ] || log "ALARMA: cola-$n terminó con error (rc=$rc); ver $RUN_DIR/cola-$n.log"
 }
 
+# Guarda de modo sobre `lanzar_cola` (DEVKIT-137): ni en pausa ni en alto se
+# toma la siguiente card, ni desde el sondeo sin nada en curso ni desde el
+# encadenamiento tras documentar -en alto, `pasada` ya no llega a este punto
+# desde el sondeo de PRs (corta antes de consultar GitHub), pero el
+# encadenamiento tras documentar sigue viniendo de un `procesar_pr` que
+# arrancó en modo trabajo y todavía no notó el cambio, así que la guarda
+# también hace falta aquí. El aviso de "no se toma la siguiente" no vive
+# aquí -se repetiría en cada llamada, una por PR documentado y otra por
+# pasada del sondeo- sino en `registrar_cambio_modo`, una sola vez por
+# cambio de modo.
+#
+# Devuelve 75 (pausa) o 76 (alto) -códigos propios, sin relación con el de
+# `lanzar_cola`- cuando se saltó: `procesar_pr` los usa para no marcar
+# "encadenar" como intentado, así que al volver a trabajo la próxima pasada
+# lo vuelve a intentar en vez de darlo por hecho para siempre (DEVKIT-137,
+# H1 de la revisión).
+intentar_lanzar_cola() {  # intentar_lanzar_cola <n>
+  case "$(modo_actual)" in
+    pausa) return 75 ;;
+    alto) return 76 ;;
+  esac
+  lanzar_cola "$1"
+  return 0
+}
+
 # ¿El cuerpo del PR trae la marca "Tipo: decisión" (DEVKIT-92)? La escribe el
 # agente de `task-submit` cuando la card cambió una decisión de diseño, no
 # solo la implementó; sin ella, la entrada de Documentación es mecánica.
@@ -1162,6 +1317,10 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
     return 0
   fi
   while [ "$intentos" -lt "$MAX_CHAIN_ITER" ]; do
+    # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de la cadena
+    # (`run_skill` tarda minutos) corta antes del siguiente `caso_*` en vez
+    # de seguir revisando, corrigiendo o documentando otros PRs.
+    [ "$(modo_actual)" != alto ] || return 0
     intentos=$((intentos + 1))
     # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92): es
     # lo único que necesita el caso `documentar` para saber si el PR trae la
@@ -1190,17 +1349,15 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
         fi
         # Después de documentar: la hija nueva hace `git switch` y espera el
         # candado, así que no le quita el turno a la entrada.
-        if ! launched "encadenar:$num:$head"; then
+        if ! launched "encadenar:$num:$head" && intentar_lanzar_cola "$num"; then
           mark "encadenar:$num:$head"
-          lanzar_cola "$num"
         fi
         ;;
       nada)
         # OK ya documentado (por ejemplo, en una vida anterior del
         # contenedor): el encadenamiento se intenta igual una vez.
-        if [ "$ref" = OK ] && ! launched "encadenar:$num:$head"; then
+        if [ "$ref" = OK ] && ! launched "encadenar:$num:$head" && intentar_lanzar_cola "$num"; then
           mark "encadenar:$num:$head"
-          lanzar_cola "$num"
         fi
         return 0
         ;;
@@ -1236,8 +1393,16 @@ close_pr() {  # close_pr <num> <Clave> <url> <mergedAt>
 }
 
 # Una pasada sobre los PRs mergeados en las últimas 48 h.
+#
+# En alto no hace nada (DEVKIT-137, H4 de la revisión sobre el PR #103):
+# cerrar un PR mergeado puede lanzar el agente task-document de una Épica o
+# la siguiente card de la cola (cerrar_epica/lanzar_cola dentro de
+# task-close.sh), y en alto no debe nacer ninguna skill nueva. No marca
+# `cerrar:<n>`, así que el cierre se hace al reanudar, en la siguiente pasada
+# de este mismo bucle.
 check_merged_prs() {
   local code
+  [ "$(modo_actual)" != alto ] || return 0
   code=$(project_code)
   # `-u 3`/`3< <(...)` (DEVKIT-102, H4), no `gh pr list | while ...`: con la
   # tubería, el `while` toma la entrada estándar del bucle entero, así que
@@ -1266,6 +1431,67 @@ check_merged_prs() {
   done 3< <(gh pr list --state merged --limit 30 --json number,title,url,mergedAt \
     --jq '[.[] | select(.mergedAt > (now - 172800 | todate))] | sort_by(.mergedAt)
            | .[] | "\(.number)\t\(.url)\t\(.mergedAt)\t\(.title)"' 2>/dev/null)
+}
+
+# ULTIMO_MODO_REGISTRADO recuerda el último modo que ya se anunció en
+# watch.log, para avisar "no se toma la siguiente" una sola vez por cambio de
+# modo (DEVKIT-137, criterio de aceptación 1), no en cada pasada ni en cada
+# card que hubiera encadenado la cola.
+ULTIMO_MODO_REGISTRADO=""
+registrar_cambio_modo() {  # registrar_cambio_modo <modo>
+  [ "$1" != "$ULTIMO_MODO_REGISTRADO" ] || return 0
+  [ "$1" != pausa ] || log "modo pausa: no se toma la siguiente card de la cola hasta reanudar"
+  ULTIMO_MODO_REGISTRADO=$1
+}
+
+# Una pasada del sondeo (DEVKIT-137). En pausa sigue atendiendo
+# pr-review/task-fix/task-document/task-close de las cards ya en curso -por
+# eso solo `intentar_lanzar_cola` se salta, no todo el bloque de GitHub-; en
+# alto no consulta PRs ni lanza nada nuevo, el vigilante de modo alto
+# (`vigilar_alto_once`, en un proceso aparte) es quien atiende lo que ya
+# estaba corriendo. El bucle principal, al final del archivo, solo la llama
+# en un `while true`; el hook `--pasada` la prueba suelta.
+pasada() {
+  local modo
+  modo=$(modo_actual)
+  registrar_cambio_modo "$modo"
+
+  CODE=$(project_code)
+  # Cada pasada, antes de drenar la cola: una Épica en Lista o En progreso
+  # puede tener hijas nuevas en Backlog -DEVKIT-121- que arrastrar_hijas pasa
+  # a Lista, así cola.sh ya las ve en esta misma vuelta.
+  [ -z "$CODE" ] || arrastrar_hijas "$(date +%s)"
+  # Cada pasada sin nada en curso, la cola drena sola (DEVKIT-120): no hace
+  # falta comprobar aquí si hay una card activa, esa guarda ya vive dentro de
+  # cola.sh. Antes de la consulta a GitHub: si el proyecto no tiene nada que
+  # revisar en PRs abiertos, la card recién lanzada aparece igual en el
+  # siguiente `--estado` sin esperar el resto del intervalo.
+  [ -z "$CODE" ] || intentar_lanzar_cola "$(date +%s)"
+
+  [ "$modo" != alto ] || return 0
+
+  if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
+    BOT="$(gh api user --jq .login 2>/dev/null)"
+    log "consultando GitHub"
+    check_orphan_branch
+
+    # --- PRs abiertos: revisar, corregir, documentar o bloquear ------------
+    # `-u 3`/`3< <(...)` (DEVKIT-102, H4): mismo motivo que check_merged_prs.
+    # `procesar_pr` corre `run_skill` de forma síncrona, que a su vez corre
+    # `claude -p` -el caso real del PR 68, donde ese `claude -p` se comió la
+    # fila de otro PR de esta misma tubería- y también cola.sh,
+    # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
+    # la tubería como entrada estándar.
+    while IFS=$'\t' read -r -u 3 num url title; do
+        # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de esta
+        # tubería (cada `procesar_pr` puede tardar minutos) corta antes del
+        # siguiente PR en vez de lanzar pr-review/task-fix sobre los que
+        # faltan por leer.
+        [ "$(modo_actual)" != alto ] || break
+        procesar_pr "$num" "$url" "$title"
+    done 3< <(gh pr list --state open --limit 30 --json number,title,url \
+      --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
+  fi
 }
 
 # Hooks de prueba, sin GitHub y sin gastar cuota:
@@ -1300,6 +1526,21 @@ check_merged_prs() {
 #                           sobre el mismo PR hasta un estado terminal o sin
 #                           progreso; es lo que el bucle principal llama por
 #                           cada fila de `gh pr list`
+#   --modo-actual           el modo del interruptor de tres posiciones
+#                           (DEVKIT-136/137), leído de MODO_FILE
+#   --intentar-lanzar-cola <n>
+#                           `lanzar_cola`, salvo en pausa o en alto: ahí no
+#                           hace nada y sale con 75 (pausa) o 76 (alto)
+#                           (DEVKIT-137)
+#   --vigilar-alto-once     una pasada del vigilante de modo alto: si hay una
+#                           skill en curso (EN_CURSO) y el modo es alto, la
+#                           mata, libera skill.lock y bloquea su card
+#   --pasada                una pasada completa del sondeo (arrastre, cola,
+#                           PRs abiertos), la misma que corre el bucle
+#                           principal en cada vuelta, obedeciendo el modo
+#   --pasada-n <n>          <n> pasadas seguidas en el mismo proceso, para
+#                           probar que el aviso de modo pausa sale una sola
+#                           vez y no en cada una (DEVKIT-137)
 # Los tres primeros se apoyan en DEVKIT_CLAUDE_BIN y DEVKIT_RUN_DIR; los
 # siguientes, en un `gh` de mentira en PATH y DEVKIT_TASK_CLOSE_BIN,
 # DEVKIT_TASK_BLOCK_BIN o dobles de notion.sh y devkit-run.sh; `--fix`, en
@@ -1357,6 +1598,31 @@ case "${1:-}" in
     lanzar_cola "${2:-}"
     exit 0
     ;;
+  --intentar-lanzar-cola)
+    intentar_lanzar_cola "${2:-}"
+    exit $?
+    ;;
+  --modo-actual)
+    modo_actual
+    exit 0
+    ;;
+  --vigilar-alto-once)
+    vigilar_alto_once
+    exit 0
+    ;;
+  --pasada)
+    pasada
+    exit 0
+    ;;
+  --pasada-n)
+    # --pasada-n <n>: <n> pasadas seguidas en el mismo proceso, sin dormir
+    # entre medio (DEVKIT-137): a diferencia de invocar `--pasada` <n> veces
+    # por fuera, esto sí comparte ULTIMO_MODO_REGISTRADO entre pasadas -como
+    # el bucle real, un solo proceso- y prueba que el aviso de modo pausa
+    # sale una sola vez, no en cada una.
+    for ((_pasada_n_i = 0; _pasada_n_i < ${2:-1}; _pasada_n_i++)); do pasada; done
+    exit 0
+    ;;
   --arrastrar-hijas)
     arrastrar_hijas "${2:-}"
     exit 0
@@ -1403,37 +1669,18 @@ log "vigilancia iniciada (cada ${INTERVAL}s, guardia de ${MAX_CYCLES} ciclos; PR
 if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
   ( while true; do check_merged_prs; sleep "$MERGED_INTERVAL"; done ) &
   MERGED_PID=$!
-  trap 'kill "$MERGED_PID" 2>/dev/null' EXIT
 fi
 
-while true; do
-  CODE=$(project_code)
-  # Cada pasada, antes de drenar la cola: una Épica en Lista o En progreso
-  # puede tener hijas nuevas en Backlog -DEVKIT-121- que arrastrar_hijas pasa
-  # a Lista, así cola.sh ya las ve en esta misma vuelta.
-  [ -z "$CODE" ] || arrastrar_hijas "$(date +%s)"
-  # Cada pasada sin nada en curso, la cola drena sola (DEVKIT-120): no hace
-  # falta comprobar aquí si hay una card activa, esa guarda ya vive dentro de
-  # cola.sh. Antes de la consulta a GitHub: si el proyecto no tiene nada que
-  # revisar en PRs abiertos, la card recién lanzada aparece igual en el
-  # siguiente `--estado` sin esperar el resto del intervalo.
-  [ -z "$CODE" ] || lanzar_cola "$(date +%s)"
-  if [ -d .git ] && [ -n "${GH_TOKEN:-}" ]; then
-    BOT="$(gh api user --jq .login 2>/dev/null)"
-    log "consultando GitHub"
-    check_orphan_branch
+# Vigilante de modo alto (DEVKIT-137), aparte del principal por el mismo
+# motivo que el de PRs mergeados: el bucle principal está bloqueado en
+# `wait` durante toda una skill síncrona (pr-review, task-fix, ...), así que
+# nada dentro de él puede notar a tiempo que el modo cambió a alto. Corre
+# siempre, con o sin GH_TOKEN: matar un proceso local no necesita GitHub.
+( while true; do vigilar_alto_once; sleep "${DEVKIT_WATCH_ALTO_POLL:-3}"; done ) &
+ALTO_PID=$!
+trap 'kill "${MERGED_PID:-}" "$ALTO_PID" 2>/dev/null' EXIT
 
-    # --- PRs abiertos: revisar, corregir, documentar o bloquear ------------
-    # `-u 3`/`3< <(...)` (DEVKIT-102, H4): mismo motivo que check_merged_prs.
-    # `procesar_pr` corre `run_skill` de forma síncrona, que a su vez corre
-    # `claude -p` -el caso real del PR 68, donde ese `claude -p` se comió la
-    # fila de otro PR de esta misma tubería- y también cola.sh,
-    # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
-    # la tubería como entrada estándar.
-    while IFS=$'\t' read -r -u 3 num url title; do
-        procesar_pr "$num" "$url" "$title"
-    done 3< <(gh pr list --state open --limit 30 --json number,title,url \
-      --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
-  fi
+while true; do
+  pasada
   sleep_or_poke "$INTERVAL"
 done
