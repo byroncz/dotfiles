@@ -20,7 +20,7 @@ Argumento: versión destino `X.Y.Z`.
 3. Si el salto es MAJOR (cambia el primer número), lee en esas notas qué hay
    que tocar fuera del template (`devkit.env`, volúmenes, secretos) y
    escríbelo en el comentario del PR. No apliques esos cambios tú: son del
-   humano en su Mac.
+   humano en su host.
 4. Trabaja como una card: si no existe, créala con `task-create` (Tipo
    `chore`, título "Actualizar template a <X.Y.Z>") en `Lista` y arráncala
    con `task-start`.
@@ -47,6 +47,6 @@ Argumento: versión destino `X.Y.Z`.
 8. `task-submit`. En el cuerpo del PR incluye el resumen de las notas de la
    versión y, si aplica, los cambios manuales requeridos.
 9. Actualiza en Notion la fila del proyecto: `Versión del template` = destino.
-10. Una vez mergeado, en el Mac: `devkit update <proyecto>`. Lee `template`
+10. Una vez mergeado, en el host: `devkit update <proyecto>`. Lee `template`
     desde el contenedor, descarga esa versión y reconstruye; el `.env` del
-    Mac queda al día.
+    host queda al día.

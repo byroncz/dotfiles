@@ -1,11 +1,16 @@
 # devkit
 
 Entorno de desarrollo reproducible para proyectos de datos, pensado para que
-lo operen agentes de IA con un humano como única compuerta. El Mac solo
+lo operen agentes de IA con un humano como única compuerta. El host solo
 necesita Docker; todo lo demás vive en un contenedor que se reconstruye desde
 este repo, y las tareas se gestionan en Notion.
 
-## Instalación en el Mac
+## Instalación en el host
+
+El host necesita bash y Docker Compose. macOS y Linux corren tal cual; en
+Windows, con WSL. `devkit awake` solo funciona en macOS (usa `caffeinate`);
+`devkit code` abre el navegador con `open` y, donde no existe, imprime la
+URL para pegarla a mano.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.sh | sh -s -- <proyecto> --version X.Y.Z
@@ -28,7 +33,7 @@ vuelve a inyectar el token y renueva la cookie por otros 7 días.
 
 | Herramienta | Para qué se usa aquí | Versión |
 |---|---|---|
-| Docker + Compose | Única dependencia del Mac. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa) y `proxy` (única salida, con lista blanca). | — |
+| Docker + Compose | Única dependencia del host. Dos contenedores por proyecto: `dev` (trabajo, sin salida directa) y `proxy` (única salida, con lista blanca). | — |
 | Debian | Imagen base sin lenguaje. Usuario `dev` sin `sudo`. | debian:trixie-slim |
 | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | alpine 3.22 |
 | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. | 0.12.7 |
@@ -42,7 +47,7 @@ vuelve a inyectar el token y renueva la cookie por otros 7 días.
 | Notion | Centro de tareas: bases Proyectos, Tareas y Documentación. | — |
 | Bitwarden Secrets Manager | Único lugar de los secretos del proyecto. | bws 2.1.0 |
 | rclone + Dropbox | Respaldo continuo de `sandbox.local/`, cada minuto. | rclone 1.75.1 |
-| Terminal.app | Terminal de macOS; ahí corre el comando `devkit`. | — |
+| Terminal del host | cualquier terminal con bash; ahí corre el comando `devkit`. | — |
 
 Generada por `gen-readme.sh` (verificado con `--check`), no a mano:
 
@@ -56,7 +61,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 |---|---|
 | `devkit up <proyecto>` | Levanta los contenedores (construye la imagen si falta). |
 | `devkit shell <proyecto>` | Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor. |
-| `devkit code <proyecto>` | Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla. |
+| `devkit code <proyecto>` | Abre el editor en el navegador; sin `open`, imprime la URL para pegarla a mano (macOS la abre sola). Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla. |
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor; lo no commiteado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda. |
@@ -64,7 +69,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml`. |
 | `devkit logs <proyecto>` | Arranque y bucles del contenedor. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
-| `devkit awake <proyecto>` | Impide que el Mac se suspenda mientras el contenedor esté vivo. Úsalo antes de un lanzamiento largo sin supervisión, para que el Mac no lo corte al dormirse. |
+| `devkit awake <proyecto>` | Solo macOS: evita que el host se suspenda mientras el contenedor esté vivo (`caffeinate`); en otro host avisa y no hace nada. Úsalo antes de un lanzamiento largo sin supervisión. |
 | `devkit ls` | Lista los proyectos instanciados. |
 
 ### Dentro del contenedor
@@ -152,7 +157,7 @@ Detalle y convenciones de cada transición:
   aprobación, auto-merge activado). Los agentes actúan con la cuenta máquina
   `byroncz-bot`; su token llega como secreto de Bitwarden.
 - **Bitwarden Secrets Manager**: único lugar de los secretos del proyecto. Un
-  token en `~/.devkit/bws-token` del Mac los trae al arrancar a un `tmpfs`
+  token en `~/.devkit/bws-token` del host los trae al arrancar a un `tmpfs`
   que muere con el contenedor.
 - **Dropbox**: respaldo continuo de `sandbox.local/`, vía `rclone`. Se
   autoriza una vez con `dropbox-setup.sh`, que genera el secreto
