@@ -14,6 +14,14 @@
 # color por prefijo que el script ya deja en ANSI crudo.
 format = """${custom.devkit}$character"""
 
+# DEVKIT-149: el default de starship (500 ms) es más corto de lo que tarda
+# prompt-status.sh mientras el contenedor arranca -índice de git frío, clon
+# recién hecho-, así que starship corta el módulo y avisa "timed out" antes
+# de cada prompt. 1500 ms cubre ese caso puntual sin ser tan largo como para
+# ocultar un prompt realmente colgado. Va a nivel global porque también
+# aplica a los módulos de git propios de starship, no solo a custom.devkit.
+command_timeout = 1500
+
 continuation_prompt = "[.](bright-black) "
 
 [character]

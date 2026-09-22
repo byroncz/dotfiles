@@ -6,10 +6,13 @@
 # (ver devkit-run.sh)- para quedar por debajo de los 50 ms por módulo que
 # mide `starship timings`. Ningún segmento toca la red.
 #
-# Forma: "[arrancando ]<proyecto>:<template> [<rama> [±<n>] [↑<m>]] [agentes:<a>] [!<k>]"
-# Cada segmento entre paréntesis se omite cuando no aplica o vale 0. El color
-# de la rama va embebido como ANSI crudo en la salida: starship.toml deja
-# `style = ""` en `[custom.devkit]` para no envolverlo con el suyo.
+# Forma: "arrancando <proyecto>:<template>" mientras no existe /run/devkit/ready
+# -sin tocar git ni devkit-run: el árbol recién se clonó y no hay agentes que
+# listar (DEVKIT-149)-, o si no "<proyecto>:<template> [<rama> [±<n>] [↑<m>]]
+# [agentes:<a>] [!<k>]". Cada segmento entre paréntesis se omite cuando no
+# aplica o vale 0. El color de la rama va embebido como ANSI crudo en la
+# salida: starship.toml deja `style = ""` en `[custom.devkit]` para no
+# envolverlo con el suyo.
 set -u
 
 VERDE=$'\033[32m'
@@ -32,9 +35,12 @@ linea() {
   alarmas_vistas="${DEVKIT_ALARMAS_VISTAS:-$run_dir/alarmas-vistas}"
 
   local ws=${1:-${DEVKIT_WS:-/workspace}} out rama color corta cambios adelante agentes vistas alarmas
-  out=""
-  [ -e "$ready_file" ] || out+="${ROJO_NEGRITA}arrancando${RESET} "
-  out+="${DEVKIT_PROJECT:-?}:${DEVKIT_VERSION:-?} "
+  if [ ! -e "$ready_file" ]; then
+    printf '%s' "${ROJO_NEGRITA}arrancando${RESET} ${DEVKIT_PROJECT:-?}:${DEVKIT_VERSION:-?}"
+    return
+  fi
+
+  out="${DEVKIT_PROJECT:-?}:${DEVKIT_VERSION:-?} "
 
   rama=$(git -C "$ws" symbolic-ref --quiet --short HEAD 2>/dev/null)
   if [ -n "$rama" ]; then
@@ -99,11 +105,13 @@ run_tests() {
   git -C "$tmp/ws" commit -q --allow-empty -m base
   git -C "$tmp/ws" branch -M main
 
-  local doble_agentes doble_agentes_n
+  local doble_agentes doble_agentes_n doble_agentes_llamadas
   doble_agentes_n="$tmp/agentes-n"
   echo 0 >"$doble_agentes_n"
+  doble_agentes_llamadas="$tmp/agentes-llamadas"
+  : >"$doble_agentes_llamadas"
   doble_agentes="$tmp/devkit-run-doble.sh"
-  printf '#!/usr/bin/env bash\ncat "%s"\n' "$doble_agentes_n" >"$doble_agentes"
+  printf '#!/usr/bin/env bash\necho llamada >>"%s"\ncat "%s"\n' "$doble_agentes_llamadas" "$doble_agentes_n" >"$doble_agentes"
   chmod +x "$doble_agentes"
 
   export DEVKIT_RUN_DIR="$tmp/run" DEVKIT_RUN_BIN="$doble_agentes" \
@@ -111,8 +119,9 @@ run_tests() {
     DEVKIT_ALARMAS_VISTAS="$tmp/run/alarmas-vistas" DEVKIT_PROJECT=devkit DEVKIT_VERSION=dev
   mkdir -p "$tmp/run"
 
-  check "arrancando mientras no existe ready" "${ROJO_NEGRITA}arrancando${RESET} devkit:dev ${CIAN}main${RESET}" \
-    "$(linea "$tmp/ws")"
+  check "arrancando mientras no existe ready: sin rama ni agentes" \
+    "${ROJO_NEGRITA}arrancando${RESET} devkit:dev" "$(linea "$tmp/ws")"
+  check "arrancando no invoca devkit-run --agentes" "0" "$(wc -l <"$doble_agentes_llamadas" | tr -d ' ')"
   : >"$tmp/run/ready"
   check "sin arrancando con ready presente" "devkit:dev ${CIAN}main${RESET}" "$(linea "$tmp/ws")"
 
