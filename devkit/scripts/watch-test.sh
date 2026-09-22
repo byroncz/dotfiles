@@ -44,6 +44,10 @@ comment() { printf '{"author":{"login":"%s"},"createdAt":"%s","body":"%s"}' "$1"
 rev() { review humano COMMENTED "$1" "<!-- devkit-review sha=$2 verdict=$3 -->"; }
 fix() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->"; }
 fixm() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 manual=1 -->"; }
+# devkit-fix con un hallazgo descartado por necesitar aprobación humana
+# (DEVKIT-142): el cuerpo completo, marcador y bloque de hallazgos, como lo
+# publica task-fix (SKILL.md, paso 8), no solo el marcador.
+fix_na() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->\n<!-- devkit-fixes -->\n$4 | descartado | necesita aprobación humana: elegir el enfoque\n<!-- /devkit-fixes -->"; }
 block() { comment "$BOT" "$1" "<!-- devkit-block sha=$2 -->"; }
 closed() { comment "$BOT" "$1" "<!-- devkit-closed sha=$2 -->"; }
 doc() { comment "$BOT" "$1" "<!-- devkit-doc sha=$2 -->"; }
@@ -184,6 +188,31 @@ check "DEVKIT-101: comentario humano tras un fix, con un OK posterior: no se pie
 # sigue sin cambiar: sin ningún devkit-fix todavía, el corte sigue siendo el
 # último devkit-review, para no reabrir un comentario que ya quedó atrás
 # cuando el ciclo cerró con OK y se documentó.
+
+# --- Hallazgo descartado por necesitar aprobación humana (DEVKIT-142) -------
+# PR 102 (DEVKIT-140): task-fix descartó H3/H4 pidiendo una decisión que no
+# le correspondía y bloqueó la card en Notion (sin marcador devkit-block en
+# el PR); el humano respondió en el PR pero el ciclo, con el informe todavía
+# en CAMBIOS, seguía mandando a `revisar` en vez de atender el comentario.
+check "DEVKIT-142: hallazgo descartado por aprobación, sin comentario humano: espera" nada a1 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)"
+check "DEVKIT-142: hallazgo descartado por aprobación, comentario humano nuevo: atiende" fix-humano a1 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)" "$(comment humano T03 'usa la opción B')"
+check_tsv "DEVKIT-142: el comentario humano viaja completo (campo 4, base64)" 4 \
+  "$(printf 'usa la opción B' | base64 -w0)" a1 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)" "$(comment humano T03 'usa la opción B')"
+# task-fix pudo empujar commits para otros hallazgos y descartar este mismo
+# aparte: el head vigente ya no es el que revisó pr-review, pero la espera
+# (o la atención del comentario humano) sigue mandando igual, no `revisar`.
+check "DEVKIT-142: head nuevo con el mismo hallazgo pendiente, sin comentario: espera" nada b2 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 b2 a1 H3)"
+check "DEVKIT-142: head nuevo con el mismo hallazgo pendiente, comentario humano: atiende" fix-humano b2 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 b2 a1 H3)" "$(comment humano T03 'usa la opción B')"
+# Una revisión nueva sin responder manda sobre la espera: no hay que quedarse
+# mirando un hallazgo ya superado por un informe fresco, aunque el head no
+# haya cambiado (una re-revisión sin código nuevo).
+check "DEVKIT-142: informe nuevo sin responder manda sobre la espera" fix a1 \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T04 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)"
 
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
