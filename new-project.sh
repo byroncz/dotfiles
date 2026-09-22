@@ -59,8 +59,11 @@ next_port() {  # next_port <var> <base>
     [ -f "$env" ] || continue
     [ "$env" = "$dir/.env" ] && continue
     val="$(sed -n "s/^${var}=//p" "$env" | head -1)"
+    # Un .env sin la variable (todo proyecto instalado antes de este cambio)
+    # sigue arrancando con $base por default en compose.yaml: cuenta como si
+    # ya la usara, o el siguiente proyecto choca contra él (DEVKIT-155, H1).
     case "$val" in
-      ''|*[!0-9]*) continue ;;
+      ''|*[!0-9]*) val="$base" ;;
     esac
     [ "$val" -gt "$max" ] && max="$val"
   done
