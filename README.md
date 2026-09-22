@@ -33,6 +33,12 @@ Cada proyecto recibe su propio par de puertos de host (editor y retorno
 OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 ~/.devkit/<proyecto>/.env`.
 
+Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
+estado del editor VS Code del lado del servidor (extensiones instaladas,
+perfiles en caché y logs) entre reconstrucciones. `devkit down` no lo borra,
+igual que al resto de los volúmenes con nombre; para reiniciarlo desde cero
+hace falta `docker volume rm editor-<proyecto>`.
+
 ## Stack
 
 | Herramienta | Para qué se usa aquí | Versión |
@@ -88,7 +94,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `ll` | Alias de `ls -lah`. |
 | `c` | Alias de `clear`. |
 | `dk <skill> <Clave>` | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias largo: `devkit-run`, mismo script y mismos argumentos; los agentes lo invocan así. |
-| `dk --estado [--seguir]` | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor. |
+| `dk --estado [--seguir]` | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor. La columna PR muestra `#<número>` y, en una terminal que soporte hipervínculos, se abre con Ctrl/Cmd+clic. |
 | `dk --tablero [--seguir]` | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada. |
 | `dk --cola` | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque. |
 | `dk --agentes-vivos` | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano. |
