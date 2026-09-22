@@ -1514,8 +1514,9 @@ pasada() {
 #   --modo-actual           el modo del interruptor de tres posiciones
 #                           (DEVKIT-136/137), leído de MODO_FILE
 #   --intentar-lanzar-cola <n>
-#                           `lanzar_cola`, salvo en pausa: ahí no hace nada
-#                           y sale con 75 (DEVKIT-137)
+#                           `lanzar_cola`, salvo en pausa o en alto: ahí no
+#                           hace nada y sale con 75 (pausa) o 76 (alto)
+#                           (DEVKIT-137)
 #   --vigilar-alto-once     una pasada del vigilante de modo alto: si hay una
 #                           skill en curso (EN_CURSO) y el modo es alto, la
 #                           mata, libera skill.lock y bloquea su card
