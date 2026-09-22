@@ -2205,21 +2205,70 @@ agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
 # antes de tumbar el contenedor a mitad de una card. Un agente vivo es un
 # `devkit-run.sh --worker` o `--sync` en curso; `-ww` evita que una ruta de
 # log larga quede fuera de la línea y el agente parezca no tener paso.
+# DEVKIT-138 H1: solo `ps` repite el falso negativo que documenta el
+# comentario de ESTADO_GRACIA -entre la línea "lanzando" y que el `--worker`/
+# `--sync` aparezca en `ps` pasan la sonda de modelo y `esperar_arranque",
+# hasta ESTADO_GRACIA segundos sin proceso visible-, así que también se
+# cuentan los lanzamientos de watch.log sin línea de cierre, con el mismo
+# criterio que `agentes_en_curso_rapido`: menos de ESTADO_GRACIA segundos, o
+# esperando el candado de skill.lock.
 agentes_vivos() {
-  local lineas
-  lineas=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | grep -E -- '--(worker|sync) /' | grep -v grep)
-  if [ -z "$lineas" ]; then
+  local procesos lineas ahora candado=libre
+  local -a filas=()
+  procesos=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null)
+  lineas=$(printf '%s\n' "$procesos" | grep -E -- '--(worker|sync) /' | grep -v grep)
+  if [ -n "$lineas" ]; then
+    local linea pid args paso arg clave
+    while IFS= read -r linea; do
+      pid=$(printf '%s' "$linea" | awk '{print $1}')
+      args=$(printf '%s' "$linea" | cut -d' ' -f2-)
+      paso=$(printf '%s' "$args" | grep -oE -- '--(worker|sync)[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
+      # DEVKIT-138 H3: la Clave es el argumento que sigue a `/<paso>`, no
+      # cualquier Clave citada en el resto de la línea -un `--sync` de
+      # pr-review lleva el prompt completo, con el diff, y ese texto puede
+      # mencionar otra card. pr-review no recibe Clave sino número de PR.
+      arg=$(printf '%s' "$args" | grep -oE -- "/${paso:-x}[[:space:]]+[^[:space:]]+" | awk '{print $2}')
+      if [ "$paso" = pr-review ]; then
+        clave="PR ${arg:-?}"
+      elif printf '%s' "$arg" | grep -qE '^[A-Z][A-Z0-9]+-[0-9]+$'; then
+        clave="$arg"
+      else
+        clave="?"
+      fi
+      filas+=("$(printf '%s\t%s\t%s' "$pid" "$clave" "${paso:-?}")")
+    done <<<"$lineas"
+  fi
+  ahora=${DEVKIT_AHORA:-$(date +%s)}
+  if [ -e "$LOCK" ] && exec 8<"$LOCK"; then
+    flock -n 8 || candado=ocupado
+    exec 8<&-
+  fi
+  local ln ts id origen prompt logf modelo esfuerzo ronda skill arg_lanz clave_lanz t0 edad
+  while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda; do
+    [ -n "$id" ] || continue
+    grep -qE "^[^ ]+ ($id (terminado|no lanzó): |ALARMA: $id terminó con error \(rc=[0-9]+\)|devkit-run \".*\" (terminado|falló \(rc=[0-9]+\)) \[$id\]:|devkit-run \".*\" ALARMA: no arrancó.*\[$id\]\$)" "$WATCH_LOG" 2>/dev/null && continue
+    [[ $procesos == *"$logf"* ]] && continue
+    t0=$(date -d "$ts" +%s 2>/dev/null || echo "$ahora")
+    edad=$((ahora - t0))
+    if [ "$edad" -lt "$ESTADO_GRACIA" ] \
+       || { [ "$candado" = ocupado ] && grep -qE "^[^ ]+ $id espera: " "$WATCH_LOG" 2>/dev/null; }; then
+      skill=${prompt%% *}; skill=${skill#/}
+      arg_lanz=$(printf '%s' "$prompt" | awk '{print $2}')
+      if [ "$skill" = pr-review ]; then
+        clave_lanz="PR ${arg_lanz:-?}"
+      elif printf '%s' "$arg_lanz" | grep -qE '^[A-Z][A-Z0-9]+-[0-9]+$'; then
+        clave_lanz="$arg_lanz"
+      else
+        clave_lanz="?"
+      fi
+      filas+=("$(printf '%s\t%s\t%s' - "$clave_lanz" "$skill")")
+    fi
+  done < <(lanzamientos "$WATCH_LOG")
+  if [ "${#filas[@]}" -eq 0 ]; then
     echo "sin agentes vivos"
     return 0
   fi
-  printf '%s\n' "$lineas" | while IFS= read -r linea; do
-    local pid args paso clave
-    pid=$(printf '%s' "$linea" | awk '{print $1}')
-    args=$(printf '%s' "$linea" | cut -d' ' -f2-)
-    paso=$(printf '%s' "$args" | grep -oE -- '--(worker|sync)[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
-    clave=$(printf '%s' "$args" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
-    printf '%s\t%s\t%s\n' "$pid" "${clave:-?}" "${paso:-?}"
-  done
+  printf '%s\n' "${filas[@]}"
   return 0
 }
 
@@ -8033,15 +8082,46 @@ FIN
   # DEVKIT-138: `--agentes-vivos` lista PID, Clave y paso de cada `--worker`/
   # `--sync` en curso, para que host/devkit.sh (recreate/rebuild) decida si
   # aborta. Mismo doble de `ps` que agentes_vivos en watch-test.sh.
-  local pslist_vivos
+  # DEVKIT_WATCH_LOG apunta a un archivo que no existe: aísla estos casos del
+  # watch.log real, que la lectura de lanzamientos en curso (H1 más abajo)
+  # también consulta.
+  local pslist_vivos watch_log_vacio
   pslist_vivos="$tmp/ps-vivos"
+  watch_log_vacio="$tmp/agentes-vivos-sin-watch-log"
   printf '#!/usr/bin/env bash\necho "4242 bash devkit-run.sh --worker /task-fix DEVKIT-46 /run/devkit/task-fix-1.log opus high 40"\n' \
     >"$pslist_vivos"
   chmod +x "$pslist_vivos"
   check "--agentes-vivos: lista PID, Clave y paso" "$(printf '4242\tDEVKIT-46\ttask-fix')" \
-    "$(DEVKIT_PS_BIN="$pslist_vivos" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+    "$(DEVKIT_PS_BIN="$pslist_vivos" DEVKIT_WATCH_LOG="$watch_log_vacio" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
   check "--agentes-vivos: sin agentes vivos lo dice" "sin agentes vivos" \
-    "$(DEVKIT_PS_BIN="$pslist_vacio" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+    "$(DEVKIT_PS_BIN="$pslist_vacio" DEVKIT_WATCH_LOG="$watch_log_vacio" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+
+  # DEVKIT-138 H1: un lanzamiento recién anunciado en watch.log, sin proceso
+  # todavía visible en `ps` -la misma ventana de ESTADO_GRACIA que documenta
+  # su comentario, mientras corren la sonda de modelo y `esperar_arranque`-
+  # cuenta como agente vivo; si no, `devkit recreate` justo después de
+  # "lanzando" no se negaba.
+  local log_recien_lanzado ahora_recien
+  log_recien_lanzado="$tmp/agentes-vivos-recien-lanzado.log"
+  ahora_recien=$(date +%s)
+  printf '%s task-fix-1 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-46" log=%s/task-fix-1.log\n' \
+    "$(date -u -d "@$((ahora_recien - 10))" +%FT%TZ)" "$tmp" >"$log_recien_lanzado"
+  check "--agentes-vivos: lanzamiento reciente sin proceso en ps cuenta como vivo" \
+    "$(printf -- '-\tDEVKIT-46\ttask-fix')" \
+    "$(DEVKIT_PS_BIN="$pslist_vacio" DEVKIT_WATCH_LOG="$log_recien_lanzado" DEVKIT_AHORA="$ahora_recien" \
+        bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+
+  # DEVKIT-138 H3: la Clave de un `--sync` de pr-review es el número de PR,
+  # no cualquier Clave citada en el resto del prompt -el material con el
+  # diff que le agrega el bucle puede mencionar otra card.
+  local pslist_pr_review
+  pslist_pr_review="$tmp/ps-pr-review-vivo"
+  printf '#!/usr/bin/env bash\necho "9001 bash devkit-run.sh --sync /pr-review 41 ## Material: revisa esto de DEVKIT-99 tambien"\n' \
+    >"$pslist_pr_review"
+  chmod +x "$pslist_pr_review"
+  check "--agentes-vivos: pr-review por --sync muestra PR, no una Clave del material" \
+    "$(printf '9001\tPR 41\tpr-review')" \
+    "$(DEVKIT_PS_BIN="$pslist_pr_review" DEVKIT_WATCH_LOG="$watch_log_vacio" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
 
   # DEVKIT-81 H1: el aviso de duplicado también debe encontrar el log de una
   # línea "lanzando" del formato viejo, sin modelo/esfuerzo/ronda, que puede
