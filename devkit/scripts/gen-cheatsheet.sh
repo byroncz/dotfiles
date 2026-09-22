@@ -34,6 +34,8 @@ BLOQUES_ORDEN="contenedor agentes cards Python"
 # en armar() y armar_svg()).
 declare -A BLOQUES_TITULO
 BLOQUES_TITULO[contenedor]="En el host"
+BLOQUES_TITULO[agentes]="Agentes"
+BLOQUES_TITULO[cards]="Cards"
 declare -A BLOQUES
 BLOQUES[contenedor]="devkit code <proyecto>
 devkit shell <proyecto>
@@ -230,21 +232,28 @@ SVG_ALTO=700
 # los colores de los temas vs y vs-dark, uno por archivo (DEVKIT-143 H1)-. El
 # Dockerfile copia esta salida sobre los letterpress-*.svg que le
 # correspondan a cada tema.
+#
+# La opacidad de cada clase también depende del tema: son las que dan al
+# menos WCAG AA (4.5:1, texto normal) o AAA (7:1, para .c que hace de
+# subtítulo) contra el fondo real del editor (#1f1f1f oscuro, #ffffff claro),
+# con color efectivo = fondo + (texto − fondo) × opacidad (DEVKIT-157). Antes
+# había un solo juego de valores, calculado a ojo, que en oscuro quedaba muy
+# por debajo del mínimo.
 armar_svg() {
-  local tema=$1 color
+  local tema=$1 color op_t op_g op_c op_d
   case "$tema" in
-    claro) color=#3b3b3b ;;
-    oscuro) color=#d4d4d4 ;;
+    claro) color=#3b3b3b; op_t=.70; op_g=.70; op_c=.85; op_d=.70 ;;
+    oscuro) color=#d4d4d4; op_t=.60; op_g=.60; op_c=.76; op_d=.60 ;;
     *) echo "armar_svg: tema desconocido \"$tema\" (se esperaba claro u oscuro)" >&2; return 2 ;;
   esac
   cat <<SVG_HEAD
 <svg xmlns="http://www.w3.org/2000/svg" width="$SVG_ANCHO" height="$SVG_ALTO" viewBox="0 0 $SVG_ANCHO $SVG_ALTO">
 <style>
   text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .t { font-size: 34px; font-weight: 700; fill: $color; fill-opacity: .55; }
-  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: $color; fill-opacity: .4; }
-  .c { font-size: 16px; font-weight: 700; fill: $color; fill-opacity: .5; }
-  .d { font-size: 13px; fill: $color; fill-opacity: .32; }
+  .t { font-size: 34px; font-weight: 700; fill: $color; fill-opacity: $op_t; }
+  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: $color; fill-opacity: $op_g; }
+  .c { font-size: 16px; font-weight: 700; fill: $color; fill-opacity: $op_c; }
+  .d { font-size: 13px; fill: $color; fill-opacity: $op_d; }
 </style>
 <text x="60" y="70" class="t">$(escapar 'devkit: comandos')</text>
 SVG_HEAD
@@ -286,6 +295,21 @@ if [ "${1:-}" = "--test" ]; then
       printf 'ok   %-55s\n' "$1"
     else
       printf 'FAIL %-55s esperado "%s", obtenido "%s"\n' "$1" "$2" "$3"
+      fail=1
+    fi
+  }
+
+  # comprobar_opacidad <nombre> <svg> <clase> <mínimo>: extrae el
+  # fill-opacity de la regla CSS ".<clase> { ... }" del <svg> y falla si no
+  # alcanza el <mínimo> de contraste WCAG (comparación numérica, no de texto:
+  # la implementación puede usar cualquier valor que cumpla el mínimo).
+  comprobar_opacidad() {
+    local nombre=$1 svg=$2 clase=$3 minimo=$4 valor
+    valor="$(printf '%s' "$svg" | grep -oE "\.$clase \{[^}]*fill-opacity: [0-9.]+" | grep -oE '[0-9.]+$')"
+    if [ -n "$valor" ] && awk -v a="$valor" -v b="$minimo" 'BEGIN{exit !(a>=b)}'; then
+      printf 'ok   %-55s\n' "$nombre ($valor >= $minimo)"
+    else
+      printf 'FAIL %-55s valor "%s", mínimo "%s"\n' "$nombre" "$valor" "$minimo"
       fail=1
     fi
   }
@@ -352,12 +376,20 @@ bar" )
     *'@media'*) check "SVG claro sin @media prefers-color-scheme" si no ;;
     *) check "SVG claro sin @media prefers-color-scheme" si si ;;
   esac
+  comprobar_opacidad "SVG claro .d cumple WCAG AA (4.5:1) sobre #ffffff" "$out" d .70
+  comprobar_opacidad "SVG claro .c cumple WCAG AAA (7:1) sobre #ffffff" "$out" c .85
+  comprobar_opacidad "SVG claro .g cumple WCAG AA (4.5:1) sobre #ffffff" "$out" g .70
+  comprobar_opacidad "SVG claro .t cumple WCAG AA (4.5:1) sobre #ffffff" "$out" t .70
 
   out="$(armar_svg oscuro)"
   case "$out" in
     *'fill: #d4d4d4'*) check "arma SVG oscuro con el color del tema oscuro" si si ;;
     *) check "arma SVG oscuro con el color del tema oscuro" si no ;;
   esac
+  comprobar_opacidad "SVG oscuro .d cumple WCAG AA (4.5:1) sobre #1f1f1f" "$out" d .60
+  comprobar_opacidad "SVG oscuro .c cumple WCAG AAA (7:1) sobre #1f1f1f" "$out" c .76
+  comprobar_opacidad "SVG oscuro .g cumple WCAG AA (4.5:1) sobre #1f1f1f" "$out" g .60
+  comprobar_opacidad "SVG oscuro .t cumple WCAG AA (4.5:1) sobre #1f1f1f" "$out" t .60
 
   armar_svg no-existe >/dev/null 2>&1
   check "armar_svg con tema desconocido corta (código 2)" 2 "$?"
@@ -374,6 +406,15 @@ bar" )
     DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
   check "--check con el HTML y los dos SVG al día sale 0" 0 "$?"
+
+  # Los cuatro títulos de bloque (contenedor, agentes, cards, Python) van con
+  # mayúscula inicial en el HTML y en los dos SVG (DEVKIT-157).
+  check "HTML real: título de bloque Agentes" 1 "$(grep -c '<h2>Agentes</h2>' "$tmp/cheatsheet.html")"
+  check "HTML real: título de bloque Cards" 1 "$(grep -c '<h2>Cards</h2>' "$tmp/cheatsheet.html")"
+  check "SVG claro real: título de bloque Agentes" 1 "$(grep -c 'class="g">Agentes<' "$tmp/cheatsheet-light.svg")"
+  check "SVG claro real: título de bloque Cards" 1 "$(grep -c 'class="g">Cards<' "$tmp/cheatsheet-light.svg")"
+  check "SVG oscuro real: título de bloque Agentes" 1 "$(grep -c 'class="g">Agentes<' "$tmp/cheatsheet-dark.svg")"
+  check "SVG oscuro real: título de bloque Cards" 1 "$(grep -c 'class="g">Cards<' "$tmp/cheatsheet-dark.svg")"
 
   echo "viejo" > "$tmp/cheatsheet.html"
   DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
