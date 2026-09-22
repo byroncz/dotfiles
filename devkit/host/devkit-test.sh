@@ -304,6 +304,21 @@ check        "primer up sin contenedor no falla" 0 "$ESTADO"
 # la sugerencia de pausar el bucle, sin tocar el contexto de build ni
 # reconstruir; --force salta la guarda; sin contenedor que responda (los dos
 # escenarios de arriba, con DEVKIT_TEST_DOWN=1) la guarda ni se consulta.
+#
+# DEVKIT-138 H4: sin DEVKIT_TEST_AGENTES_VIVOS, el doble de `docker exec`
+# responde "sin agentes vivos" por defecto -esa respuesta, no la falta de
+# contenedor, es lo que hacía pasar los dos escenarios de arriba, aunque la
+# guarda sí se hubiera consultado. Este caso fija DEVKIT_TEST_AGENTES_VIVOS
+# con un agente vivo y confirma que recreate sigue igual: el contenedor caído
+# hace que `docker exec` falle antes de llegar a esa respuesta, así que la
+# guarda de verdad no se consulta.
+escenario dev
+export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
+corre recreate 1
+unset DEVKIT_TEST_AGENTES_VIVOS
+check        "sin contenedor con agente vivo: la guarda ni se consulta" 0 "$ESTADO"
+check_docker "sin contenedor con agente vivo: recreate igual reconstruye" si 'up -d --build --force-recreate'
+
 escenario dev
 export DEVKIT_TEST_AGENTES_VIVOS="$(printf '4242\tDEVKIT-46\ttask-fix')"
 corre recreate
