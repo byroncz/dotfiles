@@ -29,13 +29,15 @@
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
 #   devkit-run --estado [--seguir] [--todo]
 #     Tabla de los últimos lanzamientos: skill (task-start en negrita, abre
-#     una card; el resto la continúa, DEVKIT-134), card, el enlace completo
-#     al PR de esa fila (DEVKIT-134: el owner/repo real de `gh repo view`,
-#     cacheado; "-" sin PR todavía, el caso de task-start), quién lanzó, hace
-#     cuánto, cuánto duró (DURÓ: `duracion=` de la línea terminado, o el
-#     tiempo desde "lanzando" mientras sigue en curso, DEVKIT-107), estado (en
-#     curso, terminó, error, bloqueada, no arrancó, no lanzó -un rc=3 de
-#     review-prep.sh o task-begin.sh, "nada que revisar" no es un error-),
+#     una card; el resto la continúa, DEVKIT-134), card, "#<número>" del PR de
+#     esa fila (DEVKIT-134, DEVKIT-156: el owner/repo real de `gh repo view`,
+#     cacheado; "-" sin PR todavía, el caso de task-start) -en una TTY es un
+#     hipervínculo OSC 8 al PR completo, se abre con Ctrl/Cmd+clic sin ocupar
+#     el ancho de la URL entera-, quién lanzó, hace cuánto, cuánto duró (DURÓ:
+#     `duracion=` de la línea terminado, o el tiempo desde "lanzando" mientras
+#     sigue en curso, DEVKIT-107), estado (en curso, terminó, error, bloqueada,
+#     no arrancó, no lanzó -un rc=3 de review-prep.sh o task-begin.sh, "nada
+#     que revisar" no es un error-),
 #     modelo/esfuerzo y turnos usados contra el presupuesto vigente de
 #     roles.toml (TURNOS, con "!" si lo excede, misma cuenta que `--costos`).
 #     DETALLE se recorta al ancho de la terminal, y la tabla a su alto -las
@@ -51,10 +53,11 @@
 #   devkit-run --tablero [--seguir]
 #     Cards activas del proyecto (Lista, En progreso, Revisión automática,
 #     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
-#     Tipo, PR y "bloquea a" (columna de DEVKIT-63), agrupadas por Épica de
-#     origen cuando hay más de una Épica En progreso (DEVKIT-80). Una sola
-#     consulta a Notion por refresco (DEVKIT-82). `--seguir` la refresca
-#     cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+#     Tipo, PR ("#<número>" con el mismo hipervínculo OSC 8 en una TTY que
+#     `--estado`, DEVKIT-156) y "bloquea a" (columna de DEVKIT-63), agrupadas
+#     por Épica de origen cuando hay más de una Épica En progreso (DEVKIT-80).
+#     Una sola consulta a Notion por refresco (DEVKIT-82). `--seguir` la
+#     refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
 #   devkit-run --cola
 #     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
 #     origen o "(sin Épica)") y título, en el mismo orden que decide "la
@@ -2331,14 +2334,15 @@ alto_terminal() {
 # Owner/repo del remoto actual (DEVKIT-134, columna PR de `--estado`), con
 # REPO_NAME_WITH_OWNER_CACHE (arriba, junto a Bloqueos/Épicas): una sola
 # llamada a `gh repo view` mientras esa caché exista, no una por fila ni una
-# por refresco de `--seguir`. Antes de `ancho_de`/`ANCHO_PR`, que la necesitan
-# al arrancar el script para medir la columna: definida aquí arriba, no junto
-# a `clave_de_pr` más abajo, para que ese cálculo top-level la encuentre ya
-# declarada. "-" si `gh` no responde: sin owner/repo no hay enlace que armar,
-# y esa fila cae al mismo "-" que una fila sin PR. Ese "-" no se persiste
-# (DEVKIT-134 H1): si se guardara, un solo fallo de `gh` -sin red, sin auth,
-# o un `--test` corrido sin `gh`- dejaría la columna en "-" para siempre
-# mientras viva /run/devkit, aunque `gh` ya responda en la siguiente llamada.
+# por refresco de `--seguir` -la primera fila con un PR real la llena; desde
+# DEVKIT-156 `ANCHO_PR` ya no la necesita (mide "#99999", no la URL). Definida
+# aquí arriba, no junto a `clave_de_pr` más abajo, porque `url_de_pr`, un poco
+# más abajo, ya la usa. "-" si `gh` no responde: sin owner/repo no hay enlace
+# que armar, y esa fila cae al mismo "-" que una fila sin PR. Ese "-" no se
+# persiste (DEVKIT-134 H1): si se guardara, un solo fallo de `gh` -sin red,
+# sin auth, o un `--test` corrido sin `gh`- dejaría la columna en "-" para
+# siempre mientras viva /run/devkit, aunque `gh` ya responda en la siguiente
+# llamada.
 repo_name_with_owner() {
   local repo
   if [ -s "$REPO_NAME_WITH_OWNER_CACHE" ]; then
@@ -2504,13 +2508,15 @@ unset _alias_frontera
 
 ANCHO_SKILL=$(ancho_de "${SKILLS_CON_LANZAMIENTO[@]}")
 ANCHO_CARD=12  # sin cambios (DEVKIT-107 H4): DEVKIT-9999 mide 11, más el espacio de separación.
-# PR (DEVKIT-134): la URL completa, con el owner/repo real -`repo_name_with_
-# owner` cachea esa consulta a `gh`, una sola vez por ejecución- y cinco
-# dígitos de PR (99999), un margen amplio contra el volumen real de este
-# proyecto, mismo criterio que ANCHO_CARD con DEVKIT-9999. El humano acepta
-# que en terminales angostas esto le come más espacio a DETALLE (pedido del
-# 2026-09-21).
-ANCHO_PR=$(ancho_de "https://github.com/$(repo_name_with_owner)/pull/99999")
+# PR (DEVKIT-134, DEVKIT-156): "#<número>", no la URL completa -la URL
+# completa (~47 caracteres fijos) le comía casi el 40 % de una terminal de
+# 120 columnas a DETALLE (pedido del 2026-09-21); un enlace no necesita
+# verse para poder abrirse, y `formatear_fila` lo envuelve en un
+# hipervínculo OSC 8 con esa URL completa cuando la salida es una TTY (ver
+# `enlazar_rango`, junto a `pintar_rango`, más abajo). Cinco dígitos de PR
+# (99999) es el mismo margen amplio de siempre contra el volumen real de
+# este proyecto, mismo criterio que ANCHO_CARD con DEVKIT-9999.
+ANCHO_PR=$(ancho_de "#99999")
 ANCHO_LANZO=$(ancho_de "${ORIGENES_LANZAMIENTO[@]}")
 # HACE/DURÓ: la forma más larga que devuelve `hace()` es "23h59m" (6);
 # "59m59s" no ocurre, `hace()` no combina minutos y segundos.
@@ -2559,6 +2565,25 @@ pintar_rango() {  # pintar_rango <fila> <inicio> <largo> <color>
   [ "$inicio" -lt "${#fila}" ] || { printf '%s' "$fila"; return 0; }
   visible=$(( inicio + largo > ${#fila} ? ${#fila} - inicio : largo ))
   printf '%s%s%s' "${fila:0:inicio}" "$(colorear "$color" "${fila:inicio:visible}" 1)" "${fila:$((inicio + visible))}"
+}
+
+# Envuelve en un hipervínculo OSC 8 (DEVKIT-156: ESC ] 8 ; ; <url> ESC \
+# <texto> ESC ] 8 ; ; ESC \, el mismo escape que usan `ls --hyperlink=auto`,
+# `gh` y `git core.hyperlinks`) los caracteres de <fila> en [<inicio>,
+# <inicio>+<largo>) -mismo recorte sobre el ancho visible que `pintar_rango`,
+# y la misma regla de orden: se aplica siempre DESPUÉS de rellenar/recortar la
+# fila entera, nunca antes. Los envoltorios (este y `pintar_rango`) insertan
+# bytes en <fila> sin ajustar los <inicio> de los que faltan por aplicarse, así
+# que cada llamada sobre la misma fila tiene que ir de <inicio> mayor a menor
+# -por eso `formatear_fila` envuelve la columna PR antes de pintar el icono en
+# la posición 0, no después: ese color sí correría el <inicio> de PR.
+enlazar_rango() {  # enlazar_rango <fila> <inicio> <largo> <url>
+  local fila=$1 inicio=$2 largo=$3 url=$4 visible abre cierra
+  [ "$inicio" -lt "${#fila}" ] || { printf '%s' "$fila"; return 0; }
+  visible=$(( inicio + largo > ${#fila} ? ${#fila} - inicio : largo ))
+  abre=$'\033]8;;'"$url"$'\033\\'
+  cierra=$'\033]8;;\033\\'
+  printf '%s%s%s%s%s' "${fila:0:inicio}" "$abre" "${fila:inicio:visible}" "$cierra" "${fila:$((inicio + visible))}"
 }
 
 # Iconos y color de `--estado`/`--tablero` (DEVKIT-106): un vistazo sin leer
@@ -2854,7 +2879,12 @@ FONDO_GRUPO=$'\033[48;5;236m'
 formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=] [fondo_grupo=0]
   local skill=$1 clave=$2 pr=$3 origen=$4 edad=$5 duracion=$6 estado=$7 modelo=$8 turnos=$9 detalle=${10} \
         idx=${11:-0} fijo=${12:-1} color_habilitado=${13:-} fondo_grupo=${14:-0} frena="" utf glifo color icono_len \
-        estado_texto glifo_lento glifo_lento_len ancho fila off_skill off_estado off_turnos off_detalle
+        estado_texto glifo_lento glifo_lento_len ancho fila off_skill off_pr off_estado off_turnos off_detalle pr_texto
+  # PR (DEVKIT-156): "#<número>" en la columna, no la URL completa que sigue
+  # viajando en <pr> -esta función la recibe ya armada desde `estado_filas`,
+  # que la arma con `url_de_pr`- para envolverla en el hipervínculo OSC 8 más
+  # abajo, sin volver a construirla.
+  if [ "$pr" = - ]; then pr_texto=-; else pr_texto="#${pr##*/}"; fi
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
@@ -2882,10 +2912,11 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
   # arriba; acá es donde se convierten al texto que de verdad ve la tabla.
   estado_texto=${estado,,}
   off_skill=$ANCHO_ICONO
-  off_estado=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
+  off_pr=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD))
+  off_estado=$((off_pr + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
   off_turnos=$((off_estado + ANCHO_ESTADO + ANCHO_MODELO))
   off_detalle=$((off_turnos + ANCHO_TURNOS))
-  fila="$(rellenar "$glifo" "$ANCHO_ICONO")$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
+  fila="$(rellenar "$glifo" "$ANCHO_ICONO")$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr_texto" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
   fila+="$(rellenar "$edad" "$ANCHO_HACE")$(rellenar "$duracion" "$ANCHO_DURO")$(rellenar "$estado_texto" "$ANCHO_ESTADO")"
   fila+="$(rellenar "$modelo" "$ANCHO_MODELO")$(rellenar "$turnos" "$ANCHO_TURNOS")$detalle"
   [ "${#fila}" -le "$ancho" ] || fila=$(recortar "$fila" "$ancho")
@@ -2893,6 +2924,11 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
     # TURNOS excedido ("67/60!", DEVKIT-107).
     case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
+    # PR (DEVKIT-156): el hipervínculo OSC 8 con la URL completa, antes del
+    # color del icono en la posición 0 -ese `pintar_rango` correría el
+    # `off_pr` de más abajo si se aplicara primero (ver el comentario de
+    # `enlazar_rango`).
+    [ "$pr_texto" = - ] || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
     [ -z "$color" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
     # ESTADO en negrita y color solo para los veredictos de pr-review (DEVKIT-
     # 132) y "mergeado" (DEVKIT-148): son los únicos casos con "-negrita" en
@@ -3395,10 +3431,12 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
   done
 }
 
-# Tabla de `--tablero` (DEVKIT-82): Clave, Estado, Tipo y PR.
+# Tabla de `--tablero` (DEVKIT-82): Clave, Estado, Tipo y PR, "#<número>"
+# desde DEVKIT-156 -mismo formato que la columna PR de `--estado`, ver
+# `ANCHO_PR`/`formatear_fila`.
 encabezado_tablero() {
   printf '%s%s%s%s%s\n' "$(rellenar CLAVE 12)" "$(rellenar ESTADO 22)" "$(rellenar TIPO 10)" \
-    "$(rellenar PR 40)" 'BLOQUEA A'
+    "$(rellenar PR "$ANCHO_PR")" 'BLOQUEA A'
 }
 
 # <idx>/<fijo>/<color> (DEVKIT-106): mismos iconos y mismo punto de cabecera
@@ -3407,7 +3445,7 @@ encabezado_tablero() {
 # sobran a la columna de 22.
 formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr> [idx=0] [fijo=1] [color=]
   local clave=$1 estado=$2 tipo=$3 pr=$4 idx=${5:-0} fijo=${6:-1} color_habilitado=${7:-} \
-        frena utf glifo color estado_col icono_len
+        frena utf glifo color estado_col icono_len pr_texto prefijo fila
   frena=$(bloquea_a "$clave")
   utf8_disponible && utf=1 || utf=0
   glifo=$(glifo_estado_tablero "$estado" "$idx" "$fijo" "$utf")
@@ -3417,8 +3455,17 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
     icono_len=${#glifo}
     estado_col="$(colorear "$color" "${estado_col:0:icono_len}" 1)${estado_col:icono_len}"
   fi
-  printf '%s%s%s%s%s\n' "$(rellenar "$clave" 12)" "$estado_col" "$(rellenar "$tipo" 10)" \
-    "$(rellenar "$pr" 40)" "${frena#bloquea a: }"
+  # PR (DEVKIT-156): "#<número>" envuelto en el hipervínculo OSC 8 a la URL
+  # completa que trae Notion, igual que `formatear_fila`. <prefijo> mide su
+  # ancho ya armado -no una suma de constantes- porque `estado_col` puede
+  # traer el color de arriba adentro, con sus propios bytes ANSI.
+  if [ "$pr" = - ]; then pr_texto=-; else pr_texto="#${pr##*/}"; fi
+  prefijo="$(rellenar "$clave" 12)$estado_col$(rellenar "$tipo" 10)"
+  fila="$prefijo$(rellenar "$pr_texto" "$ANCHO_PR")${frena#bloquea a: }"
+  if [ "$color_habilitado" = 1 ] && [ "$pr_texto" != - ]; then
+    fila=$(enlazar_rango "$fila" "${#prefijo}" "$ANCHO_PR" "$pr")
+  fi
+  printf '%s\n' "$fila"
 }
 
 # Cards activas del proyecto (DEVKIT-82): una consulta a Notion (`notion.sh
@@ -6769,20 +6816,45 @@ FIN
   unset gh_falla_pr repo_h1_cache
   rm -rf "$pr_url_tmp"
 
-  # `formatear_fila`: la columna PR entre CARD y LANZÓ, con el enlace completo
-  # ya armado (llega formateado desde `estado_filas`, esta función solo
-  # alinea) y "-" en la fila sin PR.
-  local off_pr_134 fila_con_pr_134 fila_sin_pr_134
+  # `formatear_fila` (DEVKIT-156): la columna PR muestra "#<número>" entre
+  # CARD y LANZÓ -no la URL completa, que sigue entrando por <pr> y ANCHO_PR
+  # ahora mide contra "#99999"- y "-" en la fila sin PR.
+  local off_pr_134 pr_url_156 fila_con_pr_134 fila_sin_pr_134
   off_pr_134=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD))
-  fila_con_pr_134=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 "https://github.com/o/r/pull/41" humano 5m 5m terminó opus/high 3/60 - 0 1 0)
-  check "columna PR: el enlace completo entre CARD y LANZÓ" \
-    "$(rellenar "https://github.com/o/r/pull/41" "$ANCHO_PR")" \
+  pr_url_156="https://github.com/o/r/pull/41"
+  fila_con_pr_134=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_156" humano 5m 5m "en curso" opus/high 3/60 - 0 1 0)
+  check "columna PR sin TTY: #<número> entre CARD y LANZÓ" \
+    "$(rellenar '#41' "$ANCHO_PR")" \
     "${fila_con_pr_134:$off_pr_134:$ANCHO_PR}"
+  check "columna PR sin TTY: sin la secuencia OSC 8" no \
+    "$([[ "$fila_con_pr_134" == *$'\033]8;;'* ]] && echo si || echo no)"
   fila_sin_pr_134=$(COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 0)
   check "columna PR: un guion en la fila sin PR (task-start)" \
     "$(rellenar - "$ANCHO_PR")" \
     "${fila_sin_pr_134:$off_pr_134:$ANCHO_PR}"
-  unset off_pr_134 fila_con_pr_134 fila_sin_pr_134
+
+  # DEVKIT-156: con TTY (color_habilitado=1, el mismo color_tty que ya
+  # decidía --estado) la columna PR se envuelve en el hipervínculo OSC 8 con
+  # la URL completa que ya armó `url_de_pr`, y el ancho visible -la fila con
+  # esos escapes quitados- mide exactamente lo mismo que la fila sin TTY.
+  # "en curso" (`color_de_estado_fila`) no pinta el icono de ningún color: así
+  # la única diferencia entre ambas filas es el envoltorio de PR, sin un
+  # `\033[32m`/`\033[0m` de por medio que confunda la comparación de ancho.
+  local abre_156 cierra_156 fila_con_pr_156_tty fila_con_pr_156_sin_osc
+  abre_156=$'\033]8;;'"$pr_url_156"$'\033\\'
+  cierra_156=$'\033]8;;\033\\'
+  fila_con_pr_156_tty=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_156" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
+  check "columna PR con TTY: trae el hipervínculo OSC 8 con la URL completa" si \
+    "$([[ "$fila_con_pr_156_tty" == *"$abre_156"* ]] && echo si || echo no)"
+  fila_con_pr_156_sin_osc=${fila_con_pr_156_tty//"$abre_156"/}
+  fila_con_pr_156_sin_osc=${fila_con_pr_156_sin_osc//"$cierra_156"/}
+  check "columna PR con TTY: el texto visible mide lo mismo que sin el enlace" \
+    "${#fila_con_pr_134}" "${#fila_con_pr_156_sin_osc}"
+  check "columna PR sin PR (task-start) con TTY: sin la secuencia OSC 8" no \
+    "$(COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 1 \
+        | { [[ "$(cat)" == *$'\033]8;;'* ]] && echo si || echo no; })"
+  unset off_pr_134 pr_url_156 fila_con_pr_134 fila_sin_pr_134 abre_156 cierra_156 \
+    fila_con_pr_156_tty fila_con_pr_156_sin_osc
 
   # SKILL en negrita solo para task-start (DEVKIT-134): distingue de un
   # vistazo la fila que abre una card de la que la continúa.
@@ -8199,6 +8271,25 @@ FIN
     "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-57' | grep -qF '⠿' && echo si || echo no)"
   check "--tablero: DEVKIT-58 Lista para merge lleva ✔" si \
     "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -qF '✔' && echo si || echo no)"
+
+  # DEVKIT-156: mismo formato de columna PR que --estado -"#<número>", no la
+  # URL completa que trae Notion-, y el mismo hipervínculo OSC 8 cuando hay
+  # TTY (color_habilitado=1).
+  check "--tablero: columna PR muestra #<número>, no la URL completa" si \
+    "$(printf '%s\n' "$salida_tablero" | grep 'DEVKIT-58' | grep -qF '#9' && echo si || echo no)"
+  check "--tablero sin TTY: columna PR sin la secuencia OSC 8" no \
+    "$([[ "$salida_tablero" == *$'\033]8;;'* ]] && echo si || echo no)"
+  local salida_tablero_tty
+  salida_tablero_tty=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    mostrar_tablero 0 1 1)
+  check "--tablero con TTY: columna PR trae el hipervínculo OSC 8 con la URL completa" si \
+    "$(printf '%s\n' "$salida_tablero_tty" | grep 'DEVKIT-58' \
+        | grep -qF $'\033]8;;https://github.com/o/r/pull/9\033\\' && echo si || echo no)"
+  check "--tablero con TTY: DEVKIT-57 sin PR sigue sin secuencia OSC 8" no \
+    "$(printf '%s\n' "$salida_tablero_tty" | grep 'DEVKIT-57' | grep -qF $'\033]8;;' && echo si || echo no)"
+  unset salida_tablero_tty
 
   # H1 (pr-review sobre DEVKIT-82): con las cachés de bloqueos/epicas vacías
   # -contenedor recién arrancado, sin ningún `--estado` previo-, `--tablero`
