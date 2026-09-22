@@ -7597,12 +7597,16 @@ FIN
         bash "$HERE/devkit-run.sh" --tablero | head -1 \
         | grep -qE '^devkit-run --tablero  .*[●*].*modo: trabajo' && echo si || echo no)"
 
-  # En alto, `devkit-run <skill> <Clave>` lanzado a mano se rechaza con el
-  # motivo, antes de escribir la línea "lanzando"; en pausa sigue permitido.
+  # En alto, `devkit-run <skill> <Clave>` lanzado a mano por un humano se
+  # rechaza con el motivo, antes de escribir la línea "lanzando"; en pausa
+  # sigue permitido. DEVKIT_ORIGEN=humano fuerza el origen (igual que el
+  # DEVKIT_ORIGEN=task-close de más abajo): esta prueba puede correr dentro
+  # de un `claude -p /task-fix` de verdad (DEVKIT-136, revisión), y sin
+  # forzarlo origen_lanzamiento vería ese ancestro y no "humano".
   printf alto >"$modo_run/modo"
   : >"$modo_run/watch.log"
   local modo_alto_out modo_alto_rc
-  modo_alto_out=$(DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
+  modo_alto_out=$(DEVKIT_ORIGEN=humano DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 2>&1); modo_alto_rc=$?
   check "modo alto: un lanzamiento manual se rechaza (código propio, no 0)" 66 "$modo_alto_rc"
@@ -7617,6 +7621,26 @@ FIN
     DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
     bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
   check "modo pausa: un lanzamiento manual sigue permitido" 1 \
+    "$(grep -c 'lanzando' "$modo_run/watch.log" 2>/dev/null)"
+
+  # En alto, el bucle (DEVKIT_ORIGEN=bucle, lanzar_cola/encadenar en
+  # watch.sh) y task-close.sh (DEVKIT_ORIGEN=task-close, al lanzar
+  # task-document o la siguiente card) no se rechazan: solo un origen
+  # "humano" lo hace (revisión de DEVKIT-136, H1/H2).
+  printf alto >"$modo_run/modo"
+  : >"$modo_run/watch.log"
+  DEVKIT_ORIGEN=bucle DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "modo alto: DEVKIT_ORIGEN=bucle no se rechaza (H1)" 1 \
+    "$(grep -c 'lanzando' "$modo_run/watch.log" 2>/dev/null)"
+
+  printf alto >"$modo_run/modo"
+  : >"$modo_run/watch.log"
+  DEVKIT_ORIGEN=task-close DEVKIT_RUN_DIR="$modo_run" DEVKIT_CLAUDE_BIN="$doble" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$modo_run/frontera" \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-9 >/dev/null 2>&1
+  check "modo alto: DEVKIT_ORIGEN=task-close no se rechaza (H2)" 1 \
     "$(grep -c 'lanzando' "$modo_run/watch.log" 2>/dev/null)"
 
   # --- DEVKIT-89: costos.log y devkit-run --costos --------------------------
@@ -8512,12 +8536,17 @@ esac
 prompt="/$skill $clave"
 [ $# -eq 0 ] || prompt="$prompt $*"
 
-# DEVKIT-136: el interruptor de tres posiciones. En alto, ni un humano ni
-# task-close.sh/epic-plan -que lanzan la siguiente hija por este mismo camino-
-# corren una skill a mano; en pausa, un lanzamiento manual sigue permitido,
-# porque pausa frena al bucle cuando lo obedezca, no a quien decide lanzar
-# algo a propósito.
-if [ "$(modo_actual)" = alto ]; then
+# DEVKIT-136: el interruptor de tres posiciones. En alto se rechaza un
+# lanzamiento manual de un humano; en pausa sigue permitido, porque pausa
+# frena al bucle cuando lo obedezca, no a quien decide lanzar algo a
+# propósito. El bucle (DEVKIT_ORIGEN=bucle, en cada pasada de lanzar_cola y
+# al encadenar) y task-close.sh (DEVKIT_ORIGEN=task-close, al lanzar
+# task-document o la siguiente card) no se rechazan aquí: rechazarlos daba
+# una ALARMA falsa en watch.log en cada pasada y perdía sin reintento la
+# entrada de Documentación consolidada de una Épica (H1/H2 de la revisión de
+# DEVKIT-136). Que watch.sh de verdad obedezca el modo -deteniéndose en vez
+# de reintentar en alto- es DEVKIT-137.
+if [ "$(modo_actual)" = alto ] && [ "$(origen_lanzamiento)" = humano ]; then
   echo "devkit-run: modo alto, no se lanza \"$prompt\" a mano; usa \`devkit-run --pausa\` o \`devkit-run --reanudar\` para levantarlo." >&2
   exit 66
 fi
