@@ -1378,8 +1378,16 @@ close_pr() {  # close_pr <num> <Clave> <url> <mergedAt>
 }
 
 # Una pasada sobre los PRs mergeados en las últimas 48 h.
+#
+# En alto no hace nada (DEVKIT-137, H4 de la revisión sobre el PR #103):
+# cerrar un PR mergeado puede lanzar el agente task-document de una Épica o
+# la siguiente card de la cola (cerrar_epica/lanzar_cola dentro de
+# task-close.sh), y en alto no debe nacer ninguna skill nueva. No marca
+# `cerrar:<n>`, así que el cierre se hace al reanudar, en la siguiente pasada
+# de este mismo bucle.
 check_merged_prs() {
   local code
+  [ "$(modo_actual)" != alto ] || return 0
   code=$(project_code)
   # `-u 3`/`3< <(...)` (DEVKIT-102, H4), no `gh pr list | while ...`: con la
   # tubería, el `while` toma la entrada estándar del bucle entero, así que

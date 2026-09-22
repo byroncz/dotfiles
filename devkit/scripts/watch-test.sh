@@ -971,6 +971,23 @@ check_log "task-close en pausa: lanzar_cola avisa el motivo en watch.log" \
   'cola-40 no se llama: modo pausa'
 : >"$CICLO/run/modo"
 
+# --- check_merged_prs no hace nada en alto (H4 de la revisión sobre el
+# PR #103) ---------------------------------------------------------------
+# Cerrar un PR mergeado puede lanzar el agente task-document de una Épica o
+# la siguiente card de la cola (dentro de task-close.sh, vía cerrar_epica y
+# lanzar_cola); en alto no debe nacer ninguna skill nueva, así que la pasada
+# entera se salta, sin marcar `cerrar:<n>` -para que se retome sola, sin
+# intervención, en cuanto el bucle vuelva a trabajo.
+: >"$N/llamadas"; : >"$N/lanzamientos"
+printf '41\thttps://github.com/o/r/pull/41\t%s\tDEVKIT-3 algo\n' "$MERGED_AT" >"$CICLO/gh/mergeados"
+printf alto >"$CICLO/run/modo"
+env "${ciclo_env[@]}" bash "$WATCH" --merged-once >"$CICLO/merged-alto.log" 2>&1
+check_igual "alto: check_merged_prs no cierra nada" "" "$(cat "$N/llamadas" 2>/dev/null)"
+check_igual "alto: no marca cerrar:<n>, se reintenta al volver a trabajo" 0 \
+  "$(grep -cx 'cerrar:41' "$CICLO/run/launched" 2>/dev/null)"
+: >"$CICLO/run/modo"
+: >"$CICLO/gh/mergeados"
+
 # task-close.sh idempotente: card ya Hecha y marcador publicado -> no toca nada.
 : >"$N/llamadas"; : >"$N/lanzamientos"; : >"$CICLO/gh/comentarios"
 tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
