@@ -21,11 +21,13 @@ set -eu
 REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
 ROOT="${DEVKIT_HOME:-$HOME/.devkit}"
 proj="${1:-}"; shift || true
-version=""; ref=""
+version=""; ref=""; vscode_port=""; oauth_port=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --version) version="$2"; shift 2 ;;
-    --ref)     ref="$2"; shift 2 ;;
+    --version)      version="$2"; shift 2 ;;
+    --ref)          ref="$2"; shift 2 ;;
+    --vscode-port)  vscode_port="$2"; shift 2 ;;
+    --oauth-port)   oauth_port="$2"; shift 2 ;;
     *) echo "opción desconocida: $1" >&2; exit 1 ;;
   esac
 done
@@ -47,6 +49,26 @@ if [ ! -s "$ROOT/bws-token" ]; then
   echo "aviso: $ROOT/bws-token está vacío; el contenedor arrancará sin secretos" >&2
 fi
 
+# Primer puerto libre de una familia (DEVKIT_VSCODE_PORT o DEVKIT_OAUTH_PORT):
+# recorre el .env de los demás proyectos en ~/.devkit, toma el mayor puerto ya
+# usado y suma 1. Sin otros proyectos, arranca en $2 (3000 o 54545, los mismos
+# defaults que devkit/compose.yaml).
+next_port() {  # next_port <var> <base>
+  var="$1"; base="$2"; max=0
+  for env in "$ROOT"/*/.env; do
+    [ -f "$env" ] || continue
+    [ "$env" = "$dir/.env" ] && continue
+    val="$(sed -n "s/^${var}=//p" "$env" | head -1)"
+    case "$val" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    [ "$val" -gt "$max" ] && max="$val"
+  done
+  [ "$max" -eq 0 ] && echo "$base" || echo $((max + 1))
+}
+[ -n "$vscode_port" ] || vscode_port="$(next_port DEVKIT_VSCODE_PORT 3000)"
+[ -n "$oauth_port" ]  || oauth_port="$(next_port DEVKIT_OAUTH_PORT 54545)"
+
 echo "devkit: descargando template ($label)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$tarball" | tar -xz -C "$tmp"
@@ -65,6 +87,8 @@ fi
   echo "DEVKIT_PROJECT=$proj"
   echo "DEVKIT_VERSION=$( [ -n "$ref" ] && echo dev || echo "$version" )"
   echo "DEVKIT_BWS_TOKEN_FILE=$ROOT/bws-token"
+  echo "DEVKIT_VSCODE_PORT=$vscode_port"
+  echo "DEVKIT_OAUTH_PORT=$oauth_port"
 } > "$dir/.env"
 
 cat <<EOF
@@ -73,4 +97,5 @@ listo. Ahora:
   1. edita $dir/devkit.env
   2. añade ~/.devkit/bin al PATH:  echo 'export PATH="\$HOME/.devkit/bin:\$PATH"' >> ~/.zprofile
   3. levanta:  devkit up $proj
+  puertos asignados: editor $vscode_port, retorno OAuth $oauth_port (en $dir/.env)
 EOF

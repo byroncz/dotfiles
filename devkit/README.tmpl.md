@@ -29,6 +29,10 @@ openvscode-server vence a los 7 días sin una carga real de la página (una
 pestaña ya abierta no cuenta, sigue por websocket). `devkit code <proyecto>`
 vuelve a inyectar el token y renueva la cookie por otros 7 días.
 
+Cada proyecto recibe su propio par de puertos de host (editor y retorno
+OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
+~/.devkit/<proyecto>/.env`.
+
 ## Stack
 
 {{STACK}}
