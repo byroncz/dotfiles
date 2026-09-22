@@ -273,6 +273,17 @@ fi
 # simplemente no arranca.
 VSCODE_TOKEN="$RUN_DIR/vscode-token"
 if [ -s "$VSCODE_TOKEN" ]; then
+  # El volumen editor-<proyecto> solo hereda los permisos de la imagen en el
+  # primer montaje: un proyecto que ya haya recreado antes de este chmod se
+  # queda con el modo viejo para siempre si no se repite en cada arranque.
+  chmod 700 "$HOME/.openvscode-server/data"
+  # openvscode-server crea un directorio de logs nuevo en cada arranque del
+  # servidor y nunca los borra; con el volumen persistente se acumulan sin
+  # límite. Se conservan los últimos 5. El `|| true` no es cosmético: en el
+  # primer arranque de un volumen nuevo todavía no existe `data/logs`, el glob
+  # no expande, `ls` sale con 2 y, con `set -euo pipefail`, esa tubería mataría
+  # el entrypoint antes de levantar el editor y de escribir el marcador ready.
+  ls -1dt "$HOME"/.openvscode-server/data/logs/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf || true
   # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server
   # imprime "Web UI available at ...?tkn=<token>" al levantar, y ese grep -v
   # lo saca del log para que un tail no filtre el token (ver DEVKIT-51).

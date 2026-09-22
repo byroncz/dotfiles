@@ -33,6 +33,14 @@ Cada proyecto recibe su propio par de puertos de host (editor y retorno
 OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 ~/.devkit/<proyecto>/.env`.
 
+Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
+estado del editor VS Code del lado del servidor (estado de las extensiones,
+perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
+sí: esas vienen en la imagen, así que una que instales a mano desde el editor
+no sobrevive al `devkit rebuild`. `devkit down` no borra el volumen, igual que
+al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
+`docker volume rm editor-<proyecto>`.
+
 ## Stack
 
 {{STACK}}

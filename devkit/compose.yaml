@@ -49,6 +49,16 @@ services:
       - claude:/home/dev/.claude
       - history:/commandhistory
       - proxy-log:/var/log/devkit-proxy:ro
+      # Datos del editor VS Code (openvscode-server) del lado del servidor:
+      # estado de extensiones, perfiles en caché y logs. La intención
+      # (DEVKIT-158) es que aquí sobreviva también la sesión OAuth de GitHub
+      # Pull Requests (DEVKIT-68), pero eso no está confirmado: en este
+      # contenedor, tras usar la extensión, no existe `data/User/globalStorage`
+      # y sus logs dicen "Got 0 sessions", lo que sugiere que el workbench web
+      # guarda esa sesión del lado del navegador, no aquí. Pendiente la prueba
+      # de extremo a extremo del humano. No incluye extensions/, que ya viene
+      # en la imagen.
+      - editor:/home/dev/.openvscode-server/data
     networks:
       - internal
     depends_on:
@@ -96,6 +106,8 @@ volumes:
     name: history-${DEVKIT_PROJECT}
   proxy-log:
     name: proxylog-${DEVKIT_PROJECT}
+  editor:
+    name: editor-${DEVKIT_PROJECT}
 
 secrets:
   bws_token:
