@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-#  devkit: arma devkit/vscode/cheatsheet/cheatsheet.html, la chuleta de
-#  comandos que la extensión local devkit.cheatsheet (DEVKIT-96) muestra al
-#  arrancar el editor. Fuente: devkit/scripts/comandos.txt (DEVKIT-88), que
+#  devkit: arma devkit/vscode/cheatsheet/cheatsheet.{html,svg}, la chuleta de
+#  comandos. El HTML lo abre a pedido la extensión local devkit.cheatsheet
+#  (DEVKIT-96, comando "devkit: comandos"); el SVG lo pone el Dockerfile como
+#  marca de agua del editor vacío (DEVKIT-143), en lugar del logo de
+#  openvscode-server. Fuente: devkit/scripts/comandos.txt (DEVKIT-88), que
 #  trae tres columnas por fila: `comando | ejemplo | descripción`.
 #
 #  La chuleta no muestra el manifiesto completo, solo los comandos que un
@@ -11,8 +13,8 @@
 #  comandos.txt corta la generación (mismo criterio que SKILLS_ORDEN en
 #  gen-readme.sh): un typo no debe desaparecer la tarjeta en silencio.
 #
-#    gen-cheatsheet.sh          escribe cheatsheet.html
-#    gen-cheatsheet.sh --check  sale con 1 si el HTML commiteado quedó viejo
+#    gen-cheatsheet.sh          escribe cheatsheet.html y cheatsheet.svg
+#    gen-cheatsheet.sh --check  sale con 1 si alguno de los dos quedó viejo
 #    gen-cheatsheet.sh --test   autoprueba, con fixtures propios
 # ---------------------------------------------------------------------------
 set -u
@@ -20,6 +22,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # devkit/
 
 COMANDOS="${DEVKIT_GEN_CHEATSHEET_COMANDOS:-$HERE/scripts/comandos.txt}"
 SALIDA="${DEVKIT_GEN_CHEATSHEET_SALIDA:-$HERE/vscode/cheatsheet/cheatsheet.html}"
+SALIDA_SVG="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG:-$HERE/vscode/cheatsheet/cheatsheet.svg}"
 
 BLOQUES_ORDEN="contenedor agentes cards Python"
 declare -A BLOQUES
@@ -74,6 +77,19 @@ codigo_en_linea() {
   out+="$s"
   printf '%s' "$out"
   return "$abierto"
+}
+
+# Recorta <texto> a <max> caracteres para que quepa en una línea de SVG (no
+# hay wrapping automático como en el HTML); agrega "…" cuando corta. Cuenta
+# caracteres, no bytes, para no partir una tilde a la mitad (requiere locale
+# UTF-8, ya fijado por el Dockerfile con LANG=C.UTF-8).
+recortar() {
+  local s=$1 max=$2
+  if [ "${#s}" -le "$max" ]; then
+    printf '%s' "$s"
+  else
+    printf '%s…' "${s:0:$((max-1))}"
+  fi
 }
 
 cargar_filas() {  # cargar_filas <comandos.txt>: llena FILAS[comando]="ejemplo<TAB>descripcion"
@@ -189,6 +205,63 @@ HTML_HEAD
 HTML_TAIL
 }
 
+# Ancho y alto del lienzo del SVG: el Dockerfile lee el atributo width/height
+# de la etiqueta raíz para calcular el aspect-ratio que le pone a la regla
+# CSS .letterpress (DEVKIT-143), así que cambiar estos números no requiere
+# tocar nada más.
+SVG_ANCHO=1200
+SVG_ALTO=700
+
+# Arma la chuleta como SVG: mismos BLOQUES y FILAS que el HTML, pero en dos
+# columnas por dos filas (una por bloque) para que el comando más largo entre
+# sin envolver línea -un SVG no envuelve texto solo-. El color se declara dos
+# veces (por defecto y bajo @media prefers-color-scheme:dark) porque el
+# Dockerfile copia este mismo archivo sobre los cuatro letterpress-*.svg de
+# openvscode-server: no hay una versión por tema, así que la única señal de
+# clara/oscura disponible en tiempo de carga es la preferencia del navegador.
+armar_svg() {
+  cat <<SVG_HEAD
+<svg xmlns="http://www.w3.org/2000/svg" width="$SVG_ANCHO" height="$SVG_ALTO" viewBox="0 0 $SVG_ANCHO $SVG_ALTO">
+<style>
+  text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .t { font-size: 34px; font-weight: 700; fill: #3b3b3b; fill-opacity: .55; }
+  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: #3b3b3b; fill-opacity: .4; }
+  .c { font-size: 16px; font-weight: 700; fill: #3b3b3b; fill-opacity: .5; }
+  .d { font-size: 13px; fill: #3b3b3b; fill-opacity: .32; }
+  @media (prefers-color-scheme: dark) {
+    .t, .g, .c, .d { fill: #d4d4d4; }
+  }
+</style>
+<text x="60" y="70" class="t">$(escapar 'devkit: comandos')</text>
+SVG_HEAD
+
+  local -a xs=(60 620)
+  local -a ys=(150 430)
+  local i=0 bloque comando fila descripcion col row x y j yc yd
+  for bloque in $BLOQUES_ORDEN; do
+    col=$(( i % 2 ))
+    row=$(( i / 2 ))
+    x=${xs[$col]}
+    y=${ys[$row]}
+    printf '<text x="%s" y="%s" class="g">%s</text>\n' "$x" "$y" "$(escapar "$bloque")"
+    j=0
+    while IFS= read -r comando; do
+      [ -n "$comando" ] || continue
+      fila="${FILAS[$comando]}"
+      descripcion="${fila#*$'\t'}"
+      descripcion="${descripcion//\`/}"
+      yc=$((y + 34 + j*46))
+      yd=$((yc + 18))
+      printf '<text x="%s" y="%s" class="c">%s</text>\n' "$x" "$yc" "$(escapar "$(recortar "$comando" 44)")"
+      printf '<text x="%s" y="%s" class="d">%s</text>\n' "$x" "$yd" "$(escapar "$(recortar "$descripcion" 58)")"
+      j=$((j+1))
+    done <<< "${BLOQUES[$bloque]}"
+    i=$((i+1))
+  done
+
+  echo '</svg>'
+}
+
 # --- Autoprueba --------------------------------------------------------------
 if [ "${1:-}" = "--test" ]; then
   fail=0
@@ -248,16 +321,40 @@ bar" )
   ( armar ) >/dev/null 2>&1
   check "descripción con comilla sin cerrar corta armar (código 2)" 2 "$?"
 
+  check "recortar deja intacto un texto corto" "hola" "$(recortar hola 10)"
+  check "recortar corta y agrega elipsis" "ho…" "$(recortar hola 3)"
+
+  BLOQUES_ORDEN="uno"
+  declare -A BLOQUES=( [uno]="foo <x>
+bar" )
+  declare -A FILAS=( ["foo <x>"]="foo 1"$'\t'"hace foo" ["bar"]="bar 1"$'\t'"hace bar" )
+  out="$(armar_svg)"
+  case "$out" in
+    *'<text x="60" y="150" class="g">uno</text>'*'<text x="60" y="184" class="c">foo &lt;x&gt;</text>'*'<text x="60" y="202" class="d">hace foo</text>'*) \
+      check "arma SVG con bloque, comando escapado y descripción" si si ;;
+    *) check "arma SVG con bloque, comando escapado y descripción" si no ;;
+  esac
+
   # De aquí en más, contra el comandos.txt real: BLOQUES no se puede anular
   # por variable de entorno (a diferencia de SKILLS_ORDEN en gen-readme.sh),
   # así que --check necesita el manifiesto real para validar sin cortar.
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
-  check "--check con el HTML al día sale 0" 0 "$?"
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
+  check "--check con el HTML y el SVG al día sale 0" 0 "$?"
 
   echo "viejo" > "$tmp/cheatsheet.html"
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
   check "--check con el HTML viejo sale 1" 1 "$?"
+
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1  # restaura el HTML
+  echo "viejo" > "$tmp/cheatsheet.svg"
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
+  check "--check con el SVG viejo sale 1" 1 "$?"
 
   bash "$HERE/scripts/gen-cheatsheet.sh" --chek >/dev/null 2>&1
   check "argumento desconocido se rechaza" 2 "$?"
@@ -274,18 +371,31 @@ esac
 cargar_filas "$COMANDOS" || exit 2
 validar_bloques || exit 2
 
-if [ "${1:-}" = "--check" ]; then
-  [ -f "$SALIDA" ] || { echo "gen-cheatsheet.sh: no existe $SALIDA" >&2; exit 2; }
-  nuevo="$(mktemp)"; trap 'rm -f "$nuevo"' EXIT
-  armar > "$nuevo"
-  if diff -q "$nuevo" "$SALIDA" >/dev/null 2>&1; then
-    exit 0
+# Genera <salida> con <armar_fn> (armar o armar_svg); en --check compara
+# contra lo commiteado sin escribir nada. Separada del cuerpo principal
+# porque HTML y SVG comparten exactamente esta lógica de verificación.
+generar() {  # generar <salida> <armar_fn>
+  local salida=$1 armar_fn=$2 nuevo
+  if [ "$MODO" = "--check" ]; then
+    [ -f "$salida" ] || { echo "gen-cheatsheet.sh: no existe $salida" >&2; return 2; }
+    nuevo="$(mktemp)"
+    "$armar_fn" > "$nuevo"
+    if diff -q "$nuevo" "$salida" >/dev/null 2>&1; then
+      rm -f "$nuevo"
+      return 0
+    fi
+    rm -f "$nuevo"
+    echo "gen-cheatsheet.sh: $salida quedó vieja; corre gen-cheatsheet.sh y commitea el resultado" >&2
+    return 1
   fi
-  echo "gen-cheatsheet.sh: $SALIDA quedó vieja; corre gen-cheatsheet.sh y commitea el resultado" >&2
-  exit 1
-fi
+  nuevo="$(mktemp)"
+  "$armar_fn" > "$nuevo"
+  chmod 644 "$nuevo"
+  mv "$nuevo" "$salida"
+}
 
-nuevo="$(mktemp)"; trap 'rm -f "$nuevo"' EXIT
-armar > "$nuevo"
-chmod 644 "$nuevo"
-mv "$nuevo" "$SALIDA"
+MODO="${1:-}"
+estado=0
+generar "$SALIDA" armar || estado=1
+generar "$SALIDA_SVG" armar_svg || estado=1
+exit "$estado"
