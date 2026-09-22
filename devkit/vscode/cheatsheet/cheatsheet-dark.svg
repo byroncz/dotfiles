@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700">
 <style>
   text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .t { font-size: 34px; font-weight: 700; fill: #d4d4d4; fill-opacity: .55; }
-  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: #d4d4d4; fill-opacity: .4; }
-  .c { font-size: 16px; font-weight: 700; fill: #d4d4d4; fill-opacity: .5; }
-  .d { font-size: 13px; fill: #d4d4d4; fill-opacity: .32; }
+  .t { font-size: 34px; font-weight: 700; fill: #d4d4d4; fill-opacity: .60; }
+  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: #d4d4d4; fill-opacity: .60; }
+  .c { font-size: 16px; font-weight: 700; fill: #d4d4d4; fill-opacity: .76; }
+  .d { font-size: 13px; fill: #d4d4d4; fill-opacity: .60; }
 </style>
 <text x="60" y="70" class="t">devkit: comandos</text>
 <text x="60" y="150" class="g">En el host</text>
@@ -18,7 +18,7 @@
 <text x="60" y="340" class="d">Reconstruye las imágenes desde cero y recrea. Úsalo cuand…</text>
 <text x="60" y="368" class="c">devkit awake &lt;proyecto&gt;</text>
 <text x="60" y="386" class="d">Solo macOS: evita que el host se suspenda mientras el con…</text>
-<text x="620" y="150" class="g">agentes</text>
+<text x="620" y="150" class="g">Agentes</text>
 <text x="620" y="184" class="c">dk --estado [--seguir]</text>
 <text x="620" y="202" class="d">Muestra todos los agentes del contenedor y se refresca ca…</text>
 <text x="620" y="230" class="c">dk --tablero [--seguir]</text>
@@ -29,7 +29,7 @@
 <text x="620" y="340" class="d">Revisa el PR número &lt;N&gt; como revisor independiente y publ…</text>
 <text x="620" y="368" class="c">dk task-fix &lt;N&gt;</text>
 <text x="620" y="386" class="d">Corrige el PR número &lt;N&gt; según los hallazgos de la última…</text>
-<text x="60" y="430" class="g">cards</text>
+<text x="60" y="430" class="g">Cards</text>
 <text x="60" y="464" class="c">task-close.sh &lt;Clave&gt; [PR]</text>
 <text x="60" y="482" class="d">Cierra una card mergeada: Estado a Hecha y marcador en el…</text>
 <text x="60" y="510" class="c">task-block.sh &lt;Clave&gt; &lt;motivo&gt;</text>
