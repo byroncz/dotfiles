@@ -7,10 +7,14 @@
 #   devkit code <proyecto>      abrir el editor VS Code del proyecto en el navegador
 #   devkit stop <proyecto>      detener sin perder nada
 #   devkit down <proyecto>      destruir el contenedor (el código no committeado se pierde)
-#   devkit recreate <proyecto>  recrear los contenedores: relee secretos y devkit.env, y
+#   devkit recreate <proyecto> [--force]
+#                               recrear los contenedores: relee secretos y devkit.env, y
 #                               reconstruye las capas que cambiaron (en modo dev,
-#                               con el devkit/ del workspace)
-#   devkit rebuild <proyecto>   reconstruir las imágenes desde cero y recrear
+#                               con el devkit/ del workspace). Se niega si hay un
+#                               agente en curso dentro del contenedor; --force lo salta
+#   devkit rebuild <proyecto> [--force]
+#                               reconstruir las imágenes desde cero y recrear; misma
+#                               guarda de agentes en curso que recreate
 #   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
@@ -24,8 +28,17 @@ REPO="${DEVKIT_TEMPLATE_REPO:-byroncz/dotfiles}"
 # un symlink propio, sin tocar el /etc/localtime real de quien corre la
 # prueba (que puede no ser un Mac).
 LOCALTIME="${DEVKIT_LOCALTIME_FILE:-/etc/localtime}"
+# --force (DEVKIT-138), en cualquier posición: salta la guarda de agentes en
+# curso de recreate/rebuild. Se filtra antes de asignar cmd/proj para no
+# alterar su orden posicional de siempre.
+force=0
+resto=""
+for arg in "$@"; do
+  if [ "$arg" = --force ]; then force=1; else resto="$resto $arg"; fi
+done
+set -- $resto
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,19p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,23p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -350,6 +363,32 @@ awake() {
   caffeinate -i docker wait "devkit-$proj" >/dev/null
 }
 confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
+# `devkit-run --agentes-vivos` (DEVKIT-138), por su ruta y no por el alias
+# `devkit-run` de zshrc: ese alias no existe en un `docker exec` sin shell
+# interactiva (mismo motivo que DEVKIT-54). Se lee /run/devkit/env para
+# DEVKIT_SCRIPTS_DIR antes de invocar el script: en modo dev, sin esto, un
+# cambio recién hecho al propio devkit-run.sh no se vería hasta el próximo
+# `devkit recreate` (mismo motivo que DEVKIT-50).
+agentes_vivos() {
+  docker exec "devkit-$proj" sh -c \
+    '. /run/devkit/env 2>/dev/null; "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/devkit-run.sh" --agentes-vivos' \
+    2>/dev/null
+}
+# Antes de recreate/rebuild: un `--force-recreate` a mitad de una card mata
+# al agente sin avisar y el humano tiene que adivinarlo mirando --estado. Sin
+# --force, si hay algún agente vivo, se aborta con el listado y la
+# sugerencia de pausar el bucle. Si el contenedor no responde (docker exec
+# falla, por ejemplo apagado) la guarda no aplica: sigue como antes de esta
+# card.
+guarda_agentes_vivos() {
+  [ "$force" = 1 ] && return 0
+  salida="$(agentes_vivos)" || return 0
+  [ "$salida" = "sin agentes vivos" ] && return 0
+  echo "devkit: $proj tiene agentes en curso; 'devkit $cmd' no sigue sin --force:" >&2
+  printf '%s\n' "$salida" | sed 's/^/  /' >&2
+  echo "devkit: pausa el bucle primero (docker exec devkit-$proj devkit-run --pausa, o --alto) y espera a que terminen, o repite con --force" >&2
+  return 1
+}
 case "$cmd" in
   up)       sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
@@ -357,8 +396,8 @@ case "$cmd" in
   awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
-  rebuild)  confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
+  recreate) guarda_agentes_vivos && confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
+  rebuild)  guarda_agentes_vivos && confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }

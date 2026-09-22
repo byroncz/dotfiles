@@ -10,8 +10,8 @@ devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del conten
 devkit code <proyecto> | devkit code ventas | Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día.
 devkit stop <proyecto> | devkit stop ventas | Detiene sin perder nada.
 devkit down <proyecto> | devkit down ventas | Destruye el contenedor; lo no commiteado se pierde.
-devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`.
-devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza.
+devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda.
+devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza. Misma guarda de agentes en curso que `recreate`.
 devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`.
 devkit logs <proyecto> | devkit logs ventas | Arranque y bucles del contenedor.
 devkit net-open <proyecto> | devkit net-open ventas | Red abierta en esta sesión, solo para depurar.
@@ -30,6 +30,7 @@ devkit-run <skill> <Clave> | devkit-run --seguir task-start DEVKIT-42 | Lanza un
 devkit-run --estado [--seguir] | devkit-run --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
 devkit-run --tablero [--seguir] | devkit-run --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
 devkit-run --cola | devkit-run --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
+devkit-run --agentes-vivos | devkit-run --agentes-vivos | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano.
 devkit-run --pausa | devkit-run --pausa | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido.
 devkit-run --alto | devkit-run --alto | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente.
 devkit-run --reanudar | devkit-run --reanudar | Vuelve el interruptor al modo trabajo.

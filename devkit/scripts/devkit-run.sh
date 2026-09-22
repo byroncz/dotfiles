@@ -59,6 +59,13 @@
 #     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
 #     origen o "(sin Épica)") y título, en el mismo orden que decide "la
 #     siguiente card" (`cola.sh`). No acepta `--seguir`.
+#   devkit-run --agentes-vivos
+#     PID, Clave y paso de cada `--worker`/`--sync` en curso en este
+#     contenedor (DEVKIT-138), o "sin agentes vivos". La misma detección por
+#     `ps` que `agentes_vivos` en watch.sh -no se importan entre sí, ver la
+#     nota junto a ESTADO_GRACIA-, para que `devkit recreate`/`devkit
+#     rebuild` (host/devkit.sh) sepan si hay una card a mitad de camino antes
+#     de tumbar el contenedor.
 #   devkit-run --costos [<Clave>]
 #     Costo por card, leído de /workspace/.devkit/costos.log (DEVKIT-89), que
 #     sobrevive a `devkit recreate` a diferencia de watch.log. Con Clave: una
@@ -2189,6 +2196,31 @@ agentes_en_curso_rapido() {  # agentes_en_curso_rapido <watch.log> <ahora epoch>
     fi
   done <<<"$lanz"
   echo "$en_curso"
+}
+
+# Comando que lista los agentes vivos con su Clave y su paso (DEVKIT-138):
+# mismo patrón de proceso que `agentes_vivos` en watch.sh -no se importan
+# entre sí, ver la nota junto a ESTADO_GRACIA, así que se repite aquí- para
+# que `devkit recreate`/`devkit rebuild` (host/devkit.sh) decidan si abortan
+# antes de tumbar el contenedor a mitad de una card. Un agente vivo es un
+# `devkit-run.sh --worker` o `--sync` en curso; `-ww` evita que una ruta de
+# log larga quede fuera de la línea y el agente parezca no tener paso.
+agentes_vivos() {
+  local lineas
+  lineas=$("$PS_BIN" -eo pid=,args= -ww 2>/dev/null | grep -E -- '--(worker|sync) /' | grep -v grep)
+  if [ -z "$lineas" ]; then
+    echo "sin agentes vivos"
+    return 0
+  fi
+  printf '%s\n' "$lineas" | while IFS= read -r linea; do
+    local pid args paso clave
+    pid=$(printf '%s' "$linea" | awk '{print $1}')
+    args=$(printf '%s' "$linea" | cut -d' ' -f2-)
+    paso=$(printf '%s' "$args" | grep -oE -- '--(worker|sync)[[:space:]]+/[a-zA-Z-]+' | grep -oE '/[a-zA-Z-]+$' | tr -d '/')
+    clave=$(printf '%s' "$args" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+    printf '%s\t%s\t%s\n' "$pid" "${clave:-?}" "${paso:-?}"
+  done
+  return 0
 }
 
 # Rellena a <n> caracteres. `printf %-Ns` cuenta bytes, y "terminó" o
@@ -7998,6 +8030,19 @@ FIN
         bash "$HERE/devkit-run.sh" --forzar task-start DEVKIT-9 >/dev/null 2>&1
       grep -c 'lanzando' "$tmp/run/watch.log")"
 
+  # DEVKIT-138: `--agentes-vivos` lista PID, Clave y paso de cada `--worker`/
+  # `--sync` en curso, para que host/devkit.sh (recreate/rebuild) decida si
+  # aborta. Mismo doble de `ps` que agentes_vivos en watch-test.sh.
+  local pslist_vivos
+  pslist_vivos="$tmp/ps-vivos"
+  printf '#!/usr/bin/env bash\necho "4242 bash devkit-run.sh --worker /task-fix DEVKIT-46 /run/devkit/task-fix-1.log opus high 40"\n' \
+    >"$pslist_vivos"
+  chmod +x "$pslist_vivos"
+  check "--agentes-vivos: lista PID, Clave y paso" "$(printf '4242\tDEVKIT-46\ttask-fix')" \
+    "$(DEVKIT_PS_BIN="$pslist_vivos" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+  check "--agentes-vivos: sin agentes vivos lo dice" "sin agentes vivos" \
+    "$(DEVKIT_PS_BIN="$pslist_vacio" bash "$HERE/devkit-run.sh" --agentes-vivos 2>&1)"
+
   # DEVKIT-81 H1: el aviso de duplicado también debe encontrar el log de una
   # línea "lanzando" del formato viejo, sin modelo/esfuerzo/ronda, que puede
   # seguir en watch.log tras una actualización del devkit.
@@ -8883,6 +8928,10 @@ $card_md"
     # no `estado_filas` (ver el comentario junto a su definición). Tampoco
     # toca la red: solo lee watch.log y `ps`.
     agentes_en_curso_rapido "$WATCH_LOG" "${DEVKIT_AHORA:-$(date +%s)}"
+    exit 0
+    ;;
+  --agentes-vivos)
+    agentes_vivos
     exit 0
     ;;
   --siguiente-modelo)
