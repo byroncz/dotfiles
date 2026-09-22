@@ -27,7 +27,7 @@ gl | gl | Alias de `git log` gráfico.
 ll | ll | Alias de `ls -lah`.
 c | c | Alias de `clear`.
 dk <skill> <Clave> | dk --seguir task-start DEVKIT-42 | Lanza una skill en segundo plano y se queda mostrando su avance hasta que termina. Úsalo para lanzar cualquier skill a mano, fuera del ciclo automático del bucle. Alias largo: `devkit-run`, mismo script y mismos argumentos; los agentes lo invocan así.
-dk --estado [--seguir] | dk --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor.
+dk --estado [--seguir] | dk --estado --seguir | Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor. La columna PR muestra `#<número>` y, en una terminal que soporte hipervínculos, se abre con Ctrl/Cmd+clic.
 dk --tablero [--seguir] | dk --tablero --seguir | Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.
 dk --cola | dk --cola | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque.
 dk --agentes-vivos | dk --agentes-vivos | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano.
