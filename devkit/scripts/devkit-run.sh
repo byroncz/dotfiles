@@ -394,10 +394,12 @@ NOTION_CHECK="${DEVKIT_NOTION_CHECK:-1}"
 # H2 de pr-review (DEVKIT-65): revisado el bloque `ENV` del Dockerfile y el
 # `environment:` de `compose.yaml` completos. Suman `DISABLE_AUTOUPDATER=1`
 # (Dockerfile: sin ella la CLI intenta actualizarse sola, sin salida a
-# internet desde `dev`) y `MCP_OAUTH_CALLBACK_PORT=54545` (compose.yaml: el
-# plugin de Notion vuelve a este puerto fijo tras el OAuth; sin la variable
-# usa uno al azar que el proxy no espera). `TERM` y `UV_PYTHON_INSTALL_DIR`/
-# `UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` quedan fuera a propósito: `claude -p` no
+# internet desde `dev`) y `MCP_OAUTH_CALLBACK_PORT` (compose.yaml: vale
+# `DEVKIT_OAUTH_PORT`, por defecto 54545; el plugin de Notion vuelve a ese
+# puerto tras el OAuth, distinto por proyecto desde DEVKIT-155; sin la
+# variable usa uno al azar que el proxy no espera). `TERM` y
+# `UV_PYTHON_INSTALL_DIR`/`UV_TOOL_DIR`/`UV_TOOL_BIN_DIR` quedan fuera a
+# propósito: `claude -p` no
 # es interactivo y no consulta `TERM`, y los tres `UV_*` del Dockerfile ya
 # apuntan a rutas bajo `$HOME`, que sí viaja en la lista; sin la variable,
 # `uv` cae al mismo valor por defecto. `DEVKIT_PROJECT` y `DEVKIT_VERSION`
