@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-#  devkit: arma devkit/vscode/cheatsheet/cheatsheet.{html,svg}, la chuleta de
-#  comandos. El HTML lo abre a pedido la extensión local devkit.cheatsheet
-#  (DEVKIT-96, comando "devkit: comandos"); el SVG lo pone el Dockerfile como
-#  marca de agua del editor vacío (DEVKIT-143), en lugar del logo de
+#  devkit: arma devkit/vscode/cheatsheet/cheatsheet.html y los dos SVG
+#  cheatsheet-{light,dark}.svg, la chuleta de comandos. El HTML lo abre a
+#  pedido la extensión local devkit.cheatsheet (DEVKIT-96, comando "devkit:
+#  comandos"); los SVG los pone el Dockerfile como marca de agua del editor
+#  vacío (DEVKIT-143), uno por tema claro/oscuro, en lugar del logo de
 #  openvscode-server. Fuente: devkit/scripts/comandos.txt (DEVKIT-88), que
 #  trae tres columnas por fila: `comando | ejemplo | descripción`.
 #
@@ -13,8 +14,8 @@
 #  comandos.txt corta la generación (mismo criterio que SKILLS_ORDEN en
 #  gen-readme.sh): un typo no debe desaparecer la tarjeta en silencio.
 #
-#    gen-cheatsheet.sh          escribe cheatsheet.html y cheatsheet.svg
-#    gen-cheatsheet.sh --check  sale con 1 si alguno de los dos quedó viejo
+#    gen-cheatsheet.sh          escribe el HTML y los dos SVG
+#    gen-cheatsheet.sh --check  sale con 1 si alguno de los tres quedó viejo
 #    gen-cheatsheet.sh --test   autoprueba, con fixtures propios
 # ---------------------------------------------------------------------------
 set -u
@@ -22,7 +23,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"   # devkit/
 
 COMANDOS="${DEVKIT_GEN_CHEATSHEET_COMANDOS:-$HERE/scripts/comandos.txt}"
 SALIDA="${DEVKIT_GEN_CHEATSHEET_SALIDA:-$HERE/vscode/cheatsheet/cheatsheet.html}"
-SALIDA_SVG="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG:-$HERE/vscode/cheatsheet/cheatsheet.svg}"
+SALIDA_SVG_CLARO="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO:-$HERE/vscode/cheatsheet/cheatsheet-light.svg}"
+SALIDA_SVG_OSCURO="${DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO:-$HERE/vscode/cheatsheet/cheatsheet-dark.svg}"
 
 BLOQUES_ORDEN="contenedor agentes cards Python"
 declare -A BLOQUES
@@ -214,23 +216,28 @@ SVG_ALTO=700
 
 # Arma la chuleta como SVG: mismos BLOQUES y FILAS que el HTML, pero en dos
 # columnas por dos filas (una por bloque) para que el comando más largo entre
-# sin envolver línea -un SVG no envuelve texto solo-. El color se declara dos
-# veces (por defecto y bajo @media prefers-color-scheme:dark) porque el
-# Dockerfile copia este mismo archivo sobre los cuatro letterpress-*.svg de
-# openvscode-server: no hay una versión por tema, así que la única señal de
-# clara/oscura disponible en tiempo de carga es la preferencia del navegador.
+# sin envolver línea -un SVG no envuelve texto solo-. <tema> es "light" u
+# "oscuro"; fija el color como texto plano, sin @media (prefers-color-scheme),
+# que en un SVG usado como background-image de openvscode-server sigue al
+# sistema operativo o al navegador, no al tema del editor -el criterio pide
+# los colores de los temas vs y vs-dark, uno por archivo (DEVKIT-143 H1)-. El
+# Dockerfile copia esta salida sobre los letterpress-*.svg que le
+# correspondan a cada tema.
 armar_svg() {
+  local tema=$1 color
+  case "$tema" in
+    claro) color=#3b3b3b ;;
+    oscuro) color=#d4d4d4 ;;
+    *) echo "armar_svg: tema desconocido \"$tema\" (se esperaba claro u oscuro)" >&2; return 2 ;;
+  esac
   cat <<SVG_HEAD
 <svg xmlns="http://www.w3.org/2000/svg" width="$SVG_ANCHO" height="$SVG_ALTO" viewBox="0 0 $SVG_ANCHO $SVG_ALTO">
 <style>
   text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  .t { font-size: 34px; font-weight: 700; fill: #3b3b3b; fill-opacity: .55; }
-  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: #3b3b3b; fill-opacity: .4; }
-  .c { font-size: 16px; font-weight: 700; fill: #3b3b3b; fill-opacity: .5; }
-  .d { font-size: 13px; fill: #3b3b3b; fill-opacity: .32; }
-  @media (prefers-color-scheme: dark) {
-    .t, .g, .c, .d { fill: #d4d4d4; }
-  }
+  .t { font-size: 34px; font-weight: 700; fill: $color; fill-opacity: .55; }
+  .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: $color; fill-opacity: .4; }
+  .c { font-size: 16px; font-weight: 700; fill: $color; fill-opacity: .5; }
+  .d { font-size: 13px; fill: $color; fill-opacity: .32; }
 </style>
 <text x="60" y="70" class="t">$(escapar 'devkit: comandos')</text>
 SVG_HEAD
@@ -328,33 +335,67 @@ bar" )
   declare -A BLOQUES=( [uno]="foo <x>
 bar" )
   declare -A FILAS=( ["foo <x>"]="foo 1"$'\t'"hace foo" ["bar"]="bar 1"$'\t'"hace bar" )
-  out="$(armar_svg)"
+  out="$(armar_svg claro)"
   case "$out" in
-    *'<text x="60" y="150" class="g">uno</text>'*'<text x="60" y="184" class="c">foo &lt;x&gt;</text>'*'<text x="60" y="202" class="d">hace foo</text>'*) \
-      check "arma SVG con bloque, comando escapado y descripción" si si ;;
-    *) check "arma SVG con bloque, comando escapado y descripción" si no ;;
+    *'fill: #3b3b3b'*'<text x="60" y="150" class="g">uno</text>'*'<text x="60" y="184" class="c">foo &lt;x&gt;</text>'*'<text x="60" y="202" class="d">hace foo</text>'*) \
+      check "arma SVG claro con bloque, comando escapado y descripción" si si ;;
+    *) check "arma SVG claro con bloque, comando escapado y descripción" si no ;;
   esac
+  case "$out" in
+    *'@media'*) check "SVG claro sin @media prefers-color-scheme" si no ;;
+    *) check "SVG claro sin @media prefers-color-scheme" si si ;;
+  esac
+
+  out="$(armar_svg oscuro)"
+  case "$out" in
+    *'fill: #d4d4d4'*) check "arma SVG oscuro con el color del tema oscuro" si si ;;
+    *) check "arma SVG oscuro con el color del tema oscuro" si no ;;
+  esac
+
+  armar_svg no-existe >/dev/null 2>&1
+  check "armar_svg con tema desconocido corta (código 2)" 2 "$?"
 
   # De aquí en más, contra el comandos.txt real: BLOQUES no se puede anular
   # por variable de entorno (a diferencia de SKILLS_ORDEN en gen-readme.sh),
   # así que --check necesita el manifiesto real para validar sin cortar.
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
-  check "--check con el HTML y el SVG al día sale 0" 0 "$?"
+  check "--check con el HTML y los dos SVG al día sale 0" 0 "$?"
 
   echo "viejo" > "$tmp/cheatsheet.html"
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
   check "--check con el HTML viejo sale 1" 1 "$?"
 
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1  # restaura el HTML
-  echo "viejo" > "$tmp/cheatsheet.svg"
-  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$tmp/cheatsheet.svg" \
+  echo "viejo" > "$tmp/cheatsheet-light.svg"
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
     bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
-  check "--check con el SVG viejo sale 1" 1 "$?"
+  check "--check con el SVG claro viejo sale 1" 1 "$?"
+
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" >/dev/null 2>&1  # restaura el SVG claro
+  echo "viejo" > "$tmp/cheatsheet-dark.svg"
+  DEVKIT_GEN_CHEATSHEET_SALIDA="$tmp/cheatsheet.html" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$tmp/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$tmp/cheatsheet-dark.svg" \
+    bash "$HERE/scripts/gen-cheatsheet.sh" --check >/dev/null 2>&1
+  check "--check con el SVG oscuro viejo sale 1" 1 "$?"
 
   bash "$HERE/scripts/gen-cheatsheet.sh" --chek >/dev/null 2>&1
   check "argumento desconocido se rechaza" 2 "$?"
@@ -371,15 +412,17 @@ esac
 cargar_filas "$COMANDOS" || exit 2
 validar_bloques || exit 2
 
-# Genera <salida> con <armar_fn> (armar o armar_svg); en --check compara
-# contra lo commiteado sin escribir nada. Separada del cuerpo principal
-# porque HTML y SVG comparten exactamente esta lógica de verificación.
-generar() {  # generar <salida> <armar_fn>
+# Genera <salida> con <armar_fn> [args...] (armar, o armar_svg claro/oscuro);
+# en --check compara contra lo commiteado sin escribir nada. Separada del
+# cuerpo principal porque HTML y los dos SVG comparten exactamente esta
+# lógica de verificación.
+generar() {  # generar <salida> <armar_fn> [args...]
   local salida=$1 armar_fn=$2 nuevo
+  shift 2
   if [ "$MODO" = "--check" ]; then
     [ -f "$salida" ] || { echo "gen-cheatsheet.sh: no existe $salida" >&2; return 2; }
     nuevo="$(mktemp)"
-    "$armar_fn" > "$nuevo"
+    "$armar_fn" "$@" > "$nuevo"
     if diff -q "$nuevo" "$salida" >/dev/null 2>&1; then
       rm -f "$nuevo"
       return 0
@@ -389,7 +432,7 @@ generar() {  # generar <salida> <armar_fn>
     return 1
   fi
   nuevo="$(mktemp)"
-  "$armar_fn" > "$nuevo"
+  "$armar_fn" "$@" > "$nuevo"
   chmod 644 "$nuevo"
   mv "$nuevo" "$salida"
 }
@@ -397,5 +440,6 @@ generar() {  # generar <salida> <armar_fn>
 MODO="${1:-}"
 estado=0
 generar "$SALIDA" armar || estado=1
-generar "$SALIDA_SVG" armar_svg || estado=1
+generar "$SALIDA_SVG_CLARO" armar_svg claro || estado=1
+generar "$SALIDA_SVG_OSCURO" armar_svg oscuro || estado=1
 exit "$estado"

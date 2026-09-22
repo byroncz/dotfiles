@@ -178,12 +178,12 @@ COPY --chown=${USER_UID}:${USER_GID} entrypoint.sh /opt/devkit/entrypoint.sh
 COPY --chown=${USER_UID}:${USER_GID} scripts/      /opt/devkit/scripts/
 
 # Chuleta de comandos del editor (DEVKIT-96): extensión local, sin empaquetar
-# ni Open VSX (devkit/vscode/cheatsheet/, con su cheatsheet.html y
-# cheatsheet.svg generados por gen-cheatsheet.sh), copiada tal cual a la
-# carpeta de extensiones. openvscode-server la carga igual que una .vsix
-# desempaquetada. A diferencia de README.md (que solo se regenera en la card
-# de release, AGENTS.md), este HTML y este SVG los sirve la imagen en vivo:
-# el build corta si alguno quedó viejo respecto a comandos.txt.
+# ni Open VSX (devkit/vscode/cheatsheet/, con su cheatsheet.html y los SVG
+# cheatsheet-{light,dark}.svg generados por gen-cheatsheet.sh), copiada tal
+# cual a la carpeta de extensiones. openvscode-server la carga igual que una
+# .vsix desempaquetada. A diferencia de README.md (que solo se regenera en la
+# card de release, AGENTS.md), este HTML y estos SVG los sirve la imagen en
+# vivo: el build corta si alguno quedó viejo respecto a comandos.txt.
 COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/
 # settings.json copiado junto a la extensión (DEVKIT-116): es la única forma
 # de dejar vigentes los ajustes del editor, porque openvscode-server no lee
@@ -191,13 +191,15 @@ COPY --chown=${USER_UID}:${USER_GID} vscode/cheatsheet/ /home/${USERNAME}/.openv
 # activarse y aplica cada clave por la API de configuración; settings.json
 # sigue siendo la única fuente, no se duplica en el código de la extensión.
 COPY --chown=${USER_UID}:${USER_GID} vscode/settings.json /home/${USERNAME}/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/settings.json
-# gen-cheatsheet.sh calcula SALIDA/SALIDA_SVG por defecto como <devkit>/vscode/
-# cheatsheet/cheatsheet.{html,svg}, rutas que en la imagen no existen (solo
-# entrypoint.sh y scripts/ viven bajo /opt/devkit): --check tiene que
-# comparar contra los archivos recién copiados a la carpeta de extensiones,
-# así que se lo indica con las variables que el script ya prevé.
+# gen-cheatsheet.sh calcula SALIDA/SALIDA_SVG_CLARO/SALIDA_SVG_OSCURO por
+# defecto como <devkit>/vscode/cheatsheet/cheatsheet.{html,-light.svg,-dark.svg},
+# rutas que en la imagen no existen (solo entrypoint.sh y scripts/ viven bajo
+# /opt/devkit): --check tiene que comparar contra los archivos recién
+# copiados a la carpeta de extensiones, así que se lo indica con las
+# variables que el script ya prevé.
 RUN DEVKIT_GEN_CHEATSHEET_SALIDA="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet.html" \
-    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-light.svg" \
+    DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-dark.svg" \
     bash /opt/devkit/scripts/gen-cheatsheet.sh --check
 # Desde VS Code 1.80, extensions.json (ya escrito por el --install-extension
 # de más arriba) es el manifiesto autoritativo de qué extensiones carga
@@ -212,23 +214,33 @@ RUN rm -f "$HOME/.openvscode-server/extensions/extensions.json" \
 # Marca de agua del editor vacío (DEVKIT-143): el editor sin pestañas pinta
 # un div.letterpress con el logo de openvscode-server como fondo; no hay API
 # de extensiones para cambiarlo (ver Notas de la card), así que se
-# reemplazan los cuatro SVG de tema y se amplían las dos reglas de
-# workbench.css que limitan su tamaño a un ícono pequeño. La sustitución es
-# de cadena literal exacta -no una regex de sed- para que un cambio de
-# bundling en la próxima versión de openvscode-server corte el build en vez
-# de quedar aplicado a medias en silencio.
+# reemplazan los cuatro SVG de tema (el claro para light/hcLight, el oscuro
+# para dark/hcDark -H1 de la revisión: un solo SVG con @media
+# prefers-color-scheme sigue al sistema operativo o al navegador, no al tema
+# de VS Code) y se amplían las dos reglas de workbench.css que limitan su
+# tamaño a un ícono pequeño. La sustitución es de cadena literal exacta -no
+# una regex de sed- para que un cambio de bundling en la próxima versión de
+# openvscode-server corte el build en vez de quedar aplicado a medias en
+# silencio.
 # set -eu, no -x: con -x, bash traza también el valor expandido de
 # "contenido=$(cat "$CSS")" -workbench.css minificado pesa ~900 KB en una
 # sola línea- e infla el log del build sin decir nada útil.
+# USER root ... USER $USERNAME: /opt/openvscode-server se extrajo como root
+# (línea 80, antes del USER $USERNAME de más arriba) y no se le hizo chown,
+# a diferencia de /opt/devkit; escribir ahí como $USERNAME corta el build con
+# permiso denegado (H2 de la revisión).
+USER root
 RUN set -eu; \
-    SVG_ORIGEN="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet.svg"; \
+    SVG_CLARO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-light.svg"; \
+    SVG_OSCURO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-dark.svg"; \
     MEDIA="/opt/openvscode-server/out/media"; \
-    for tema in light dark hcLight hcDark; do \
-      cp "$SVG_ORIGEN" "$MEDIA/letterpress-$tema.svg"; \
-    done; \
-    ancho="$(grep -oE 'width="[0-9]+' "$SVG_ORIGEN" | head -1 | grep -oE '[0-9]+')"; \
-    alto="$(grep -oE 'height="[0-9]+' "$SVG_ORIGEN" | head -1 | grep -oE '[0-9]+')"; \
-    [ -n "$ancho" ] && [ -n "$alto" ] || { echo "cheatsheet.svg sin width/height en la etiqueta raíz" >&2; exit 1; }; \
+    cp "$SVG_CLARO" "$MEDIA/letterpress-light.svg"; \
+    cp "$SVG_CLARO" "$MEDIA/letterpress-hcLight.svg"; \
+    cp "$SVG_OSCURO" "$MEDIA/letterpress-dark.svg"; \
+    cp "$SVG_OSCURO" "$MEDIA/letterpress-hcDark.svg"; \
+    ancho="$(grep -oE 'width="[0-9]+' "$SVG_CLARO" | head -1 | grep -oE '[0-9]+')"; \
+    alto="$(grep -oE 'height="[0-9]+' "$SVG_CLARO" | head -1 | grep -oE '[0-9]+')"; \
+    [ -n "$ancho" ] && [ -n "$alto" ] || { echo "cheatsheet-light.svg sin width/height en la etiqueta raíz" >&2; exit 1; }; \
     CSS="/opt/openvscode-server/out/vs/code/browser/workbench/workbench.css"; \
     VIEJO_WATERMARK='.editor-group-watermark{display:flex;height:100%;max-width:272px;margin:auto;flex-direction:column;align-items:center;justify-content:center}'; \
     NUEVO_WATERMARK='.editor-group-watermark{display:flex;height:100%;max-width:1000px;margin:auto;flex-direction:column;align-items:center;justify-content:center}'; \
@@ -246,6 +258,7 @@ RUN set -eu; \
     contenido="${contenido//$VIEJO_WATERMARK/$NUEVO_WATERMARK}"; \
     contenido="${contenido//$VIEJO_LETTERPRESS/$NUEVO_LETTERPRESS}"; \
     printf '%s' "$contenido" > "$CSS"
+USER $USERNAME
 
 # Copia de referencia de lo que solo entra por imagen. `entrypoint.sh` la
 # compara en modo dev con el devkit/ del workspace para avisar cuándo hace

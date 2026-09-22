@@ -48,7 +48,7 @@ uv run <comando> | uv run python etl.py | Corre un comando dentro del entorno de
 ## Scripts de `devkit/scripts/`
 gen-stack.sh | gen-stack.sh | Genera la tabla Stack y la línea de extensiones del README.
 gen-readme.sh | gen-readme.sh | Genera y verifica `README.md` completo desde la plantilla.
-gen-cheatsheet.sh | gen-cheatsheet.sh | Genera y verifica `cheatsheet.html` y `cheatsheet.svg`, la chuleta de comandos del editor (panel a pedido y marca de agua del editor vacío).
+gen-cheatsheet.sh | gen-cheatsheet.sh | Genera y verifica `cheatsheet.html` y los SVG `cheatsheet-light.svg`/`cheatsheet-dark.svg`, la chuleta de comandos del editor (panel a pedido y marca de agua del editor vacío).
 devkit-run.sh | devkit-run.sh --estado | Único punto de lanzamiento de una skill (ver `devkit-run` más arriba).
 watch.sh | watch.sh | Bucle que revisa PRs abiertos y cierra los mergeados, lanzando la skill que toca.
 watch-test.sh | watch-test.sh | Prueba `watch.sh` sin GitHub y sin gastar cuota.
