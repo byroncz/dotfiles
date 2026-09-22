@@ -2079,6 +2079,17 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
           *" CAMBIOS en $short_pr: lanzando task-fix") estado=CAMBIOS ;;
           *"bloqueando con task-block.sh") estado=Bloqueada ;;
         esac
+        # DEVKIT-148: "Lista para merge" pasa a "Mergeado" si, después de esa
+        # misma línea de decisión, watch.log ya trae la línea que escribe
+        # close_pr en watch.sh al lanzar task-close.sh sobre este PR y esta
+        # Clave ("PR #<num> mergeado (<Clave>): cerrando con
+        # task-close.sh"). Mismo mecanismo que la decisión de arriba: primera
+        # línea que coincide tras $fin, sin GitHub ni Notion de por medio.
+        if [ "$estado" = "Lista para merge" ] \
+           && printf '%s\n' "$resto" | tail -n "+$((decision_ln + 1))" \
+                | grep -qF -- "PR #$arg mergeado ($clave):"; then
+          estado=Mergeado
+        fi
       fi
     fi
     if [ "$modelo" = - ] || [ -z "$modelo" ]; then
@@ -2437,11 +2448,14 @@ ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
 # veredicto de un pr-review terminado, no un paso del ciclo) entran acá
 # también, porque son los valores más anchos que de verdad puede mostrar
 # ESTADO -sin ellos, `ancho_de` los calcularía cortos y la fila desbordaría
-# en silencio en cuanto el bucle deje ese veredicto-.
+# en silencio en cuanto el bucle deje ese veredicto-. "Mergeado" (DEVKIT-148)
+# es el paso siguiente a "Lista para merge": el humano ya aprobó y GitHub ya
+# mergeó el PR.
 ESTADOS_CON_GLIFO=(
   "⠿ en curso" "* en curso"
   "✔ terminó" "ok terminó"
   "✔ Lista para merge" "ok Lista para merge"
+  "⎇ Mergeado" "<> Mergeado"
   "✖ error" "x error"
   "⊘ bloqueada" "!! bloqueada"
   "⊘ Bloqueada" "!! Bloqueada"
@@ -2545,16 +2559,21 @@ utf8_disponible() {
 # refresco de `--seguir`; fijo en ⠿ en una sola foto de `--estado`.
 GIRO_BRAILLE='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
 
-# Aplica el color ANSI de <color> ("verde"/"ambar"/"rojo"/"gris"/"negrita"/
-# vacío, cada uno de los primeros cuatro con un sufijo "-negrita" opcional
-# -DEVKIT-132, para "Lista para merge" y "Bloqueada" en
+# Aplica el color ANSI de <color> ("verde"/"ambar"/"rojo"/"gris"/"morado"/
+# "negrita"/vacío, cada uno de los primeros cinco con un sufijo "-negrita"
+# opcional -DEVKIT-132, para "Lista para merge" y "Bloqueada" en
 # `color_de_estado_fila`-) a <texto> si <habilitado> es 1 -mismo patrón que
 # <color> en `senal_bucle`: quien arma el cuadro dentro de un `$(...)` no
 # puede decidirlo ahí adentro con `[ -t 1 ]` y lo resuelve antes, afuera.
 # "negrita" sola es un atributo, no un color (DEVKIT-134: SKILL en negrita
 # para task-start, distinguir de un vistazo la fila que abre una card de la
-# que la continúa, sin competir con los colores de ESTADO). Sin color que
-# aplicar (vacío o <habilitado> distinto de 1), <texto> vuelve intacto.
+# que la continúa, sin competir con los colores de ESTADO). "morado"
+# (DEVKIT-148, "Mergeado") es el único de 24 bits: el mismo #8250df
+# (--fgColor-done de Primer) que GitHub usa para un PR mergeado, secuencia
+# 38;2;130;80;223, solo si COLORTERM anuncia truecolor/24bit -si no, cae al
+# magenta estándar (35), como cualquier terminal sin esa extensión-. Sin
+# color que aplicar (vacío o <habilitado> distinto de 1), <texto> vuelve
+# intacto.
 colorear() {  # colorear <color> <texto> <habilitado>
   local color=$1 texto=$2 habilitado=$3 code='' negrita='' num=''
   case "$color" in
@@ -2566,6 +2585,14 @@ colorear() {  # colorear <color> <texto> <habilitado>
       ambar) num=33 ;;
       rojo) num=31 ;;
       gris) num=90 ;;
+      morado)
+        case "${COLORTERM:-}" in
+          truecolor|24bit)
+            if [ -n "$negrita" ]; then code=$'\033[1;38;2;130;80;223m'; else code=$'\033[38;2;130;80;223m'; fi
+            ;;
+          *) num=35 ;;
+        esac
+        ;;
       negrita) code=$'\033[1m' ;;
     esac
     if [ -n "$num" ]; then
@@ -2585,7 +2612,10 @@ colorear() {  # colorear <color> <texto> <habilitado>
 # "Bloqueada" (DEVKIT-132), el veredicto de bloqueo de un pr-review terminado-
 # -no ⛔: ese glifo es
 # East Asian Wide y mide dos celdas, mientras que `rellenar` cuenta caracteres
-# (DEVKIT-106 H1)-; no arrancó (la card
+# (DEVKIT-106 H1)-; "Mergeado" (DEVKIT-148, el paso siguiente a "Lista para
+# merge" cuando el PR ya se mergeó) ⎇, el símbolo de rama de git/GitHub, con
+# <> de respaldo ASCII -"<>" no compite con ningún otro respaldo de esta
+# función-; no arrancó (la card
 # nunca llegó a lanzar; "no lanzó" es el mismo caso con otro nombre) ○;
 # cualquier otro valor -"sin registro", un `claude -p` vivo que `devkit-run`
 # no reconoce, y también "CAMBIOS" (DEVKIT-132): el veredicto de corrección de
@@ -2608,6 +2638,7 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
       fi
       ;;
     terminó|"Lista para merge") [ "$utf" = 1 ] && printf '✔' || printf 'ok' ;;
+    Mergeado) [ "$utf" = 1 ] && printf '⎇' || printf '<>' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
     bloqueada|Bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
     "no arrancó"|"no lanzó"|"en espera") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
@@ -2623,11 +2654,14 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
 # lanzamiento terminó" o "la card quedó bloqueada por otro motivo". "CAMBIOS"
 # (DEVKIT-132, el tercer veredicto) no tiene caso propio: cae en el `ambar`
 # por defecto, igual que cualquier estado que esta función no reconoce.
+# "Mergeado" (DEVKIT-148, el paso siguiente a "Lista para merge") es morado
+# y negrita, el mismo tono que GitHub usa para el ícono de un PR ya mergeado.
 color_de_estado_fila() {  # color_de_estado_fila <estado>
   case "$1" in
     "en curso") printf '' ;;
     terminó) printf verde ;;
     "Lista para merge") printf verde-negrita ;;
+    Mergeado) printf morado-negrita ;;
     error|falló|"falló ("*|bloqueada) printf rojo ;;
     Bloqueada) printf rojo-negrita ;;
     "no arrancó"|"no lanzó") printf gris ;;
@@ -6338,6 +6372,12 @@ FIN
 2026-09-16T11:06:00Z pr-review-100-aaa1111 lanzando (origen=bucle): "/pr-review 100" log=$est/pr-review-100-aaa1111.log
 2026-09-16T11:07:00Z pr-review-100-aaa1111 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
 2026-09-16T11:07:01Z PR #100 (DEVKIT-100) OK en aaa1111: task-document.sh
+2026-09-16T11:07:02Z PR #999 mergeado (DEVKIT-999): cerrando con task-close.sh
+2026-09-16T11:06:30Z PR #103 (DEVKIT-103) head ddd4444 sin informe: lanzando pr-review
+2026-09-16T11:06:30Z pr-review-103-ddd4444 lanzando (origen=bucle): "/pr-review 103" log=$est/pr-review-103-ddd4444.log
+2026-09-16T11:07:30Z pr-review-103-ddd4444 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-16T11:07:31Z PR #103 (DEVKIT-103) OK en ddd4444: task-document.sh
+2026-09-16T11:07:32Z PR #103 mergeado (DEVKIT-103): cerrando con task-close.sh
 2026-09-16T11:08:00Z PR #101 (DEVKIT-101) head bbb2222 sin informe: lanzando pr-review
 2026-09-16T11:08:00Z pr-review-101-bbb2222 lanzando (origen=bucle): "/pr-review 101" log=$est/pr-review-101-bbb2222.log
 2026-09-16T11:09:00Z pr-review-101-bbb2222 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
@@ -6429,6 +6469,15 @@ FIN
     "$(printf '%s\n' "$filas" | awk -F'\t' '$2 == "DEVKIT-102" {print $6}')"
   check "pr-review sin línea de decisión todavía: sigue terminó (DEVKIT-56)" \
     "terminó|bucle" "$(fila DEVKIT-56)"
+  # DEVKIT-148: "Lista para merge" pasa a "Mergeado" solo si watch.log trae,
+  # después de la línea de decisión de ESTE informe, la línea de merge de
+  # ESTE PR y ESTA Clave. DEVKIT-100 sigue "Lista para merge" a pesar de la
+  # línea de merge de PR #999 (DEVKIT-999) sumada arriba, de otro PR y otra
+  # Clave: no la toca.
+  check "pr-review con OK y sin línea de merge: sigue Lista para merge" \
+    "Lista para merge|bucle" "$(fila DEVKIT-100)"
+  check "pr-review con OK y con la línea de merge de este PR: ESTADO Mergeado" \
+    "Mergeado|bucle" "$(fila DEVKIT-103)"
   estado_de_fila() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
   check "icono: Lista para merge, mismo que terminó" '✔' \
     "$(glifo_estado_fila "$(estado_de_fila DEVKIT-100)" 0 1 1)"
@@ -6436,12 +6485,22 @@ FIN
     "$(glifo_estado_fila "$(estado_de_fila DEVKIT-102)" 0 1 1)"
   check "icono: CAMBIOS, sin caso propio, cae en la alarma ámbar" '⚠' \
     "$(glifo_estado_fila "$(estado_de_fila DEVKIT-101)" 0 1 1)"
+  check "icono: Mergeado, la rama ⎇" '⎇' \
+    "$(glifo_estado_fila "$(estado_de_fila DEVKIT-103)" 0 1 1)"
   check "color: Lista para merge, verde y negrita" verde-negrita \
     "$(color_de_estado_fila "Lista para merge")"
   check "color: Bloqueada (pr-review), rojo y negrita" rojo-negrita \
     "$(color_de_estado_fila "Bloqueada")"
   check "color: CAMBIOS, ámbar sin negrita (el defecto de color_de_estado_fila)" ambar \
     "$(color_de_estado_fila "CAMBIOS")"
+  check "color: Mergeado, morado y negrita" morado-negrita \
+    "$(color_de_estado_fila "Mergeado")"
+  check "colorear morado: sin COLORTERM cae a magenta estándar (35)" si \
+    "$(COLORTERM= colorear morado-negrita texto 1 | grep -qF $'\033[1;35m' && echo si || echo no)"
+  check "colorear morado: con COLORTERM=truecolor usa el 24 bits de GitHub" si \
+    "$(COLORTERM=truecolor colorear morado-negrita texto 1 | grep -qF $'\033[1;38;2;130;80;223m' && echo si || echo no)"
+  check "colorear morado: con COLORTERM=24bit usa el 24 bits de GitHub" si \
+    "$(COLORTERM=24bit colorear morado texto 1 | grep -qF $'\033[38;2;130;80;223m' && echo si || echo no)"
   check "colorear: negrita sobre verde suma el atributo ANSI 1" si \
     "$(colorear verde-negrita texto 1 | grep -qF $'\033[1;32m' && echo si || echo no)"
   check "colorear: negrita sobre rojo suma el atributo ANSI 1" si \
