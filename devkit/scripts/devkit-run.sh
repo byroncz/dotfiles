@@ -2441,29 +2441,48 @@ ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
 
 # ESTADO: cada estado que arma estado_filas (comentario de esa función,
 # arriba: en curso, terminó, error, bloqueada, no arrancó, no lanzó, y "sin
-# registro" como único valor del caso por defecto) con su glifo -el de UTF-8
-# y el de respaldo ASCII (utf8_disponible), porque sin locale UTF-8 el
-# respaldo puede medir más que el icono real ("!! bloqueada" son 12, dos más
-# que "⊘ bloqueada"-. "Lista para merge" y "Bloqueada" (DEVKIT-132: el
-# veredicto de un pr-review terminado, no un paso del ciclo) entran acá
-# también, porque son los valores más anchos que de verdad puede mostrar
-# ESTADO -sin ellos, `ancho_de` los calcularía cortos y la fila desbordaría
-# en silencio en cuanto el bucle deje ese veredicto-. "Mergeado" (DEVKIT-148)
-# es el paso siguiente a "Lista para merge": el humano ya aprobó y GitHub ya
-# mergeó el PR.
+# registro" como único valor del caso por defecto), más "lista para merge",
+# "bloqueada" y "cambios" (DEVKIT-132: los tres veredictos de un pr-review
+# terminado) y "mergeado" (DEVKIT-148, el paso siguiente a "lista para
+# merge"). Todo en minúscula y sin glifo (DEVKIT-153): el glifo se mudó a su
+# propia columna, antes de SKILL (`GLIFOS_ESTADO`/`ANCHO_ICONO`, debajo), y
+# ESTADO queda solo con texto -"Bloqueada" (el veredicto de un pr-review) y
+# "bloqueada" (el bloqueo genérico) comparten acá el mismo texto; lo que los
+# distingue es la negrita que le suma `color_de_estado_fila`, no una palabra
+# distinta. Esta lista es la que usa `ancho_de` para ANCHO_ESTADO, no la que
+# arma `estado_filas`: esa sigue devolviendo "Lista para merge"/"Bloqueada"/
+# "CAMBIOS"/"Mergeado" con mayúsculas -el token interno que matchean
+# `glifo_estado_fila`/`color_de_estado_fila`, sin tocar-, y es
+# `formatear_fila` quien lo pasa a minúscula recién al armar la columna.
 ESTADOS_CON_GLIFO=(
-  "⠿ en curso" "* en curso"
-  "✔ terminó" "ok terminó"
-  "✔ Lista para merge" "ok Lista para merge"
-  "⎇ Mergeado" "<> Mergeado"
-  "✖ error" "x error"
-  "⊘ bloqueada" "!! bloqueada"
-  "⊘ Bloqueada" "!! Bloqueada"
-  "○ no arrancó" "o no arrancó"
-  "○ no lanzó" "o no lanzó"
-  "○ en espera" "o en espera"
-  "⚠ sin registro" "! sin registro"
+  "en curso"
+  terminó
+  "lista para merge"
+  mergeado
+  error
+  bloqueada
+  "no arrancó"
+  "no lanzó"
+  "en espera"
+  "sin registro"
+  cambios
 )
+
+# Glifo de ESTADO (DEVKIT-153): primera columna de la tabla, sin título, un
+# carácter en UTF-8 y hasta dos en el respaldo ASCII ("ok"/"!!"/"<>", los más
+# anchos) -mismo criterio que ANCHO_HACE: un ancho fijo que cubre las dos
+# variantes reales de `glifo_estado_fila`, para no depender de qué locale
+# esté activa cuando arranca el script.
+GLIFOS_ESTADO=(
+  '⠿' '*'
+  '✔' 'ok'
+  '⎇' '<>'
+  '✖' 'x'
+  '⊘' '!!'
+  '○' 'o'
+  '⚠' '!'
+)
+ANCHO_ICONO=$(ancho_de "${GLIFOS_ESTADO[@]}")
 
 # MODELO: "<alias>/<esfuerzo>[ r<ronda>]", con <alias> de `frontera` (roles.toml,
 # DEVKIT-131: el alias, no un número a mano) y también de `implementacion.rondas`/
@@ -2515,7 +2534,7 @@ done
 unset _skill_presupuesto _v_presupuesto
 PRESUPUESTO_MAX_MAS_UNO=$(printf '9%.0s' $(seq 1 $((${#PRESUPUESTO_MAX} + 1))))
 ANCHO_TURNOS=$(ancho_de "${PRESUPUESTO_MAX_MAS_UNO}/${PRESUPUESTO_MAX}!")
-ANCHO_COLUMNAS_FIJAS=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
+ANCHO_COLUMNAS_FIJAS=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO + ANCHO_MODELO + ANCHO_TURNOS))
 
 # Recorta <texto> a <ancho> con "…" al final si no entra entero. <ancho>
 # menor a 1 corta a 1 -nunca a 0 ni negativo, `${s:0:n}` con `n` negativo
@@ -2775,8 +2794,11 @@ encabezado_tabla() {
   # acá, que quedan viejos en cuanto un valor posible cambia (caso real:
   # "⚠ sin registro" ensanchó ESTADO en DEVKIT-106 H2, después de que
   # DEVKIT-81 H7 ya la había ensanchado una vez). Las constantes `ANCHO_*`
-  # están junto a `ANCHO_COLUMNAS_FIJAS`, arriba.
-  printf '%s%s%s%s%s%s%s%s%s%s\n' "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
+  # están junto a `ANCHO_COLUMNAS_FIJAS`, arriba. La primera columna (glifo de
+  # ESTADO, DEVKIT-153) va sin título, un bloque de espacios del ancho de
+  # `ANCHO_ICONO`: la tabla la lee de un vistazo por el color y la forma, no
+  # por un encabezado.
+  printf '%s%s%s%s%s%s%s%s%s%s%s\n' "$(rellenar '' "$ANCHO_ICONO")" "$(rellenar SKILL "$ANCHO_SKILL")" "$(rellenar CARD "$ANCHO_CARD")" \
     "$(rellenar PR "$ANCHO_PR")" "$(rellenar LANZÓ "$ANCHO_LANZO")" "$(rellenar HACE "$ANCHO_HACE")" "$(rellenar DURÓ "$ANCHO_DURO")" \
     "$(rellenar ESTADO "$ANCHO_ESTADO")" "$(rellenar MODELO "$ANCHO_MODELO")" \
     "$(rellenar TURNOS "$ANCHO_TURNOS")" DETALLE
@@ -2796,13 +2818,21 @@ FONDO_GRUPO=$'\033[48;5;236m'
 # sola fila a veinte líneas de pantalla, y el redibujo en el sitio de
 # `--seguir` (`\033[H`) apilaba cuadros en vez de refrescar uno solo.
 # <idx>/<fijo>/<color> (DEVKIT-106) van a `glifo_estado_fila`/`colorear` para
-# el icono de ESTADO; por defecto una sola foto sin color, así las llamadas
-# directas de la autoprueba (sin esos tres argumentos) no cambian. ANCHO_ESTADO
-# sale de `ancho_de` sobre los estados posibles (DEVKIT-131): "⚠ sin registro"
-# fue el que la ensanchó (DEVKIT-106 H2), sin margen quedaba pegado a MODELO.
-# <duracion> y <turnos> (DEVKIT-107), y <pr> (DEVKIT-134, el enlace completo o
-# "-" sin PR) ya llegan formateados desde `estado_filas` (o de la autoprueba,
-# directo): esta función solo alinea y colorea, no vuelve a calcularlos.
+# el icono, ahora su propia primera columna (DEVKIT-153, antes de SKILL, sin
+# título); por defecto una sola foto sin color, así las llamadas directas de
+# la autoprueba (sin esos tres argumentos) no cambian. ANCHO_ESTADO sale de
+# `ancho_de` sobre `ESTADOS_CON_GLIFO` -pese al nombre, desde DEVKIT-153 es
+# la lista de textos sin glifo (DEVKIT-131): "lista para merge" es hoy el más
+# largo, sin margen quedaría pegado a MODELO. <estado> le llega a esta
+# función con su forma interna -"Lista para merge"/"Bloqueada"/"CAMBIOS"/
+# "Mergeado", la que matchean `glifo_estado_fila`/`color_de_estado_fila`- y
+# es acá donde se pasa a minúscula para la columna ESTADO; el veredicto
+# "Bloqueada" y la "bloqueada" genérica quedan con el mismo texto, y lo que
+# los distingue es la negrita que ya trae `color_de_estado_fila` para el
+# veredicto, pintada sobre el texto en vez del glifo. <duracion> y <turnos>
+# (DEVKIT-107), y <pr> (DEVKIT-134, el enlace completo o "-" sin PR) ya
+# llegan formateados desde `estado_filas` (o de la autoprueba, directo): esta
+# función solo alinea y colorea, no vuelve a calcularlos.
 #
 # La fila se arma entera en texto plano (sin ANSI) y solo al final, si no
 # entra en el ancho de la terminal, se recorta completa con `recortar` -no
@@ -2824,7 +2854,7 @@ FONDO_GRUPO=$'\033[48;5;236m'
 formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=] [fondo_grupo=0]
   local skill=$1 clave=$2 pr=$3 origen=$4 edad=$5 duracion=$6 estado=$7 modelo=$8 turnos=$9 detalle=${10} \
         idx=${11:-0} fijo=${12:-1} color_habilitado=${13:-} fondo_grupo=${14:-0} frena="" utf glifo color icono_len \
-        glifo_lento glifo_lento_len ancho fila off_estado off_turnos off_detalle
+        estado_texto glifo_lento glifo_lento_len ancho fila off_skill off_estado off_turnos off_detalle
   [ "$clave" = - ] || frena=$(bloquea_a "$clave")
   if [ -n "$frena" ]; then
     [ "$detalle" = - ] && detalle=$frena || detalle="$detalle; $frena"
@@ -2846,21 +2876,32 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
   glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
   color=$(color_de_estado_fila "$estado")
   icono_len=${#glifo}
-  off_estado=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
+  # ESTADO en minúscula (DEVKIT-153), sin el glifo que ya va en la primera
+  # columna: "Bloqueada"/"bloqueada", "CAMBIOS" y "Mergeado" son el único
+  # token interno que matchean `glifo_estado_fila`/`color_de_estado_fila`
+  # arriba; acá es donde se convierten al texto que de verdad ve la tabla.
+  estado_texto=${estado,,}
+  off_skill=$ANCHO_ICONO
+  off_estado=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
   off_turnos=$((off_estado + ANCHO_ESTADO + ANCHO_MODELO))
   off_detalle=$((off_turnos + ANCHO_TURNOS))
-  fila="$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
-  fila+="$(rellenar "$edad" "$ANCHO_HACE")$(rellenar "$duracion" "$ANCHO_DURO")$(rellenar "$glifo $estado" "$ANCHO_ESTADO")"
+  fila="$(rellenar "$glifo" "$ANCHO_ICONO")$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
+  fila+="$(rellenar "$edad" "$ANCHO_HACE")$(rellenar "$duracion" "$ANCHO_DURO")$(rellenar "$estado_texto" "$ANCHO_ESTADO")"
   fila+="$(rellenar "$modelo" "$ANCHO_MODELO")$(rellenar "$turnos" "$ANCHO_TURNOS")$detalle"
   [ "${#fila}" -le "$ancho" ] || fila=$(recortar "$fila" "$ancho")
   if [ "$color_habilitado" = 1 ]; then
     [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
     # TURNOS excedido ("67/60!", DEVKIT-107).
     case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
-    [ -z "$color" ] || fila=$(pintar_rango "$fila" "$off_estado" "$icono_len" "$color")
+    [ -z "$color" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
+    # ESTADO en negrita y color solo para los veredictos de pr-review (DEVKIT-
+    # 132) y "mergeado" (DEVKIT-148): son los únicos casos con "-negrita" en
+    # `color_de_estado_fila`. El resto de los estados ya se distingue por el
+    # color del glifo en la primera columna, sin duplicarlo sobre el texto.
+    case "$color" in *-negrita) fila=$(pintar_rango "$fila" "$off_estado" "$ANCHO_ESTADO" "$color") ;; esac
     # SKILL en negrita para task-start (DEVKIT-134): distingue de un vistazo
     # la fila que abre una card de la que la continúa.
-    [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" 0 "$ANCHO_SKILL" negrita)
+    [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
   fi
   if [ "$color_habilitado" = 1 ] && [ "$fondo_grupo" = 1 ]; then
     fila=${fila//$'\033[0m'/$'\033[0m'$FONDO_GRUPO}
@@ -6567,8 +6608,10 @@ FIN
   # nadie lo note.
   check "icono: \"en espera\" (fila sintética de la card DEVKIT-133) color ámbar" ambar \
     "$(color_de_estado_fila "en espera")"
+  # La primera columna (DEVKIT-153, el glifo de ESTADO) va sin título: un
+  # bloque de espacios que `tr -s ' '` aprieta a uno solo, antes de SKILL.
   check "encabezado_tabla: orden nuevo, DURÓ junto a HACE y TURNOS antes de DETALLE, PR entre CARD y LANZÓ" \
-    "SKILL CARD PR LANZÓ HACE DURÓ ESTADO MODELO TURNOS DETALLE" \
+    " SKILL CARD PR LANZÓ HACE DURÓ ESTADO MODELO TURNOS DETALLE" \
     "$(encabezado_tabla | tr -s ' ')"
 
   # DEVKIT-106: un icono por estado, sobre las mismas filas de arriba. `fijo=1`
@@ -6601,9 +6644,10 @@ FIN
     "$(glifo_estado_fila "no lanzó" 0 1 1)"
   check "columna ESTADO no cambia de ancho con un estado corto (terminó)" "$ANCHO_COLUMNAS_FIJAS" \
     "$(fila_ancho=$(COLUMNS=200 formatear_fila task-start DEVKIT-1 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
-  # El estado más largo con icono es "⚠ sin registro" (14, DEVKIT-106 H2), no
-  # "no arrancó" (10): antes este caso no probaba el borde real de la
-  # columna y dejaba pasar la regresión de H2.
+  # "sin registro" (12) ya no es el texto más largo de ESTADO desde DEVKIT-153
+  # -sin el glifo, "lista para merge" (17) lo superó; ese es el borde real que
+  # prueba el check de "Lista para merge" más arriba-, pero esta fila se deja
+  # igual como cobertura adicional del caso "sin registro".
   check "columna ESTADO no cambia de ancho con el estado más largo (sin registro)" "$ANCHO_COLUMNAS_FIJAS" \
     "$(fila_ancho=$(COLUMNS=200 formatear_fila task-close DEVKIT-9 - bucle 8m 8m "sin registro" sonnet/high -/40 - 0 1 0); echo $((${#fila_ancho} - 1)))"
   check "columna ESTADO deja al menos un espacio antes de MODELO (sin registro)" si \
@@ -6624,17 +6668,17 @@ FIN
   # abajo), comparando contra el mismo desplazamiento que usa `encabezado_tabla`.
   # ANCHO_PR (DEVKIT-134) suma al desplazamiento: PR se intercala entre CARD
   # y LANZÓ.
-  off_hace_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO))
+  off_hace_131=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO))
   fila_lanzo_131=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 - task-close 5m 5m terminó opus/high 3/60 - 0 1 0)
   check "LANZÓ=task-close: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
     "$((${#fila_lanzo_131} - 1))"
   check "LANZÓ=task-close no corre la columna HACE, alineada con la cabecera" \
     "$(rellenar 5m "$ANCHO_HACE")" "${fila_lanzo_131:$off_hace_131:$ANCHO_HACE}"
 
-  # Misma prueba de alineación para el otro extremo: el estado más largo
-  # ("⚠ sin registro", 14) tampoco debe correr la columna que sigue a ESTADO
-  # (MODELO).
-  off_modelo_131=$((ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
+  # Misma prueba de alineación para el otro extremo: "sin registro" tampoco
+  # debe correr la columna que sigue a ESTADO (MODELO) -el borde real hoy es
+  # "lista para merge" (DEVKIT-153), ya cubierto más arriba.
+  off_modelo_131=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
   fila_estado_131=$(COLUMNS=200 formatear_fila task-document DEVKIT-9 - humano 8m 8m "sin registro" fable/max -/40 - 0 1 0)
   check "ESTADO=sin registro no corre la columna MODELO, alineada con la cabecera" \
     "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
@@ -6651,7 +6695,7 @@ FIN
   done
   fila_skill_131=$(COLUMNS=200 formatear_fila "$skill_mas_largo_131" DEVKIT-13 - humano 1m 1m terminó sonnet/high -/40 - 0 1 0)
   check "SKILL=<skill más largo> no corre la columna CARD, alineada con la cabecera" \
-    "$(rellenar "$skill_mas_largo_131" "$ANCHO_SKILL")" "${fila_skill_131:0:$ANCHO_SKILL}"
+    "$(rellenar "$skill_mas_largo_131" "$ANCHO_SKILL")" "${fila_skill_131:$ANCHO_ICONO:$ANCHO_SKILL}"
   check "SKILL=<skill más largo>: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
     "$((${#fila_skill_131} - 1))"
   unset _skill_131 skill_mas_largo_131 fila_skill_131
@@ -6729,7 +6773,7 @@ FIN
   # ya armado (llega formateado desde `estado_filas`, esta función solo
   # alinea) y "-" en la fila sin PR.
   local off_pr_134 fila_con_pr_134 fila_sin_pr_134
-  off_pr_134=$((ANCHO_SKILL + ANCHO_CARD))
+  off_pr_134=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD))
   fila_con_pr_134=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 "https://github.com/o/r/pull/41" humano 5m 5m terminó opus/high 3/60 - 0 1 0)
   check "columna PR: el enlace completo entre CARD y LANZÓ" \
     "$(rellenar "https://github.com/o/r/pull/41" "$ANCHO_PR")" \
@@ -6768,6 +6812,56 @@ FIN
   check "icono ASCII: error" 'x' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 0)"
   check "icono ASCII: bloqueada" '!!' "$(glifo_estado_fila "$(estado_de DEVKIT-59)" 0 1 0)"
   check "icono ASCII: no arrancó" 'o' "$(glifo_estado_fila "$(estado_de DEVKIT-60)" 0 1 0)"
+
+  # DEVKIT-153: primera columna (icono de ESTADO) en UTF-8 y en el respaldo
+  # ASCII, y ESTADO como texto plano en minúscula, sin el glifo pegado -las
+  # dos formas que puede tomar la tabla según `utf8_disponible`.
+  local off_estado_153 fila_153
+  off_estado_153=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
+  fila_153=$(LC_ALL=C.UTF-8 formatear_fila pr-review DEVKIT-100 - bucle 1m 1m "Lista para merge" fable/high -/40 - 0 1 0)
+  check "primera columna en UTF-8: el glifo ✔ de 'Lista para merge'" '✔' \
+    "${fila_153:0:1}"
+  check "ESTADO en UTF-8: texto en minúscula, sin glifo" \
+    "$(rellenar "lista para merge" "$ANCHO_ESTADO")" "${fila_153:$off_estado_153:$ANCHO_ESTADO}"
+
+  fila_153=$(LC_ALL= LANG=C formatear_fila pr-review DEVKIT-102 - bucle 1m 1m Bloqueada fable/high -/40 - 0 1 0)
+  check "primera columna en ASCII: el respaldo '!!' de la bloqueada de pr-review" \
+    "$(rellenar '!!' "$ANCHO_ICONO")" "${fila_153:0:$ANCHO_ICONO}"
+  check "ESTADO en ASCII: mismo texto en minúscula 'bloqueada' que el bloqueo genérico" \
+    "$(rellenar bloqueada "$ANCHO_ESTADO")" "${fila_153:$off_estado_153:$ANCHO_ESTADO}"
+  check "ASCII: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
+    "$((${#fila_153} - 1))"
+
+  # "mergeado" y "cambios" (DEVKIT-148/132), los otros dos valores que
+  # ESTADOS_CON_GLIFO agregó en minúscula.
+  fila_153=$(LC_ALL=C.UTF-8 formatear_fila pr-review DEVKIT-103 - bucle 1m 1m Mergeado fable/high -/40 - 0 1 0)
+  check "ESTADO: Mergeado en minúscula" "$(rellenar mergeado "$ANCHO_ESTADO")" \
+    "${fila_153:$off_estado_153:$ANCHO_ESTADO}"
+  fila_153=$(LC_ALL=C.UTF-8 formatear_fila pr-review DEVKIT-101 - bucle 1m 1m CAMBIOS fable/high -/40 - 0 1 0)
+  check "ESTADO: CAMBIOS en minúscula" "$(rellenar cambios "$ANCHO_ESTADO")" \
+    "${fila_153:$off_estado_153:$ANCHO_ESTADO}"
+
+  # DEVKIT-153: la bloqueada de pr-review y la bloqueada genérica comparten
+  # el mismo texto en ESTADO; lo que las distingue es la negrita del veredicto
+  # (DEVKIT-132), no la palabra.
+  fila_153=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-5 - humano 5m 5m bloqueada opus/high -/60 - 0 1 0)
+  check "ESTADO: 'Bloqueada' (veredicto) y 'bloqueada' (genérica) muestran el mismo texto" \
+    "$(rellenar bloqueada "$ANCHO_ESTADO")" "${fila_153:$off_estado_153:$ANCHO_ESTADO}"
+  check "color: solo la 'Bloqueada' veredicto lleva negrita en ESTADO, la genérica no" "si|no" \
+    "$(v=$(LC_ALL=C.UTF-8 formatear_fila pr-review DEVKIT-102 - bucle 1m 1m Bloqueada fable/high -/40 - 0 1 1 \
+            | grep -qF $'\033[1;31m' && echo si || echo no)
+       g=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-5 - humano 5m 5m bloqueada opus/high -/60 - 0 1 1 \
+            | grep -qF $'\033[1;31m' && echo si || echo no)
+       echo "$v|$g")"
+
+  # Sin TTY / sin color (DEVKIT-153): la tabla debe seguir legible solo por
+  # el texto, sin secuencias ANSI de por medio.
+  check "sin color: ESTADO sigue legible por el texto, sin secuencias ANSI" si \
+    "$(fila_153=$(LC_ALL=C.UTF-8 formatear_fila pr-review DEVKIT-100 - bucle 1m 1m "Lista para merge" fable/high -/40 - 0 1 0)
+       printf '%s' "$fila_153" | grep -qF 'lista para merge' \
+         && ! printf '%s' "$fila_153" | grep -qF $'\033[' \
+         && echo si || echo no)"
+  unset off_estado_153 fila_153
 
   # Punto de la cabecera (DEVKIT-106): verde con una fila en curso (aunque el
   # bucle esté MUERTO: la fila manda), ámbar sin ninguna pero con el bucle
@@ -7121,10 +7215,18 @@ FIN
   # pero además va lento. LC_ALL=C.UTF-8 fijo (DEVKIT-106 H6): sin esto, con
   # la locale de quien corre la autoprueba en C -sin UTF-8-, `utf8_disponible`
   # cae a ASCII y estos casos prueban la rama equivocada.
-  local fila_lento
+  local fila_lento off_estado_lento
+  off_estado_lento=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
   fila_lento=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 - humano 5m 5m "en curso" opus/high -/60 lento 0 1 0)
-  check "icono: lento se suma al detalle, aparte del girador de en curso" "si|si" \
-    "$(printf '%s' "$fila_lento" | grep -qF '⠿ en curso' && echo -n si || echo -n no)|$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo -n si || echo -n no)"
+  # DEVKIT-153: el girador vive en la primera columna, ESTADO queda como
+  # texto plano -ya no van pegados en la misma columna.
+  check "icono: el girador de 'en curso' va en la primera columna" '⠿' \
+    "${fila_lento:0:1}"
+  check "ESTADO sin glifo: solo el texto 'en curso', alineado con la cabecera" \
+    "$(rellenar "en curso" "$ANCHO_ESTADO")" "${fila_lento:$off_estado_lento:$ANCHO_ESTADO}"
+  check "icono: lento se suma al detalle, aparte del girador de ESTADO" si \
+    "$(printf '%s' "$fila_lento" | grep -qF '⚠ lento' && echo si || echo no)"
+  unset off_estado_lento
   check "icono: lento lleva color ámbar" si \
     "$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 - humano 5m 5m "en curso" opus/high -/60 lento 0 1 1 | grep -qF $'\033[33m' && echo si || echo no)"
   # DEVKIT-106 H3: el color se pinta después de recortar, no antes -antes,
@@ -7784,7 +7886,7 @@ FIN
   check "con caché fresca, el bloque Consumo trae sesión y semana sin invocar claude" \
     "sesión: 42% usada, reinicia Sep 17, 5:10pm (UTC)|semana: 7% usada, reinicia Sep 22, 11pm (UTC)" \
     "$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_fresca/cuota.cache" CUOTA_LOCK="$cuota_fresca/cuota.lock" \
-        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -n 's/^  //p' | paste -sd'|')"
+        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -nE '/^  (sesión|semana):/ s/^  //p' | paste -sd'|')"
 
   # Con la caché en fail (una lectura anterior sin fuente), --estado lo dice
   # sin romper el resto, tampoco esperando un nuevo intento.
@@ -7810,7 +7912,7 @@ FIN
   check "caché vencida: se muestra igual, sin esperar el refresco" \
     "sesión: 10% usada, reinicia ya|semana: 10% usada, reinicia ya" \
     "$(CLAUDE_BIN="$doble_cuota" CUOTA_TTL=60 CUOTA_CACHE="$cuota_vieja/cuota.cache" CUOTA_LOCK="$cuota_vieja/cuota.lock" \
-        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -n 's/^  //p' | paste -sd'|')"
+        WATCH_LOG="$est/vacio.log" mostrar_estado | sed -nE '/^  (sesión|semana):/ s/^  //p' | paste -sd'|')"
   local refrescada=0
   for intento in 1 2 3 4 5 6 7 8 9 10; do
     [ "$(cut -f2,3 "$cuota_vieja/cuota.cache" 2>/dev/null)" = "$(printf 'ok\t42')" ] && { refrescada=1; break; }
@@ -7856,7 +7958,7 @@ FIN
     "sesión: 10% usada, reinicia ya|semana: 10% usada, reinicia ya" \
     "$(CLAUDE_BIN=/bin/false CUOTA_TTL=60 CUOTA_CACHE="$cuota_fail_con_buena/cuota.cache" \
         CUOTA_LOCK="$cuota_fail_con_buena/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado \
-        | sed -n 's/^  //p' | paste -sd'|')"
+        | sed -nE '/^  (sesión|semana):/ s/^  //p' | paste -sd'|')"
 
   # H2 de pr-review DEVKIT-78: el segundo dato de esa línea es la hora del
   # último intento fallido, no "sin refrescar desde" -esa frase usaba la
