@@ -1950,4 +1950,44 @@ wait "$worker_run_pid" 2>/dev/null
 check_igual "worker: EN_CURSO se borra tras matar el --worker" 0 \
   "$([ -e "$WORKER_ALTO/run/en-curso" ] && echo 1 || echo 0)"
 
+# --- Alto corta antes de lanzar, no solo mata lo que ya corría (H3 de la
+# revisión sobre el PR #103) -------------------------------------------
+# Antes, un alto llegado a mitad de una pasada no impedía que `run_skill`
+# lanzara una skill nueva, ni que `procesar_pr` siguiera su cadena sobre el
+# mismo PR o el `while read` de `pasada` pasara al PR siguiente.
+RUN_SKILL_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$RUN_SKILL_ALTO/run"
+printf alto >"$RUN_SKILL_ALTO/run/modo"
+cat >"$RUN_SKILL_ALTO/devkit-run" <<'FIN'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$DEVKIT_TEST_LLAMADAS"
+FIN
+chmod +x "$RUN_SKILL_ALTO/devkit-run"
+DEVKIT_TEST_LLAMADAS="$RUN_SKILL_ALTO/llamadas" DEVKIT_RUN_BIN="$RUN_SKILL_ALTO/devkit-run" \
+  DEVKIT_RUN_DIR="$RUN_SKILL_ALTO/run" DEVKIT_WS="$RUN_SKILL_ALTO" \
+  bash "$WATCH" --run-skill "prueba-alto" "/noop" - >"$RUN_SKILL_ALTO/watch.log" 2>&1
+OUT="$RUN_SKILL_ALTO/watch.log"
+check_log "alto: run_skill no lanza nada, lo registra" 'prueba-alto no se lanza: modo alto'
+check_igual "alto: run_skill no llega a resolver rol ni a lanzar devkit-run" "" \
+  "$(cat "$RUN_SKILL_ALTO/llamadas" 2>/dev/null)"
+
+# `procesar_pr` corta en la primera vuelta de su cadena, antes de consultar
+# `gh` siquiera: con un `gh` que falla si lo llaman, cualquier consulta
+# quedaría como evidencia en watch.log.
+PROC_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$PROC_ALTO/run" "$PROC_ALTO/bin"
+printf alto >"$PROC_ALTO/run/modo"
+cat >"$PROC_ALTO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+echo "gh no debería llamarse en alto" >&2
+exit 1
+FIN
+chmod +x "$PROC_ALTO/bin/gh"
+PATH="$PROC_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  DEVKIT_RUN_DIR="$PROC_ALTO/run" DEVKIT_WS="$PROC_ALTO" \
+  bash "$WATCH" --procesar-pr 81 https://github.com/o/r/pull/81 "DEVKIT-81 algo" DEVKIT \
+  >"$PROC_ALTO/watch.log" 2>&1
+check_igual "alto: procesar_pr corta antes de consultar gh" 0 \
+  "$(wc -l <"$PROC_ALTO/watch.log" | tr -d ' ')"
+
 exit $fail

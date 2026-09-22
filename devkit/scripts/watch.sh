@@ -695,6 +695,16 @@ vigilar_alto_once() {
 # la conoce por el título del PR la pasa aparte.
 run_skill() {
   local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales clave_en_curso
+  # Guarda de modo (DEVKIT-137, H3 de la revisión sobre el PR #103): en alto
+  # no se lanza nada, ni siquiera un relanzamiento ya programado por
+  # `quota_pause`/`transient_retry` que despierta después del corte. Se
+  # comprueba antes de resolver modelo/candado (para no gastar la sonda de
+  # `--rol` en vano) y otra vez justo después de tomar el candado, porque la
+  # espera de `flock` puede tardar y el modo cambiar mientras tanto.
+  if [ "$(modo_actual)" = alto ]; then
+    log "$name no se lanza: modo alto"
+    return 76
+  fi
   logf="$RUN_DIR/$name.log"
   # `--rol` antes de la línea "lanzando" (DEVKIT-81): la fila de --estado
   # muestra modelo y esfuerzo desde que aparece, no solo al terminar. Costo:
@@ -720,6 +730,12 @@ run_skill() {
   if ! flock -n 9; then
     log "$name espera: otra skill ocupa el workspace"
     flock 9
+  fi
+  if [ "$(modo_actual)" = alto ]; then
+    log "$name no se lanza: modo alto (tras esperar el candado)"
+    flock -u 9
+    exec 9>&-
+    return 76
   fi
   # Con el candado tomado: task-block.sh, llamado por la skill o por --sync,
   # lo sabe por DEVKIT_LOCK_HELD y guarda el wip sin pedirlo otra vez.
@@ -1286,6 +1302,10 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
     return 0
   fi
   while [ "$intentos" -lt "$MAX_CHAIN_ITER" ]; do
+    # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de la cadena
+    # (`run_skill` tarda minutos) corta antes del siguiente `caso_*` en vez
+    # de seguir revisando, corrigiendo o documentando otros PRs.
+    [ "$(modo_actual)" != alto ] || return 0
     intentos=$((intentos + 1))
     # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92): es
     # lo único que necesita el caso `documentar` para saber si el PR trae la
@@ -1440,6 +1460,11 @@ pasada() {
     # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
     # la tubería como entrada estándar.
     while IFS=$'\t' read -r -u 3 num url title; do
+        # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de esta
+        # tubería (cada `procesar_pr` puede tardar minutos) corta antes del
+        # siguiente PR en vez de lanzar pr-review/task-fix sobre los que
+        # faltan por leer.
+        [ "$(modo_actual)" != alto ] || break
         procesar_pr "$num" "$url" "$title"
     done 3< <(gh pr list --state open --limit 30 --json number,title,url \
       --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
