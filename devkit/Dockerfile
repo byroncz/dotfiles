@@ -222,6 +222,14 @@ RUN rm -f "$HOME/.openvscode-server/extensions/extensions.json" \
 # una regex de sed- para que un cambio de bundling en la próxima versión de
 # openvscode-server corte el build en vez de quedar aplicado a medias en
 # silencio.
+# Caché del navegador (DEVKIT-146): /static/ se sirve con Cache-Control de un
+# año y sin ETag, así que un rebuild que cambie la chuleta queda invisible
+# hasta vaciar la caché. Se le agrega ?v=<hash> -sha256 corto de
+# cheatsheet-light.svg- a las cuatro url(...letterpress-*.svg) del CSS y al
+# <link> de workbench.css en workbench.html: el HTML de entrada se regenera
+# en cada petición, así que ese sufijo basta para invalidar el CSS cacheado;
+# /static/ ignora la query string al resolver el archivo, así que no hace
+# falta tocar el servidor.
 # set -eu, no -x: con -x, bash traza también el valor expandido de
 # "contenido=$(cat "$CSS")" -workbench.css minificado pesa ~900 KB en una
 # sola línea- e infla el log del build sin decir nada útil.
@@ -245,6 +253,7 @@ RUN set -eu; \
     ancho="$(grep -oE 'width="[0-9]+' "$SVG_CLARO" | head -1 | grep -oE '[0-9]+')"; \
     alto="$(grep -oE 'height="[0-9]+' "$SVG_CLARO" | head -1 | grep -oE '[0-9]+')"; \
     [ -n "$ancho" ] && [ -n "$alto" ] || { echo "cheatsheet-light.svg sin width/height en la etiqueta raíz" >&2; exit 1; }; \
+    HASH="$(sha256sum "$SVG_CLARO" | cut -c1-12)"; \
     CSS="/opt/openvscode-server/out/vs/code/browser/workbench/workbench.css"; \
     VIEJO_WATERMARK='.editor-group-watermark{display:flex;height:100%;max-width:272px;margin:auto;flex-direction:column;align-items:center;justify-content:center}'; \
     NUEVO_WATERMARK='.editor-group-watermark{display:flex;height:100%;max-width:1000px;margin:auto;flex-direction:column;align-items:center;justify-content:center}'; \
@@ -261,7 +270,26 @@ RUN set -eu; \
     esac; \
     contenido="${contenido//$VIEJO_WATERMARK/$NUEVO_WATERMARK}"; \
     contenido="${contenido//$VIEJO_LETTERPRESS/$NUEVO_LETTERPRESS}"; \
-    printf '%s' "$contenido" > "$CSS"
+    for tema in light dark hcLight hcDark; do \
+      viejo_url="letterpress-${tema}.svg)"; \
+      nuevo_url="letterpress-${tema}.svg?v=${HASH})"; \
+      case "$contenido" in \
+        *"$viejo_url"*) ;; \
+        *) echo "workbench.css: no se encontró url(...letterpress-${tema}.svg); openvscode-server cambió el CSS, revisa DEVKIT-146" >&2; exit 1 ;; \
+      esac; \
+      contenido="${contenido//$viejo_url/$nuevo_url}"; \
+    done; \
+    printf '%s' "$contenido" > "$CSS"; \
+    HTML="/opt/openvscode-server/out/vs/code/browser/workbench/workbench.html"; \
+    VIEJO_LINK='<link rel="stylesheet" href="{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/workbench.css">'; \
+    NUEVO_LINK="<link rel=\"stylesheet\" href=\"{{WORKBENCH_WEB_BASE_URL}}/out/vs/code/browser/workbench/workbench.css?v=${HASH}\">"; \
+    contenido_html="$(cat "$HTML")"; \
+    case "$contenido_html" in \
+      *"$VIEJO_LINK"*) ;; \
+      *) echo "workbench.html: no se encontró el <link> a workbench.css; openvscode-server cambió el HTML, revisa DEVKIT-146" >&2; exit 1 ;; \
+    esac; \
+    contenido_html="${contenido_html//$VIEJO_LINK/$NUEVO_LINK}"; \
+    printf '%s' "$contenido_html" > "$HTML"
 SHELL ["/bin/sh", "-c"]
 USER $USERNAME
 
