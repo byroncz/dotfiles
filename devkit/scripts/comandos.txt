@@ -7,7 +7,7 @@
 ## En el host: `devkit`
 devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta).
 devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor.
-devkit code <proyecto> | devkit code ventas | Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.
+devkit code <proyecto> | devkit code ventas | Abre el editor en el navegador; sin `open`, imprime la URL para pegarla a mano (macOS la abre sola). Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.
 devkit stop <proyecto> | devkit stop ventas | Detiene sin perder nada.
 devkit down <proyecto> | devkit down ventas | Destruye el contenedor; lo no commiteado se pierde.
 devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda.
@@ -15,7 +15,7 @@ devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes de
 devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`.
 devkit logs <proyecto> | devkit logs ventas | Arranque y bucles del contenedor.
 devkit net-open <proyecto> | devkit net-open ventas | Red abierta en esta sesión, solo para depurar.
-devkit awake <proyecto> | devkit awake ventas | Impide que el Mac se suspenda mientras el contenedor esté vivo. Úsalo antes de un lanzamiento largo sin supervisión, para que el Mac no lo corte al dormirse.
+devkit awake <proyecto> | devkit awake ventas | Solo macOS: evita que el host se suspenda mientras el contenedor esté vivo (`caffeinate`); en otro host avisa y no hace nada. Úsalo antes de un lanzamiento largo sin supervisión.
 devkit ls | devkit ls | Lista los proyectos instanciados.
 
 ## Dentro del contenedor

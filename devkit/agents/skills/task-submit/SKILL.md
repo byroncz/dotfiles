@@ -29,7 +29,7 @@ que un script no puede: repasar los criterios y redactar el cuerpo del PR.
 
    ## Cambios requeridos
    Qué debe hacer un proyecto instanciado para adoptar este cambio
-   (`devkit recreate`, reinstalar el comando del Mac, un secreto nuevo en
+   (`devkit recreate`, reinstalar el comando del host, un secreto nuevo en
    Bitwarden...), o "Ninguno" si no aplica. Es la única fuente de este dato:
    de aquí lo toman la entrada de Documentación de la card y las notas de la
    próxima release.

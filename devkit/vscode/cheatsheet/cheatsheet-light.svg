@@ -9,7 +9,7 @@
 <text x="60" y="70" class="t">devkit: comandos</text>
 <text x="60" y="150" class="g">En el host</text>
 <text x="60" y="184" class="c">devkit code &lt;proyecto&gt;</text>
-<text x="60" y="202" class="d">Abre el editor VS Code del proyecto en el navegador. Úsal…</text>
+<text x="60" y="202" class="d">Abre el editor en el navegador; sin open, imprime la URL …</text>
 <text x="60" y="230" class="c">devkit shell &lt;proyecto&gt;</text>
 <text x="60" y="248" class="d">Abre una shell dentro del contenedor. Úsalo para depurar …</text>
 <text x="60" y="276" class="c">devkit recreate &lt;proyecto&gt;</text>
@@ -17,7 +17,7 @@
 <text x="60" y="322" class="c">devkit rebuild &lt;proyecto&gt;</text>
 <text x="60" y="340" class="d">Reconstruye las imágenes desde cero y recrea. Úsalo cuand…</text>
 <text x="60" y="368" class="c">devkit awake &lt;proyecto&gt;</text>
-<text x="60" y="386" class="d">Impide que el Mac se suspenda mientras el contenedor esté…</text>
+<text x="60" y="386" class="d">Solo macOS: evita que el host se suspenda mientras el con…</text>
 <text x="620" y="150" class="g">agentes</text>
 <text x="620" y="184" class="c">dk --estado [--seguir]</text>
 <text x="620" y="202" class="d">Muestra todos los agentes del contenedor y se refresca ca…</text>

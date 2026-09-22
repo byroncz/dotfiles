@@ -53,7 +53,7 @@
 <div class="tarjeta">
   <div class="comando">devkit code &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit code ventas</div>
-  <p class="descripcion">Abre el editor VS Code del proyecto en el navegador. Úsalo para el trabajo del día a día. Si ves <code>403 Forbidden</code>, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.</p>
+  <p class="descripcion">Abre el editor en el navegador; sin <code>open</code>, imprime la URL para pegarla a mano (macOS la abre sola). Úsalo para el trabajo del día a día. Si ves <code>403 Forbidden</code>, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit shell &lt;proyecto&gt;</div>
@@ -73,7 +73,7 @@
 <div class="tarjeta">
   <div class="comando">devkit awake &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit awake ventas</div>
-  <p class="descripcion">Impide que el Mac se suspenda mientras el contenedor esté vivo. Úsalo antes de un lanzamiento largo sin supervisión, para que el Mac no lo corte al dormirse.</p>
+  <p class="descripcion">Solo macOS: evita que el host se suspenda mientras el contenedor esté vivo (<code>caffeinate</code>); en otro host avisa y no hace nada. Úsalo antes de un lanzamiento largo sin supervisión.</p>
 </div>
 <h2>agentes</h2>
 <div class="tarjeta">

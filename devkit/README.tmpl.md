@@ -1,11 +1,16 @@
 # devkit
 
 Entorno de desarrollo reproducible para proyectos de datos, pensado para que
-lo operen agentes de IA con un humano como única compuerta. El Mac solo
+lo operen agentes de IA con un humano como única compuerta. El host solo
 necesita Docker; todo lo demás vive en un contenedor que se reconstruye desde
 este repo, y las tareas se gestionan en Notion.
 
-## Instalación en el Mac
+## Instalación en el host
+
+El host necesita bash y Docker Compose. macOS y Linux corren tal cual; en
+Windows, con WSL. `devkit awake` solo funciona en macOS (usa `caffeinate`);
+`devkit code` abre el navegador con `open` y, donde no existe, imprime la
+URL para pegarla a mano.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/byroncz/dotfiles/main/new-project.sh | sh -s -- <proyecto> --version X.Y.Z
@@ -50,7 +55,7 @@ Detalle y convenciones de cada transición:
   aprobación, auto-merge activado). Los agentes actúan con la cuenta máquina
   `byroncz-bot`; su token llega como secreto de Bitwarden.
 - **Bitwarden Secrets Manager**: único lugar de los secretos del proyecto. Un
-  token en `~/.devkit/bws-token` del Mac los trae al arrancar a un `tmpfs`
+  token en `~/.devkit/bws-token` del host los trae al arrancar a un `tmpfs`
   que muere con el contenedor.
 - **Dropbox**: respaldo continuo de `sandbox.local/`, vía `rclone`. Se
   autoriza una vez con `dropbox-setup.sh`, que genera el secreto
