@@ -2924,20 +2924,23 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
     # TURNOS excedido ("67/60!", DEVKIT-107).
     case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
-    # PR (DEVKIT-156): el hipervínculo OSC 8 con la URL completa, antes del
-    # color del icono en la posición 0 -ese `pintar_rango` correría el
-    # `off_pr` de más abajo si se aplicara primero (ver el comentario de
-    # `enlazar_rango`).
-    [ "$pr_texto" = - ] || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
-    [ -z "$color" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
     # ESTADO en negrita y color solo para los veredictos de pr-review (DEVKIT-
     # 132) y "mergeado" (DEVKIT-148): son los únicos casos con "-negrita" en
     # `color_de_estado_fila`. El resto de los estados ya se distingue por el
     # color del glifo en la primera columna, sin duplicarlo sobre el texto.
+    # Va antes que PR (DEVKIT-156 H1): todo envoltorio se aplica de <inicio>
+    # mayor a menor, y `off_estado` > `off_pr`.
     case "$color" in *-negrita) fila=$(pintar_rango "$fila" "$off_estado" "$ANCHO_ESTADO" "$color") ;; esac
+    # PR (DEVKIT-156): el hipervínculo OSC 8 con la URL completa. Va antes de
+    # SKILL y del icono, cuyos `off_*` son menores (ver el comentario de
+    # `enlazar_rango`).
+    [ "$pr_texto" = - ] || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
     # SKILL en negrita para task-start (DEVKIT-134): distingue de un vistazo
     # la fila que abre una card de la que la continúa.
     [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
+    # Icono en la posición 0, siempre el último envoltorio: ya no queda ningún
+    # `off_*` menor por delante que este `pintar_rango` pudiera correr.
+    [ -z "$color" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
   fi
   if [ "$color_habilitado" = 1 ] && [ "$fondo_grupo" = 1 ]; then
     fila=${fila//$'\033[0m'/$'\033[0m'$FONDO_GRUPO}
@@ -6855,6 +6858,25 @@ FIN
         | { [[ "$(cat)" == *$'\033]8;;'* ]] && echo si || echo no; })"
   unset off_pr_134 pr_url_156 fila_con_pr_134 fila_sin_pr_134 abre_156 cierra_156 \
     fila_con_pr_156_tty fila_con_pr_156_sin_osc
+
+  # DEVKIT-156 H1: con PR y un ESTADO en negrita ("Lista para merge") a la
+  # vez, cada envoltorio debe ir de <inicio> mayor a menor -si no, el
+  # `\033[1;32m` de ESTADO se inserta dentro de la URL abierta por
+  # `enlazar_rango` y el enlace sale corrupto.
+  local pr_url_156h1 fila_pr_estado_156h1
+  pr_url_156h1="https://github.com/o/r/pull/41"
+  fila_pr_estado_156h1=$(COLUMNS=200 formatear_fila pr-review DEVKIT-12 "$pr_url_156h1" humano 5m 5m "Lista para merge" opus/high 3/60 - 0 1 1)
+  check "PR + ESTADO en negrita con TTY: la apertura OSC 8 llega intacta" si \
+    "$([[ "$fila_pr_estado_156h1" == *$'\033]8;;'"$pr_url_156h1"$'\033\\'* ]] && echo si || echo no)"
+  # El texto de ESTADO envuelto por completo (código, relleno y reset) tiene
+  # que aparecer intacto en algún punto de la fila -sin importar el corrimiento
+  # que meta el color del icono en la posición 0, que también aplica para
+  # "Lista para merge"-: si algo lo cortara a la mitad, esta sub-cadena exacta
+  # ya no estaría presente.
+  check "PR + ESTADO en negrita con TTY: \033[1;32m envuelve el texto de ESTADO intacto" si \
+    "$([[ "$fila_pr_estado_156h1" == *$'\033[1;32m'"$(rellenar "lista para merge" "$ANCHO_ESTADO")"$'\033[0m'* ]] \
+        && echo si || echo no)"
+  unset pr_url_156h1 fila_pr_estado_156h1
 
   # SKILL en negrita solo para task-start (DEVKIT-134): distingue de un
   # vistazo la fila que abre una card de la que la continúa.
