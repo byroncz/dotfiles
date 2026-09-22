@@ -9240,11 +9240,11 @@ falta_valor() {  # falta_valor <valor>
 }
 
 uso() {
-  echo "uso: devkit-run [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
+  echo "uso: dk [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
   echo "       --seguir aquí lanza y se queda mostrando el avance de ESTE lanzamiento hasta que termine." >&2
-  echo "     devkit-run --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
+  echo "     dk --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
   echo "       --seguir aquí no lanza nada: refresca el monitor (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C." >&2
-  echo "     devkit-run --pausa | --alto | --reanudar" >&2
+  echo "     dk --pausa | --alto | --reanudar" >&2
 }
 
 modelo_manual="" esfuerzo_manual="" forzar="" seguir_tras_lanzar=""
