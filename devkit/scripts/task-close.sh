@@ -33,11 +33,25 @@ GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 WATCH_LOG="${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}"
 HOY="${DEVKIT_HOY:-$(date +%F)}"
+# Interruptor de tres posiciones (DEVKIT-136/DEVKIT-137), mismo archivo que
+# escribe `devkit-run --pausa/--alto/--reanudar`. Copia de `modo_actual()` de
+# watch.sh/devkit-run.sh: los tres scripts no se importan entre sí, mismo
+# patrón que `costos_log_candidata`.
+MODO_FILE="${DEVKIT_MODO_FILE:-$RUN_DIR/modo}"
 # Lo que este script lance (task-document, la siguiente card vía cola.sh)
 # aparece en `devkit-run --estado` con origen `task-close` (DEVKIT-57).
 export DEVKIT_ORIGEN=task-close
 
 say() { printf 'task-close: %s\n' "$*"; }
+
+modo_actual() {
+  local m
+  m=$(tr -d '[:space:]' 2>/dev/null < "$MODO_FILE")
+  case "$m" in
+    pausa|alto) printf '%s' "$m" ;;
+    *) printf trabajo ;;
+  esac
+}
 
 # La siguiente card de la cola del proyecto, en bash (DEVKIT-120). Misma
 # función que `lanzar_cola` en watch.sh, duplicada porque los scripts no se
@@ -47,8 +61,19 @@ say() { printf 'task-close: %s\n' "$*"; }
 # Idempotente: `cola.sh` (sin argumento) no devuelve nada si ya hay una card
 # `En progreso` o `Revisión automática` en el proyecto, o un `task-start`
 # vivo para una card en `Lista` -la guarda vive en cola.sh, no aquí.
+#
+# Guarda de modo (DEVKIT-137, H1 de la revisión sobre el PR #103): un merge
+# en pausa o en alto no debe arrancar la siguiente card, aunque la card que
+# se está cerrando sí termine su cierre normal (Hecha, Documentación,
+# marcador, limpieza). Sin esta guarda, `check_merged_prs` -> `close_pr` ->
+# este script llamaba a cola.sh y lanzaba `task-start` igual en pausa.
 lanzar_cola() {  # lanzar_cola <n>
-  local n=$1 siguiente out rc estado sucio otros motivo
+  local n=$1 siguiente out rc estado sucio otros motivo modo
+  modo=$(modo_actual)
+  if [ "$modo" != trabajo ]; then
+    printf '%s cola-%s no se llama: modo %s\n' "$(date +%FT%T%:z)" "$n" "$modo" >>"$WATCH_LOG"
+    return 0
+  fi
   siguiente=$("$COLA" 2>&1)
   rc=$?
   if [ "$rc" -ne 0 ]; then

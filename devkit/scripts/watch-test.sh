@@ -949,6 +949,28 @@ check_igual "ciclo: lanza la siguiente card de la cola" "task-start DEVKIT-4" \
 env "${ciclo_env[@]}" bash "$WATCH" --merged-once >>"$CICLO/watch.log" 2>&1
 check_igual "ciclo: una segunda pasada no vuelve a cerrar" 1 "$(grep -c 'task-close-40 terminado' "$OUT")"
 
+# --- Guarda de modo en lanzar_cola (DEVKIT-137, H1 de la revisión sobre el
+# PR #103) --------------------------------------------------------------
+# En pausa (o en alto), un merge sigue cerrando la card -Hecha, Documentación,
+# marcador, limpieza-, pero no debe arrancar la siguiente: la guarda vive
+# dentro de `lanzar_cola`, no en el script entero. Antes, `check_merged_prs`
+# -> `close_pr` -> task-close.sh -> `lanzar_cola` llamaba a cola.sh igual.
+tarea card-3 3 "Lista para merge" 1 "" >"$N/card-DEVKIT-3.json"
+printf '{"id":"doc-3","url":"https://notion.so/doc-3"}' >"$N/doc-card-3.json"
+jq '.state = "MERGED" | .comments = []' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$N/llamadas"; : >"$N/lanzamientos"
+printf 'DEVKIT-4\n' >"$N/cola-siguiente"
+printf pausa >"$CICLO/run/modo"
+env "${ciclo_env[@]}" bash "$HERE/task-close.sh" DEVKIT-3 40 >/dev/null 2>&1
+check_igual "task-close en pausa: la card cierra igual (Hecha)" "set card-3 Estado=Hecha Cierre=2026-09-16 PR=https://github.com/o/r/pull/40" \
+  "$(grep '^set card-3' "$N/llamadas" | head -1)"
+check_igual "task-close en pausa: no lanza la siguiente card" 0 \
+  "$(grep -c '^task-start' "$N/lanzamientos" 2>/dev/null)"
+OUT="$CICLO/run/watch.log"
+check_log "task-close en pausa: lanzar_cola avisa el motivo en watch.log" \
+  'cola-40 no se llama: modo pausa'
+: >"$CICLO/run/modo"
+
 # task-close.sh idempotente: card ya Hecha y marcador publicado -> no toca nada.
 : >"$N/llamadas"; : >"$N/lanzamientos"; : >"$CICLO/gh/comentarios"
 tarea card-3 3 Hecha 1 "" >"$N/card-DEVKIT-3.json"
