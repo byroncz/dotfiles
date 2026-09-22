@@ -1904,4 +1904,50 @@ DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_ALTO" DEVKIT_TEST_BLOQUEO="$VIGILANTE_VACIO/bloq
 check_igual "alto: sin skill en curso, el vigilante no hace nada" "" \
   "$(cat "$VIGILANTE_VACIO/bloqueo" 2>/dev/null)"
 
+# --- Alto también mata un --worker vivo, no solo lo que ve por --sync ------
+# (H2 de la revisión sobre el PR #103): task-start, task-close, epic-plan o
+# un lanzamiento manual corren con `devkit-run.sh --worker`, nacido con
+# `setsid` en su propia sesión, fuera del camino de `run_skill`/EN_CURSO. Con
+# el mismo EN_CURSO que ahora escribe `--worker` (devkit-run.sh), el
+# vigilante ya probado arriba lo alcanza igual, sin lógica nueva de su lado.
+WORKER_ALTO=$(mktemp -d -p "$TMP")
+mkdir -p "$WORKER_ALTO/run"
+BLOQUEO_WORKER="$WORKER_ALTO/task-block"
+cat >"$BLOQUEO_WORKER" <<'FIN'
+#!/usr/bin/env bash
+printf '%s|' "$@" >>"$DEVKIT_TEST_BLOQUEO"
+FIN
+chmod +x "$BLOQUEO_WORKER"
+BLOQUEO_WORKER_LOG="$WORKER_ALTO/bloqueo.args"
+
+DEVKIT_TEST_COUNT="$WORKER_ALTO/llamadas" DEVKIT_TEST_SLEEP=8 DEVKIT_TEST_FAILS=0 \
+DEVKIT_CLAUDE_BIN="$DOBLE" DEVKIT_RUN_DIR="$WORKER_ALTO/run" DEVKIT_WS="$WORKER_ALTO" \
+DEVKIT_REVIEW_PREP_BIN="$REVIEW_PREP_DOBLE" DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" \
+  bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-140' "$WORKER_ALTO/run/task-fix-1.log" \
+  modelo-x esfuerzo-x 10 >"$WORKER_ALTO/salida.log" 2>&1 &
+worker_run_pid=$!
+
+for ((i = 0; i < 50; i++)); do
+  [ -s "$WORKER_ALTO/run/en-curso" ] && break
+  sleep 0.1
+done
+en_curso_worker=$(cat "$WORKER_ALTO/run/en-curso" 2>/dev/null)
+en_curso_worker_pid=$(printf '%s' "$en_curso_worker" | cut -f3)
+check_igual "worker: EN_CURSO trae el nombre y la Clave del --worker en curso" "task-fix-1	DEVKIT-140" \
+  "$(printf '%s' "$en_curso_worker" | cut -f1,2)"
+
+printf alto >"$WORKER_ALTO/run/modo"
+DEVKIT_TASK_BLOCK_BIN="$BLOQUEO_WORKER" DEVKIT_TEST_BLOQUEO="$BLOQUEO_WORKER_LOG" \
+  DEVKIT_RUN_DIR="$WORKER_ALTO/run" DEVKIT_WS="$WORKER_ALTO" \
+  bash "$WATCH" --vigilar-alto-once >"$WORKER_ALTO/vigilante.log" 2>&1
+
+check_igual "worker: el claude -p del --worker muere en alto" no \
+  "$(kill -0 "${en_curso_worker_pid:-0}" 2>/dev/null && echo si || echo no)"
+check_igual "worker: task-block.sh recibe la Clave y \"alto del humano\"" "DEVKIT-140|alto del humano|" \
+  "$(cat "$BLOQUEO_WORKER_LOG" 2>/dev/null)"
+
+wait "$worker_run_pid" 2>/dev/null
+check_igual "worker: EN_CURSO se borra tras matar el --worker" 0 \
+  "$([ -e "$WORKER_ALTO/run/en-curso" ] && echo 1 || echo 0)"
+
 exit $fail

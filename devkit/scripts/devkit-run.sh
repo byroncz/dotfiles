@@ -202,6 +202,16 @@ MODEL_RETRY="${DEVKIT_MODEL_RETRY:-600}"
 # sobre /workspace (DEVKIT-27), para que un `devkit-run` a mano no se pise
 # con el bucle. `--sync` no lo toma: lo llama `run_skill`, que ya lo tiene.
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
+# Mismo archivo que `run_skill` en watch.sh (DEVKIT-137, H2 de la revisión
+# sobre el PR #103): un `--worker` (task-start, task-close, epic-plan o un
+# lanzamiento manual) también toma `$LOCK` antes de correr `claude -p`, así
+# que a lo sumo uno de los dos -un `--sync` del bucle o un `--worker`- lo
+# tiene tomado a la vez. Escribir aquí el mismo `EN_CURSO` deja que el
+# vigilante de modo alto de watch.sh (`vigilar_alto_once`) también encuentre
+# y mate un `--worker`, sin lógica nueva de su lado: antes solo veía lo que
+# `run_skill` anotaba, y un `--worker` corre siempre fuera de ese camino,
+# nace con `setsid` en su propia sesión y sigue vivo en alto.
+EN_CURSO="${DEVKIT_EN_CURSO_FILE:-$RUN_DIR/en-curso}"
 # Mismas alarmas de DEVKIT-46 que `run_skill` en watch.sh, para que un
 # lanzamiento por `--worker` (manual o desde task-close/epic-plan) avise
 # igual que el bucle: skill lenta, con el mismo umbral y sondeo.
@@ -5942,6 +5952,36 @@ FIN
   check "--worker: la transcripción trae el primer mensaje de usuario" 1 \
     "$(grep -c 'task-fix DEVKIT-94' "$trans2_dir/run/task-fix-1-transcript.jsonl" 2>/dev/null)"
 
+  # --worker escribe el mismo EN_CURSO que `run_skill` en watch.sh (DEVKIT-137,
+  # H2 de la revisión sobre el PR #103): antes, el vigilante de modo alto solo
+  # veía lo que lanzaba el bucle con `--sync`, y un `--worker` -task-start,
+  # task-close, epic-plan o un lanzamiento manual, nacido con `setsid` en su
+  # propia sesión- seguía vivo en alto. Un doble que duerme deja ver el
+  # archivo mientras el `claude -p` sigue corriendo, y su limpieza al terminar.
+  local en_curso_dir en_curso_doble en_curso_pid
+  en_curso_dir=$(mktemp -d "$tmp/en-curso.XXXXXX")
+  mkdir -p "$en_curso_dir/run"
+  en_curso_doble="$tmp/claude-en-curso-sleep"
+  cat >"$en_curso_doble" <<'FIN'
+#!/usr/bin/env bash
+sleep 2
+printf '{"result":"listo","total_cost_usd":0.01,"num_turns":1}\n'
+FIN
+  chmod +x "$en_curso_doble"
+  DEVKIT_CLAUDE_BIN="$en_curso_doble" DEVKIT_RUN_DIR="$en_curso_dir/run" DEVKIT_WS="$en_curso_dir" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-137' "$en_curso_dir/run/task-fix-1.log" \
+    modelo-x high 40 >/dev/null 2>&1 &
+  en_curso_pid=$!
+  for ((i = 0; i < 50; i++)); do
+    [ -s "$en_curso_dir/run/en-curso" ] && break
+    sleep 0.1
+  done
+  check "--worker escribe EN_CURSO con el nombre y la Clave" "task-fix-1	DEVKIT-137" \
+    "$(cat "$en_curso_dir/run/en-curso" 2>/dev/null | cut -f1,2)"
+  wait "$en_curso_pid" 2>/dev/null
+  check "--worker borra EN_CURSO al terminar" 0 \
+    "$([ -e "$en_curso_dir/run/en-curso" ] && echo 1 || echo 0)"
+
   # Sin Notion conectada (un doble que no entiende `mcp list` se ve igual que
   # un servidor caído), no corre el `claude -p` real y queda la alarma en vez
   # de gastar turnos pidiendo autorizar el conector.
@@ -8715,10 +8755,16 @@ $card_md"
     # sabe por DEVKIT_LOCK_HELD y guarda el wip sin volver a pedirlo.
     DEVKIT_LOCK_HELD=1 run_claude "$prompt_pleno" "$modelo" "$esfuerzo" >"$logf" 2>&1 &
     skill_pid=$!
+    # EN_CURSO (DEVKIT-137, H2): mismo formato de tres campos que escribe
+    # `run_skill` en watch.sh, para que `vigilar_alto_once` mate este
+    # `--worker` en modo alto igual que mata lo que lanza el bucle.
+    clave_en_curso=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+    printf '%s\t%s\t%s\n' "$(basename "$logf" .log)" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
     watch_long_running "$prompt" "$skill_pid" &
     watcher_pid=$!
     wait "$skill_pid"
     rc=$?
+    rm -f "$EN_CURSO"
     kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
     flock -u 9
     exec 9>&-
