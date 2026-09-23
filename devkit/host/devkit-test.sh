@@ -632,6 +632,45 @@ check        "elemento inválido no impide construir con las válidas" \
              "ms.valida=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
 check        "elemento inválido: termina bien" 0 "$ESTADO"
 
+# Motor incompatible de una extensión fija del proyecto: se detiene y nombra
+# el origen, igual que el 404 de arriba (H5, DEVKIT-181).
+escenario dev
+printf 'extensions = ["ms.vieja@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^2.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check_salida "motor incompatible de una extensión del proyecto nombra el origen" \
+             'ms\.vieja 1\.2\.3 exige VS Code \^2\.0\.0; la imagen lleva 1\.109\.5 \(declarada en el proyecto\)'
+check        "motor incompatible de una extensión del proyecto: se detiene" 1 "$ESTADO"
+check_docker "motor incompatible de una extensión del proyecto: no construye" no 'up -d'
+
+# "latest" declarado por el proyecto, sin @versión: se resuelve contra Open
+# VSX igual que "latest" del template (H5, DEVKIT-181).
+escenario dev
+printf 'extensions = ["ms.nueva"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=3.0.0
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE DEVKIT_TEST_OVX_VERSION
+check        "latest del proyecto sin versión se resuelve" \
+             "ms.nueva=3.0.0 Anthropic.claude-code=3.0.0" "$(env_ext)"
+check        "latest del proyecto sin versión: termina bien" 0 "$ESTADO"
+
+# `update` corre sync_toml_env antes de resolve_extensions: sin ese orden,
+# DEVKIT_PROJECT_EXTENSIONS quedaría con el valor de antes (o vacío) y la
+# extensión declarada en .devkit/devkit.toml no llegaría a la imagen
+# (H5, DEVKIT-181).
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\nextensions = ["ms.nueva@1.0.0"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre update
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check        "update resuelve las extensions del proyecto (sync_toml_env corre antes)" \
+             "ms.nueva=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "update con extensions del proyecto: termina bien" 0 "$ESTADO"
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"
