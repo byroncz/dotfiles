@@ -407,20 +407,27 @@ guarda_agentes_vivos() {
 # origin, sin tocar el checkout. Siempre une con los domains de origin/main y
 # solo recrea el contenedor proxy: dev y sus agentes no se tocan.
 proxy_toml_de() {  # proxy_toml_de <rama-en-origin | "">
+  docker exec "devkit-$proj" true 2>/dev/null || {
+    echo "devkit: devkit-$proj no responde; ¿el contenedor está arriba?" >&2
+    return 1
+  }
   if [ -n "$1" ]; then
-    docker exec "devkit-$proj" git -C /workspace fetch -q origin "$1" 2>/dev/null \
+    # El token de GitHub vive en /run/devkit/env (entrypoint.sh), no en el
+    # entorno del contenedor: sin cargarlo, un repo privado falla el fetch por
+    # autenticación y ese error se confundía con "la rama no existe" (H1,
+    # DEVKIT-182). Mismo patrón que agentes_vivos.
+    docker exec "devkit-$proj" sh -c \
+      '. /run/devkit/env 2>/dev/null; git -C /workspace fetch -q origin "$1"' sh "$1" \
       || { echo "devkit: no existe la rama '$1' en origin" >&2; return 1; }
-    docker exec "devkit-$proj" git -C /workspace show "origin/$1:.devkit/devkit.toml" 2>/dev/null
+    docker exec "devkit-$proj" git -C /workspace show "origin/$1:.devkit/devkit.toml" \
+      || { echo "devkit: la rama '$1' no tiene .devkit/devkit.toml" >&2; return 1; }
   else
-    docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null
+    docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml \
+      || { echo "devkit: /workspace/.devkit/devkit.toml no existe en devkit-$proj" >&2; return 1; }
   fi
 }
 proxy_cmd() {  # proxy_cmd <rama-en-origin | "">
   toml_ref="$(proxy_toml_de "$1")" || return 1
-  [ -n "$toml_ref" ] || {
-    echo "devkit: no se pudo leer .devkit/devkit.toml de ${1:-el checkout actual} en devkit-$proj; ¿el contenedor está arriba?" >&2
-    return 1
-  }
   toml_main="$(proxy_toml_de main)" || return 1
   dom_ref="$(printf '%s\n' "$toml_ref" | toml_list domains)"
   dom_main="$(printf '%s\n' "$toml_main" | toml_list domains)"

@@ -147,8 +147,10 @@ case "${1:-}" in
       # origin sin clonarla de nuevo. El doble de "origin" es un directorio de
       # archivos <rama>.toml ($DEVKIT_TEST_ORIGIN_DIR); sin archivo para esa
       # rama, `fetch` falla como con una rama que no existe de verdad.
-      "git -C /workspace fetch -q origin "*)
-        ref="${*#git -C /workspace fetch -q origin }"
+      # El fetch corre vía `sh -c '...' sh <rama>` para cargar /run/devkit/env
+      # antes (H1): tras los shift de arriba, $4=sh y $5=<rama>.
+      *"/run/devkit/env"*"fetch -q origin"*)
+        ref="$5"
         [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
         exit 0 ;;
       "git -C /workspace show origin/"*":.devkit/devkit.toml")
@@ -384,14 +386,31 @@ corre proxy 0 "" "--ref rama-x"
 check        "proxy --ref: termina bien" 0 "$ESTADO"
 check        "proxy --ref: une los domains de la rama con main, sin el checkout actual" \
              "a.com b.com" "$(env_domains)"
+check_docker "proxy --ref: carga /run/devkit/env antes de fetch (H1)" si '/run/devkit/env'
 
 escenario dev
 printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+mkdir -p "$TMP/origin/feat"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["d.com"]\n' > "$TMP/origin/feat/X-1-algo.toml"
+corre proxy 0 "" "--ref feat/X-1-algo"
+check        "proxy --ref con slash: termina bien" 0 "$ESTADO"
+check        "proxy --ref con slash: une los domains de la rama con main" \
+             "a.com d.com" "$(env_domains)"
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+printf 'DEVKIT_ALLOW_DOMAINS=previo.com\n' >> "$TMP/root/p/.env"
 corre proxy 0 "" "--ref no-existe"
 check        "proxy --ref inexistente: se detiene" 1 "$ESTADO"
 check_salida "proxy --ref inexistente: lo explica" "no existe la rama 'no-existe' en origin"
-check        "proxy --ref inexistente: no toca .env" "" "$(env_domains)"
+check        "proxy --ref inexistente: no toca .env" "previo.com" "$(env_domains)"
 check_docker "proxy --ref inexistente: no recrea el proxy" no 'force-recreate proxy'
+
+escenario dev
+corre proxy 1
+check        "proxy con el contenedor apagado: se detiene" 1 "$ESTADO"
+check_salida "proxy con el contenedor apagado: lo explica" "devkit-p no responde"
+check_docker "proxy con el contenedor apagado: no recrea el proxy" no 'force-recreate proxy'
 
 escenario dev
 printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
