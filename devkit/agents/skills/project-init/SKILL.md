@@ -35,8 +35,12 @@ repo en GitHub.
      creaste. Mensaje `chore(<CÓDIGO>-0): registrar proyecto`; usa `-0`
      porque todavía no hay card.
    - Sube la rama, `gh pr create` y `gh pr merge --auto --squash`. Dile al
-     humano que apruebe ese PR: sin él, `task-begin.sh` no puede arrancar
-     ninguna card sobre `main` porque le faltan estos archivos.
+     humano que apruebe ese PR. Hasta que se mergee, `.devkit/devkit.toml`,
+     `AGENTS.md`, `CLAUDE.md` y el `.gitignore` solo existen en la rama
+     `chore/<CÓDIGO>-0-registrar-proyecto`: `main` sigue sin ellos. Ninguna
+     card debe pasar a Lista antes del merge: `task-begin.sh` solo revisa que
+     el workspace esté limpio, no que `main` traiga estos archivos, así que
+     arrancaría la card sobre una rama creada desde ese `main` incompleto.
 5. Verifica y reporta con una lista de cuatro comprobaciones: fila creada
    con URL, vista Kanban creada, vista Documentación creada, y
    `git status --porcelain --untracked-files=all` vacío.
