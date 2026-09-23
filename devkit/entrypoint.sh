@@ -100,6 +100,14 @@ mkdir -p "$HOME/.config/git"
 printf '%s\n' '*.local' '*.local.*' '.DS_Store' '.env' '.env.*' '!.env.example' '.ipynb_checkpoints/' '__pycache__/' '.venv/' '.claude/' '.devkit/costos.log' '.devkit/pr-body.md' '.devkit/review-*.md' > "$HOME/.config/git/ignore"
 if [ -n "${GH_TOKEN:-}" ]; then
   gh auth setup-git >/dev/null 2>&1 && log "gh autenticado como $(gh api user -q .login 2>/dev/null || echo '?')"
+  # X-OAuth-Scopes solo la manda un token clásico; un fine-grained la manda
+  # vacía y ahí no hay forma de saber los permisos sin llamar a la API de
+  # permisos del token (DEVKIT-180).
+  scopes_linea=$(gh api -i user 2>/dev/null | grep -i '^X-OAuth-Scopes:' || true)
+  scopes="$(printf '%s' "${scopes_linea#*:}" | tr -d '\r' | sed 's/^ *//')"
+  if [ -n "$scopes" ] && ! printf '%s' "$scopes" | grep -qw workflow; then
+    warn "el token de GitHub no tiene el scope workflow: los PRs que toquen .github/workflows/ fallarán al push"
+  fi
 fi
 
 # --- 3. Template ---------------------------------------------------------------
