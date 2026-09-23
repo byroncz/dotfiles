@@ -5979,6 +5979,38 @@ FIN
   check "DEVKIT-109: hija sin Padre no comenta en ninguna Épica" "$comentarios_antes" \
     "$(wc -l <"$tb_dir/ronda/comentar-llamadas" 2>/dev/null || echo 0)"
 
+  # DEVKIT-160: un proyecto recién instanciado, antes del commit de registro
+  # de project-init (paso 4), nace con AGENTS.md, CLAUDE.md, el placeholder
+  # de .devkit/devkit.toml y los enlaces .claude/ sin comitear -tal como los
+  # deja entrypoint.sh en el primer arranque-, y eso deja el workspace sucio
+  # para task-begin.sh. El registro los commitea junto con un .gitignore
+  # mínimo (que incluye /.claude/, igual que el ignore global que ahora
+  # escribe entrypoint.sh): tras ese commit, el workspace vuelve a quedar
+  # limpio y la primera card en Lista arranca igual que en cualquier otro
+  # proyecto.
+  git -C "$tb_dir/ws" switch -q main
+  mkdir -p "$tb_dir/ws/.claude" "$tb_dir/ws/.devkit"
+  : >"$tb_dir/ws/.claude/skills"
+  printf '[devkit]\ntemplate = "dev"\nproject  = "DEVKIT"\n' >"$tb_dir/ws/.devkit/devkit.toml"
+  printf 'AGENTS.md de prueba\n' >"$tb_dir/ws/AGENTS.md"
+  printf '@AGENTS.md\n' >"$tb_dir/ws/CLAUDE.md"
+  check "DEVKIT-160: workspace recién arrancado, sin el registro, está sucio" 1 \
+    "$([ -n "$(git -C "$tb_dir/ws" status --porcelain --untracked-files=all)" ] && echo 1 || echo 0)"
+  printf '%s\n' '/.claude/' '*.local' '.devkit/costos.log' '.devkit/pr-body.md' '.devkit/review-*.md' \
+    >"$tb_dir/ws/.gitignore"
+  git -C "$tb_dir/ws" add AGENTS.md CLAUDE.md .gitignore .devkit/devkit.toml
+  git -C "$tb_dir/ws" commit -q -m "chore(DEVKIT-0): registrar proyecto" --no-gpg-sign
+  git -C "$tb_dir/ws" push -q origin main
+  check "DEVKIT-160: tras el commit de registro, el workspace queda limpio" "" \
+    "$(git -C "$tb_dir/ws" status --porcelain --untracked-files=all)"
+  printf '{"id":"pagina-9300","estado":"Lista","tipo":"feature","titulo":"Primera card tras el registro"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9300.json"
+  env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9300 >/dev/null 2>&1
+  espera=0
+  while [ ! -s "$tb_dir/run/task-start-10.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  check "DEVKIT-160: task-begin.sh acepta la primera card tras el registro (crea y sube su rama)" 1 \
+    "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9300-primera-card-tras-registro')"
+
   rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
