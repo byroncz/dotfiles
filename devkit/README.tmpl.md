@@ -65,7 +65,12 @@ Detalle y convenciones de cada transición:
   las bases en `.claude/devkit-notion.json`.
 - **GitHub**: código, PRs y la compuerta humana (`main` exige PR con una
   aprobación, auto-merge activado). Los agentes actúan con la cuenta máquina
-  `byroncz-bot`; su token llega como secreto de Bitwarden.
+  `byroncz-bot`; su token llega como secreto de Bitwarden (`github_token`).
+  Debe ser clásico con `repo` y `workflow`, o fine-grained con Contents,
+  Pull requests y Workflows en Read and write sobre los repos de los
+  proyectos: sin `workflow`, GitHub rechaza cualquier push que toque
+  `.github/workflows/`. Se comprueba con `gh auth status`, que muestra los
+  scopes de un token clásico.
 - **Bitwarden Secrets Manager**: único lugar de los secretos del proyecto. Un
   token en `~/.devkit/bws-token` del host los trae al arrancar a un `tmpfs`
   que muere con el contenedor.
