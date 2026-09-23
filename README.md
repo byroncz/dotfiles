@@ -81,6 +81,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml`. |
 | `devkit logs <proyecto>` | Arranque y bucles del contenedor. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
+| `devkit proxy <proyecto> [--ref <rama>]` | Aplica al proxy los `domains` de una rama (o del checkout actual, sin `--ref`) unidos con los de `main`, sin esperar el merge; recrea solo el proxy. Úsalo cuando una card bloqueada pida un dominio nuevo. |
 | `devkit awake <proyecto>` | Solo macOS: evita que el host se suspenda mientras el contenedor esté vivo (`caffeinate`); en otro host avisa y no hace nada. Úsalo antes de un lanzamiento largo sin supervisión. |
 | `devkit ls` | Lista los proyectos instanciados. |
 

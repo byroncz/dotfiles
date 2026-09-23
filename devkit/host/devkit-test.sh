@@ -143,6 +143,21 @@ case "${1:-}" in
       # devkit-run (ver el comentario de agentes_vivos en devkit.sh).
       *devkit-run.sh*--agentes-vivos*)
         printf '%s\n' "${DEVKIT_TEST_AGENTES_VIVOS:-sin agentes vivos}"; exit 0 ;;
+      # DEVKIT-182: `devkit proxy` lee .devkit/devkit.toml de una rama en
+      # origin sin clonarla de nuevo. El doble de "origin" es un directorio de
+      # archivos <rama>.toml ($DEVKIT_TEST_ORIGIN_DIR); sin archivo para esa
+      # rama, `fetch` falla como con una rama que no existe de verdad.
+      # El fetch corre vía `sh -c '...' sh <rama>` para cargar /run/devkit/env
+      # antes (H1): tras los shift de arriba, $4=sh y $5=<rama>.
+      *"/run/devkit/env"*"fetch -q origin"*)
+        ref="$5"
+        [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
+        exit 0 ;;
+      "git -C /workspace show origin/"*":.devkit/devkit.toml")
+        rest="${*#git -C /workspace show origin/}"
+        ref="${rest%:.devkit/devkit.toml}"
+        [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
+        cat "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml"; exit 0 ;;
       *) exit 0 ;;   # test -f ready, zsh, ...
     esac ;;
 esac
@@ -156,10 +171,10 @@ export PATH="$TMP/bin:$PATH"
 # su estado inicial. El contexto de build del Mac lleva MARCA-VIEJA y un archivo
 # que el workspace ya no tiene; el workspace lleva MARCA-NUEVA.
 escenario() {
-  rm -rf "$TMP/root" "$TMP/ws"
+  rm -rf "$TMP/root" "$TMP/ws" "$TMP/origin"
   mkdir -p "$TMP/root/bin" "$TMP/root/p/template/marca" "$TMP/root/p/template/host" \
            "$TMP/root/p/template/vscode" "$TMP/ws/devkit/marca" "$TMP/ws/devkit/host" \
-           "$TMP/ws/devkit/vscode"
+           "$TMP/ws/devkit/vscode" "$TMP/origin"
   echo MARCA-VIEJA > "$TMP/root/p/template/marca/archivo.txt"
   echo sobra       > "$TMP/root/p/template/obsoleto.txt"
   echo MARCA-NUEVA > "$TMP/ws/devkit/marca/archivo.txt"
@@ -188,7 +203,7 @@ corre() {
   : > "$DEVKIT_TEST_LOG"
   printf 'si\n' | env DEVKIT_HOME="$TMP/root" DEVKIT_TEST_WS="$TMP/ws" \
     DEVKIT_TEST_LOG="$DEVKIT_TEST_LOG" DEVKIT_TEST_DOWN="${2:-0}" \
-    DEVKIT_TEST_TOKEN="${3:-}" \
+    DEVKIT_TEST_TOKEN="${3:-}" DEVKIT_TEST_ORIGIN_DIR="$TMP/origin" \
     sh "$DEVKIT" "$1" p ${4:-} >"$OUT" 2>&1
   ESTADO=$?
 }
@@ -346,6 +361,63 @@ corre recreate 0 "" --force
 unset DEVKIT_TEST_AGENTES_VIVOS
 check        "--force: recreate sigue con un agente vivo" 0 "$ESTADO"
 check_docker "--force: recreate igual reconstruye" si 'up -d --build --force-recreate'
+
+# --- devkit proxy (DEVKIT-182) ------------------------------------------------
+# Aplica al proxy los domains de una rama sin esperar el merge. El doble de
+# "origin" es $TMP/origin/<rama>.toml (ver el doble de `docker exec` arriba).
+env_domains() { sed -n 's/^DEVKIT_ALLOW_DOMAINS=//p' "$TMP/root/p/.env" | tail -1; }
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+corre proxy
+check        "proxy sin --ref: termina bien" 0 "$ESTADO"
+check        "proxy sin --ref: une el checkout actual con main" "a.com c.com" "$(env_domains)"
+check_docker "proxy sin --ref: recrea el proxy" si 'up -d --force-recreate proxy'
+check_docker "proxy sin --ref: no reconstruye nada" no 'build'
+check_docker "proxy sin --ref: no recrea todo el stack (solo proxy)" no 'up -d --build --force-recreate$'
+check_salida "proxy sin --ref: imprime la lista resultante" 'dominios aplicados al proxy: a\.com c\.com'
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["b.com"]\n' > "$TMP/origin/rama-x.toml"
+corre proxy 0 "" "--ref rama-x"
+check        "proxy --ref: termina bien" 0 "$ESTADO"
+check        "proxy --ref: une los domains de la rama con main, sin el checkout actual" \
+             "a.com b.com" "$(env_domains)"
+check_docker "proxy --ref: carga /run/devkit/env antes de fetch (H1)" si '/run/devkit/env'
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+mkdir -p "$TMP/origin/feat"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["d.com"]\n' > "$TMP/origin/feat/X-1-algo.toml"
+corre proxy 0 "" "--ref feat/X-1-algo"
+check        "proxy --ref con slash: termina bien" 0 "$ESTADO"
+check        "proxy --ref con slash: une los domains de la rama con main" \
+             "a.com d.com" "$(env_domains)"
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+printf 'DEVKIT_ALLOW_DOMAINS=previo.com\n' >> "$TMP/root/p/.env"
+corre proxy 0 "" "--ref no-existe"
+check        "proxy --ref inexistente: se detiene" 1 "$ESTADO"
+check_salida "proxy --ref inexistente: lo explica" "no existe la rama 'no-existe' en origin"
+check        "proxy --ref inexistente: no toca .env" "previo.com" "$(env_domains)"
+check_docker "proxy --ref inexistente: no recrea el proxy" no 'force-recreate proxy'
+
+escenario dev
+corre proxy 1
+check        "proxy con el contenedor apagado: se detiene" 1 "$ESTADO"
+check_salida "proxy con el contenedor apagado: lo explica" "devkit-p no responde"
+check_docker "proxy con el contenedor apagado: no recrea el proxy" no 'force-recreate proxy'
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\n' > "$TMP/origin/main.toml"
+corre proxy
+check        "proxy sin domains declarados: no falla" 0 "$ESTADO"
+check        "proxy sin domains declarados: deja la lista vacía" "" "$(env_domains)"
 
 # --- Fuera de modo dev ------------------------------------------------------
 escenario 0.1.0; corre recreate
