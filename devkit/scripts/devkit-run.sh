@@ -5996,6 +5996,17 @@ FIN
   printf '@AGENTS.md\n' >"$tb_dir/ws/CLAUDE.md"
   check "DEVKIT-160: workspace recién arrancado, sin el registro, está sucio" 1 \
     "$([ -n "$(git -C "$tb_dir/ws" status --porcelain --untracked-files=all)" ] && echo 1 || echo 0)"
+  # H2 de pr-review (PR #123): antes solo se comprobaba `git status`, sin
+  # demostrar que `task-begin.sh` rechaza de verdad ese workspace sucio.
+  local salida_sucio rc_sucio
+  printf '{"id":"pagina-9299","estado":"Lista","tipo":"feature","titulo":"Card sobre workspace sin registrar"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9299.json"
+  salida_sucio=$(env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9299 2>&1)
+  rc_sucio=$?
+  check "DEVKIT-160: task-begin.sh rechaza el workspace sucio antes del registro" 1 \
+    "$([ "$rc_sucio" -ne 0 ] && echo 1 || echo 0)"
+  check "DEVKIT-160: el rechazo no crea ninguna rama" 0 \
+    "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'DEVKIT-9299')"
   printf '%s\n' '/.claude/' '*.local' '.devkit/costos.log' '.devkit/pr-body.md' '.devkit/review-*.md' \
     >"$tb_dir/ws/.gitignore"
   git -C "$tb_dir/ws" add AGENTS.md CLAUDE.md .gitignore .devkit/devkit.toml
@@ -6007,7 +6018,7 @@ FIN
     >"$tb_dir/ronda/card-DEVKIT-9300.json"
   env "${tb_env[@]}" bash "$HERE/devkit-run.sh" task-start DEVKIT-9300 >/dev/null 2>&1
   espera=0
-  while [ ! -s "$tb_dir/run/task-start-10.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
+  while [ ! -s "$tb_dir/run/task-start-11.log" ] && [ "$espera" -lt 40 ]; do sleep 0.1; espera=$((espera + 1)); done
   check "DEVKIT-160: task-begin.sh acepta la primera card tras el registro (crea y sube su rama)" 1 \
     "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9300-primera-card-tras-registro')"
 
