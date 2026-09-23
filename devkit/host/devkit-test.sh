@@ -604,6 +604,21 @@ check_salida "404 de una extensión del proyecto: lo explica y nombra el origen"
 check        "404 de una extensión del proyecto: se detiene" 1 "$ESTADO"
 check_docker "404 de una extensión del proyecto: no construye" no 'up -d'
 
+# Elemento inválido en extensions del proyecto: se avisa y se ignora, sin
+# impedir que las extensiones válidas (del proyecto y del template) resuelvan
+# (H4, DEVKIT-181).
+escenario dev
+printf 'extensions = ["sinpunto", "ms.valida@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check_salida "elemento inválido de extensions del proyecto avisa" \
+             'extensions de \.devkit/devkit\.toml tiene elementos que no calzan'
+check        "elemento inválido no impide construir con las válidas" \
+             "ms.valida=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "elemento inválido: termina bien" 0 "$ESTADO"
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"

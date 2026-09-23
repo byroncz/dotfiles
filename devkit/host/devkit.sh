@@ -204,9 +204,20 @@ origen_sufijo() {
 resolve_extensions() {
   toml="$dir/template/vscode/extensions.toml"
   proyecto_raw="$(sed -n 's/^DEVKIT_PROJECT_EXTENSIONS=//p' "$dir/.env" 2>/dev/null | tail -1)"
+  # Un elemento que no calce con "ns.ext" o "ns.ext@versión" se ignora en vez
+  # de colarse mal formado: sin punto, ns y ext quedarían iguales; con "@"
+  # pero sin versión, la consulta a Open VSX y el ARG del Dockerfile
+  # quedarían vacíos (H4, DEVKIT-181).
+  patron_extension='^[^.@[:space:]]+\.[^@[:space:]]+(@[^@[:space:]]+)?$'
+  malas_proyecto="$(
+    printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | grep -v '^$' | grep -vE "$patron_extension"
+  )"
+  if [ -n "$malas_proyecto" ]; then
+    echo "devkit: aviso: extensions de .devkit/devkit.toml tiene elementos que no calzan con \"ns.ext\" o \"ns.ext@versión\" y se ignoran:" >&2
+    printf '%s\n' "$malas_proyecto" | sed 's/^/  /' >&2
+  fi
   declarados_proyecto="$(
-    printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | while IFS= read -r item; do
-      [ -n "$item" ] || continue
+    printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | grep -v '^$' | grep -E "$patron_extension" | while IFS= read -r item; do
       case "$item" in
         *@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
         *)   printf '%s latest\n' "$item" ;;
