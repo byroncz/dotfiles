@@ -158,6 +158,14 @@ case "${1:-}" in
         ref="${rest%:.devkit/devkit.toml}"
         [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
         cat "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml"; exit 0 ;;
+      # DEVKIT-183: mostrar_fuente_toml pide el commit corto de origin/<rama>
+      # antes de recrear. Mismo doble de "origin" que el show de arriba: sin
+      # archivo para esa rama, falla igual que un rev-parse contra una rama
+      # que no llegó a origin.
+      "git -C /workspace rev-parse --short origin/"*)
+        ref="${*#git -C /workspace rev-parse --short origin/}"
+        [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
+        printf 'abc1234'; exit 0 ;;
       *) exit 0 ;;   # test -f ready, zsh, ...
     esac ;;
 esac
@@ -361,6 +369,56 @@ corre recreate 0 "" --force
 unset DEVKIT_TEST_AGENTES_VIVOS
 check        "--force: recreate sigue con un agente vivo" 0 "$ESTADO"
 check_docker "--force: recreate igual reconstruye" si 'up -d --build --force-recreate'
+
+# --- Fuente de .devkit/devkit.toml antes de recrear/actualizar (DEVKIT-183) -
+# mostrar_fuente_toml dice de qué origin/<rama> sale el .devkit/devkit.toml
+# tras recrear (no el checkout vivo: /workspace no es un volumen y se pierde,
+# DEVKIT-183) y la lista de domains/apt que sync_toml_env va a escribir en
+# .env desde el checkout vivo. Si el checkout vivo difiere de origin/main,
+# además avisa con el diff. El doble de "origin" es el mismo
+# $TMP/origin/<rama>.toml que usa `devkit proxy`.
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+corre recreate
+check_salida "toml limpio: dice de dónde sale tras recrear" "se clona de nuevo desde origin/main @abc1234"
+check        "toml limpio: no avisa de diferencias" no \
+             "$(grep -q 'difiere de origin/main' "$OUT" && echo si || echo no)"
+check        "toml limpio: recreate termina bien" 0 "$ESTADO"
+check_docker "toml limpio: recreate igual reconstruye" si 'up -d --build --force-recreate'
+
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+corre recreate
+check_salida "toml sucio: avisa que difiere de origin/main" "difiere de origin/main"
+check_salida "toml sucio: muestra el diff del campo domains" 'domains: checkout vivo "c\.com" -> origin/main "a\.com"'
+check_salida "toml sucio: recuerda el camino correcto" "devkit proxy p --ref <rama>"
+check        "toml sucio: igual recrea si se confirma" 0 "$ESTADO"
+check_docker "toml sucio: igual reconstruye" si 'up -d --build --force-recreate'
+
+escenario dev
+corre up
+check_salida "up muestra la lista de domains que va a escribir" "domains que se van a escribir en .env"
+check_salida "up muestra la lista de apt que va a escribir" "apt que se va a escribir en .env"
+
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check_salida "update con toml sucio avisa antes de actualizar" "difiere de origin/main"
+check_salida "update con toml sucio sigue tras confirmar" "actualizando template"
+check        "update con toml sucio termina bien" 0 "$ESTADO"
+
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "update con toml limpio no avisa" no \
+             "$(grep -q 'difiere de origin/main' "$OUT" && echo si || echo no)"
+check_salida "update con toml limpio sigue de largo" "actualizando template"
 
 # --- devkit proxy (DEVKIT-182) ------------------------------------------------
 # Aplica al proxy los domains de una rama sin esperar el merge. El doble de

@@ -11,11 +11,17 @@
 #                               recrear los contenedores: relee secretos y devkit.env, y
 #                               reconstruye las capas que cambiaron (en modo dev,
 #                               con el devkit/ del workspace). Se niega si hay un
-#                               agente en curso dentro del contenedor; --force lo salta
+#                               agente en curso dentro del contenedor; --force lo salta.
+#                               Antes de pedir confirmación dice de dónde sale el
+#                               .devkit/devkit.toml que va a quedar tras recrear
+#                               (origin/<rama> del proyecto) y avisa si el que hay
+#                               ahora en el contenedor difiere: eso se pierde
 #   devkit rebuild <proyecto> [--force]
 #                               reconstruir las imágenes desde cero y recrear; misma
-#                               guarda de agentes en curso que recreate
-#   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml
+#                               guarda de agentes en curso y mismo aviso que recreate
+#   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml;
+#                               mismo aviso que recreate si el toml vivo del contenedor
+#                               difiere del de origin/<rama> antes de recrear
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
 #   devkit proxy <proyecto> [--ref <rama>]
@@ -42,7 +48,7 @@ for arg in "$@"; do
 done
 set -- $resto
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,27p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,33p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -66,6 +72,68 @@ sync_toml_env() {
   grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
+}
+# Rama que el entrypoint clona en /workspace en cada recreate/rebuild/update:
+# /workspace no es un volumen (DEVKIT-183), así que --force-recreate lo vacía
+# y el contenedor arranca clonando de nuevo DEVKIT_REPO_REF (fijado solo al
+# instanciar el proyecto, new-project.sh --ref) o la rama principal si no se
+# fijó ninguno.
+repo_ref() {
+  ref="$(sed -n 's/^DEVKIT_REPO_REF=//p' "$dir/devkit.env" 2>/dev/null | tail -1)"
+  printf '%s' "${ref:-main}"
+}
+# Antes de recrear/actualizar: dice de dónde sale el .devkit/devkit.toml que
+# va a quedar en /workspace (origin/<rama>, no el checkout vivo del
+# contenedor: eso se pierde al recrear, DEVKIT-183) y la lista de domains/apt
+# que sync_toml_env va a escribir en .env desde ese checkout vivo. Si el
+# checkout vivo difiere de origin/<rama> en domains, apt o python (cambios
+# sin commit, o una rama de card que aún no llegó a origin/<rama>), avisa con
+# el diff de esos tres campos y dónde va cada uno; deja FUENTE_DIFIERE en 1
+# para que quien llame decida si eso exige una confirmación aparte.
+FUENTE_DIFIERE=0
+mostrar_fuente_toml() {
+  FUENTE_DIFIERE=0
+  ref="$(repo_ref)"
+  docker exec "devkit-$proj" true 2>/dev/null || {
+    echo "devkit: $proj no responde; no se puede mostrar de dónde sale .devkit/devkit.toml" >&2
+    return 0
+  }
+  toml_vivo="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || toml_vivo=""
+  dom_vivo="$(printf '%s\n' "$toml_vivo" | toml_list domains)"
+  apt_vivo="$(printf '%s\n' "$toml_vivo" | toml_list apt)"
+  echo "devkit: domains que se van a escribir en .env (del checkout vivo del contenedor): ${dom_vivo:-(ninguno)}"
+  echo "devkit: apt que se va a escribir en .env (del checkout vivo del contenedor): ${apt_vivo:-(ninguno)}"
+  sha_ref=""; toml_ref=""
+  if docker exec "devkit-$proj" sh -c '. /run/devkit/env 2>/dev/null; git -C /workspace fetch -q origin "$1"' sh "$ref" 2>/dev/null; then
+    sha_ref="$(docker exec "devkit-$proj" git -C /workspace rev-parse --short "origin/$ref" 2>/dev/null)" || sha_ref=""
+    toml_ref="$(docker exec "devkit-$proj" git -C /workspace show "origin/$ref:.devkit/devkit.toml" 2>/dev/null)" || toml_ref=""
+  fi
+  if [ -z "$sha_ref" ]; then
+    echo "devkit: aviso: no se pudo leer origin/$ref; no se puede confirmar qué .devkit/devkit.toml quedará tras recrear" >&2
+    return 0
+  fi
+  echo "devkit: al recrear, /workspace se clona de nuevo desde origin/$ref @$sha_ref: ese será el .devkit/devkit.toml"
+  [ "$toml_ref" = "$toml_vivo" ] && return 0
+  dif=""
+  for campo in domains apt python; do
+    if [ "$campo" = python ]; then
+      v_vivo="$(printf '%s\n' "$toml_vivo" | toml_field python)"
+      v_ref="$(printf '%s\n' "$toml_ref" | toml_field python)"
+    else
+      v_vivo="$(printf '%s\n' "$toml_vivo" | toml_list "$campo")"
+      v_ref="$(printf '%s\n' "$toml_ref" | toml_list "$campo")"
+    fi
+    [ "$v_vivo" = "$v_ref" ] && continue
+    dif="$dif  $campo: checkout vivo \"${v_vivo:-(vacío)}\" -> origin/$ref \"${v_ref:-(vacío)}\"
+"
+  done
+  [ -n "$dif" ] || return 0
+  FUENTE_DIFIERE=1
+  {
+    echo "devkit: aviso: .devkit/devkit.toml vivo (el del contenedor) difiere de origin/$ref; esto se pierde al recrear:"
+    printf '%s' "$dif"
+    echo "devkit: camino correcto: comitea en la rama de la card y corre 'devkit proxy $proj --ref <rama>' para los domains, o abre un PR chore/<CÓDIGO>-0-... a main con el cambio del toml"
+  } >&2
 }
 # Zona horaria del Mac, para pasarla al contenedor como TZ (DEVKIT-64): así
 # `date`, los logs y watch.log quedan en la hora del Mac, comparable a ojo
@@ -366,7 +434,20 @@ awake() {
   echo "devkit: el Mac no se suspende por inactividad mientras devkit-$proj esté vivo (Ctrl-C para soltar)"
   caffeinate -i docker wait "devkit-$proj" >/dev/null
 }
-confirm() { printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '; read -r ok; [ "$ok" = "si" ]; }
+confirm() {  # confirm [detalle-extra, para el aviso de FUENTE_DIFIERE]
+  [ -n "${1:-}" ] && printf '%s\n' "$1"
+  printf 'Se destruye el contenedor actual. Lo no committeado fuera de sandbox.local se pierde. Escribe "si": '
+  read -r ok; [ "$ok" = "si" ]
+}
+# Igual que confirm, pero antes muestra de dónde sale el .devkit/devkit.toml
+# que va a quedar tras recrear (mostrar_fuente_toml) y, si el checkout vivo
+# difiere de origin/<rama>, lo suma al mensaje de confirmación (DEVKIT-183).
+confirm_recreate() {
+  mostrar_fuente_toml
+  detalle=""
+  [ "$FUENTE_DIFIERE" = 1 ] && detalle="devkit: escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba."
+  confirm "$detalle"
+}
 # `devkit-run --agentes-vivos` (DEVKIT-138), por su ruta y no por el alias
 # `devkit-run` de zshrc: ese alias no existe en un `docker exec` sin shell
 # interactiva (mismo motivo que DEVKIT-54). Se lee /run/devkit/env para
@@ -439,15 +520,20 @@ proxy_cmd() {  # proxy_cmd <rama-en-origin | "">
   echo "devkit: dominios aplicados al proxy: ${union:-(ninguno)}"
 }
 case "$cmd" in
-  up)       sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
+  up)       mostrar_fuente_toml; sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
   awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) guarda_agentes_vivos && confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
-  rebuild)  guarda_agentes_vivos && confirm && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
+  recreate) guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
+  rebuild)  guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
+    mostrar_fuente_toml
+    if [ "$FUENTE_DIFIERE" = 1 ]; then
+      confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
+        || { echo "devkit: cancelado" >&2; exit 1; }
+    fi
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
     target="$(printf '%s\n' "$toml" | toml_field template)"

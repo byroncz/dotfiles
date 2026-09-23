@@ -63,12 +63,12 @@
 <div class="tarjeta">
   <div class="comando">devkit recreate &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit recreate ventas</div>
-  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar <code>.devkit/devkit.toml</code> o, en modo dev, el propio <code>devkit/</code>. Se niega si hay un agente en curso; <code>--force</code> salta la guarda.</p>
+  <p class="descripcion">Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar <code>.devkit/devkit.toml</code> o, en modo dev, el propio <code>devkit/</code>. Se niega si hay un agente en curso; <code>--force</code> salta la guarda. <code>/workspace</code> no es un volumen: se vuelve a clonar desde <code>origin/&lt;rama&gt;</code>, así que antes de confirmar dice de dónde sale ese <code>.devkit/devkit.toml</code> y avisa si el que hay ahora en el contenedor difiere (cambios sin commit o una rama de card): eso se pierde.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit rebuild &lt;proyecto&gt;</div>
   <div class="ejemplo">$ devkit rebuild ventas</div>
-  <p class="descripcion">Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; <code>recreate</code> no alcanza. Misma guarda de agentes en curso que <code>recreate</code>.</p>
+  <p class="descripcion">Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; <code>recreate</code> no alcanza. Misma guarda de agentes en curso y mismo aviso de <code>.devkit/devkit.toml</code> que <code>recreate</code>.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">devkit awake &lt;proyecto&gt;</div>

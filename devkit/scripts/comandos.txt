@@ -5,14 +5,14 @@
 # comentarios (`#` sin `|`) y las líneas vacías se ignoran.
 
 ## En el host: `devkit`
-devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta).
+devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta). Antes de actuar dice de dónde sale `.devkit/devkit.toml` tras un recrear y la lista de `domains`/`apt` que va a escribir en `.env`.
 devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor.
 devkit code <proyecto> | devkit code ventas | Abre el editor en el navegador; sin `open`, imprime la URL para pegarla a mano (macOS la abre sola). Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.
 devkit stop <proyecto> | devkit stop ventas | Detiene sin perder nada.
 devkit down <proyecto> | devkit down ventas | Destruye el contenedor; lo no commiteado se pierde.
-devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda.
-devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza. Misma guarda de agentes en curso que `recreate`.
-devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`.
+devkit recreate <proyecto> | devkit recreate ventas | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda. `/workspace` no es un volumen: se vuelve a clonar desde `origin/<rama>`, así que antes de confirmar dice de dónde sale ese `.devkit/devkit.toml` y avisa si el que hay ahora en el contenedor difiere (cambios sin commit o una rama de card): eso se pierde.
+devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza. Misma guarda de agentes en curso y mismo aviso de `.devkit/devkit.toml` que `recreate`.
+devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`. También recrea el contenedor: mismo aviso que `recreate` si el toml vivo difiere del de `origin/<rama>`.
 devkit logs <proyecto> | devkit logs ventas | Arranque y bucles del contenedor.
 devkit net-open <proyecto> | devkit net-open ventas | Red abierta en esta sesión, solo para depurar.
 devkit proxy <proyecto> [--ref <rama>] | devkit proxy ventas --ref feat/VENTAS-3-algo | Aplica al proxy los `domains` de una rama (o del checkout actual, sin `--ref`) unidos con los de `main`, sin esperar el merge; recrea solo el proxy. Úsalo cuando una card bloqueada pida un dominio nuevo.
