@@ -18,6 +18,10 @@
 #   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
+#   devkit proxy <proyecto> [--ref <rama>]
+#                               aplicar al proxy los domains de una rama (o del
+#                               checkout actual, sin --ref) unidos con los de
+#                               main, sin esperar el merge; solo recrea el proxy
 #   devkit awake <proyecto>     impedir el reposo del Mac mientras el contenedor esté vivo
 #                               (caffeinate -i; no evita el reposo al cerrar la tapa)
 #   devkit ls                   proyectos instanciados
@@ -38,7 +42,7 @@ for arg in "$@"; do
 done
 set -- $resto
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,23p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,27p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -389,6 +393,44 @@ guarda_agentes_vivos() {
   echo "devkit: pausa el bucle primero (docker exec devkit-$proj devkit-run --pausa, o --alto) y espera a que terminen, o repite con --force" >&2
   return 1
 }
+# devkit proxy <proyecto> [--ref <rama>]: aplica al proxy los domains de una
+# rama sin esperar el merge (DEVKIT-182). El círculo vicioso que resuelve: una
+# card declara un dominio nuevo en domains de su rama, pero sync_toml_env solo
+# lee el checkout vivo del contenedor, y el ciclo devuelve el workspace a main
+# al cerrar o bloquear la card, así que el dominio nunca llegaba al proxy
+# antes del merge. net-open no sirve: abre toda la red para todos los
+# agentes. Acá el humano sigue aprobando cada dominio, solo que antes del PR,
+# al correr este comando a mano viendo la lista que imprime.
+#
+# Sin --ref, lee .devkit/devkit.toml del checkout actual del contenedor
+# (mismo `cat` que sync_toml_env); con --ref, el archivo de esa rama en
+# origin, sin tocar el checkout. Siempre une con los domains de origin/main y
+# solo recrea el contenedor proxy: dev y sus agentes no se tocan.
+proxy_toml_de() {  # proxy_toml_de <rama-en-origin | "">
+  if [ -n "$1" ]; then
+    docker exec "devkit-$proj" git -C /workspace fetch -q origin "$1" 2>/dev/null \
+      || { echo "devkit: no existe la rama '$1' en origin" >&2; return 1; }
+    docker exec "devkit-$proj" git -C /workspace show "origin/$1:.devkit/devkit.toml" 2>/dev/null
+  else
+    docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null
+  fi
+}
+proxy_cmd() {  # proxy_cmd <rama-en-origin | "">
+  toml_ref="$(proxy_toml_de "$1")" || return 1
+  [ -n "$toml_ref" ] || {
+    echo "devkit: no se pudo leer .devkit/devkit.toml de ${1:-el checkout actual} en devkit-$proj; ¿el contenedor está arriba?" >&2
+    return 1
+  }
+  toml_main="$(proxy_toml_de main)" || return 1
+  dom_ref="$(printf '%s\n' "$toml_ref" | toml_list domains)"
+  dom_main="$(printf '%s\n' "$toml_main" | toml_list domains)"
+  union="$(printf '%s\n%s\n' "$dom_ref" "$dom_main" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+  grep -v '^DEVKIT_ALLOW_DOMAINS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
+  { cat "$dir/.env.tmp"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$union"; } > "$dir/.env"
+  rm -f "$dir/.env.tmp"
+  compose up -d --force-recreate proxy
+  echo "devkit: dominios aplicados al proxy: ${union:-(ninguno)}"
+}
 case "$cmd" in
   up)       sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
@@ -434,5 +476,16 @@ case "$cmd" in
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;
+  proxy)
+    case "${3:-}" in
+      "") ref="" ;;
+      --ref)
+        ref="${4:-}"
+        [ -n "$ref" ] || { echo "uso: devkit proxy $proj --ref <rama>" >&2; exit 1; }
+        ;;
+      *) usage ;;
+    esac
+    proxy_cmd "$ref"
+    ;;
   *)        usage ;;
 esac

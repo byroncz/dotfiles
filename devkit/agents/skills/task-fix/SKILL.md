@@ -187,6 +187,26 @@ trabajo de `pr-review`.
     igual en el siguiente intervalo.
 12. Responde con una línea: PR, hallazgos atendidos y descartados, head nuevo.
 
+## Un dominio bloqueado
+
+Si algún comando de los pasos de arriba falla con "connection refused",
+corre `devkit-net-denied` para confirmarlo. Sobre la rama de la card,
+`devkit recreate` no sirve: el proxy del host solo lee `domains` del checkout
+que esté vivo en el contenedor, y el ciclo devuelve el workspace a `main` al
+cerrar o bloquear la card, así que el dominio nunca le llega antes del merge
+(DEVKIT-182). En su lugar, sin publicar ninguna respuesta `devkit-fix`:
+
+1. Agrega el dominio a `domains` de `.devkit/devkit.toml`, comitea
+   (`fix(<Clave>): agregar <dominio> a domains`) y pushea.
+2. Bloquea la card:
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
+   intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
+   necesito: corre devkit proxy $(hostname) --ref $(git branch
+   --show-current) en el host, mueve la card a En progreso y relanza con dk
+   task-start <Clave>."`
+   y termina ahí: el motivo lleva los dominios para que el humano los vea
+   antes de aprobarlos. Limpia la copia de trabajo si la creaste (paso 4).
+
 ## Reglas
 
 - Nunca `gh pr review` de ningún tipo, nunca `gh pr merge`, nunca push a

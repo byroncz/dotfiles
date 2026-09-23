@@ -15,6 +15,7 @@ devkit rebuild <proyecto> | devkit rebuild ventas | Reconstruye las imágenes de
 devkit update <proyecto> | devkit update ventas | Sube a la versión de template que pide `.devkit/devkit.toml`.
 devkit logs <proyecto> | devkit logs ventas | Arranque y bucles del contenedor.
 devkit net-open <proyecto> | devkit net-open ventas | Red abierta en esta sesión, solo para depurar.
+devkit proxy <proyecto> [--ref <rama>] | devkit proxy ventas --ref feat/VENTAS-3-algo | Aplica al proxy los `domains` de una rama (o del checkout actual, sin `--ref`) unidos con los de `main`, sin esperar el merge; recrea solo el proxy. Úsalo cuando una card bloqueada pida un dominio nuevo.
 devkit awake <proyecto> | devkit awake ventas | Solo macOS: evita que el host se suspenda mientras el contenedor esté vivo (`caffeinate`); en otro host avisa y no hace nada. Úsalo antes de un lanzamiento largo sin supervisión.
 devkit ls | devkit ls | Lista los proyectos instanciados.
 

@@ -64,6 +64,25 @@ task-start`. Haz push con frecuencia.
 
 Al cumplir los criterios de aceptación, ejecuta `task-submit`.
 
+## Un dominio bloqueado
+
+Si un comando falla con "connection refused", corre `devkit-net-denied` para
+confirmarlo. Sobre la rama de una card, `devkit recreate` no sirve: el proxy
+del host solo lee `domains` del checkout que esté vivo en el contenedor, y el
+ciclo devuelve el workspace a `main` al cerrar o bloquear la card, así que el
+dominio nunca le llega antes del merge (DEVKIT-182). En su lugar:
+
+1. Agrega el dominio a `domains` de `.devkit/devkit.toml`, comitea
+   (`feat(<Clave>): agregar <dominio> a domains`) y pushea.
+2. Bloquea la card:
+   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
+   intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
+   necesito: corre devkit proxy $(hostname) --ref $(git branch
+   --show-current) en el host, mueve la card a En progreso y relanza con dk
+   task-start <Clave>."`
+   y termina ahí: el motivo lleva los dominios para que el humano los vea
+   antes de aprobarlos.
+
 ## Modo headless
 
 `task-close.sh` (vía `devkit-run`), `epic-plan` o el humano te invocan como
