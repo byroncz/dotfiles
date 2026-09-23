@@ -50,7 +50,7 @@ al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
 | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | alpine 3.22 |
 | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. | 0.12.7 |
 | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. | — |
-| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. | 1.109.5 |
+| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Extensiones del template más `extensions` de `.devkit/devkit.toml`. | 1.109.5 |
 | zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. | starship 1.24.2 |
 | Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. | — |
 | Codex | Segundo agente, preparado pero no instalado: mismo `AGENTS.md` y skills. | — |

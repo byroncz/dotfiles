@@ -569,6 +569,41 @@ check        "línea con comentario al final no avisa" no \
 check        "línea con comentario al final se usa igual" \
              "Anthropic.claude-code=1.2.3" "$(env_ext)"
 
+# --- extensions de .devkit/devkit.toml (DEVKIT-181) --------------------------
+# `extensions` en .devkit/devkit.toml se suma a devkit/vscode/extensions.toml
+# del template, el mismo patrón que `apt` y `domains`. sync_toml_env (que
+# corre antes que resolve_extensions en recreate/rebuild/update) la deja
+# cruda en DEVKIT_PROJECT_EXTENSIONS; resolve_extensions la une, resolviendo
+# todo contra Open VSX igual que antes.
+escenario dev
+printf 'extensions = ["ms.otra@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check        "unión: incluye la del proyecto y la del template resuelta" \
+             "ms.otra=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "unión: termina bien" 0 "$ESTADO"
+
+escenario dev
+printf 'extensions = ["Anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check        "duplicado: gana la versión del proyecto" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check_docker "duplicado: no consulta el /latest del template para esa id" no \
+             'open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "duplicado: termina bien" 0 "$ESTADO"
+
+escenario dev
+printf 'extensions = ["ms.rota@9.9.9"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+corre recreate
+check_salida "404 de una extensión del proyecto: lo explica y nombra el origen" \
+             'extensión ms\.rota 9\.9\.9 no existe en Open VSX \(404\) \(declarada en el proyecto\)'
+check        "404 de una extensión del proyecto: se detiene" 1 "$ESTADO"
+check_docker "404 de una extensión del proyecto: no construye" no 'up -d'
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"

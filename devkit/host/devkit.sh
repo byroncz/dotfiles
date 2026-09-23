@@ -55,12 +55,17 @@ toml_list() {
 # compose, que los interpola desde este .env: sin esto, editar devkit.toml no hacía
 # nada (DEVKIT-6). Solo si el contenedor ya existe: en el primer `up` el
 # proyecto aún no está clonado.
+# `extensions` (DEVKIT-181) también sale de aquí, pero cruda (sin resolver
+# contra Open VSX): la deja en DEVKIT_PROJECT_EXTENSIONS para que
+# resolve_extensions la una con la del template sin leer el contenedor por
+# su cuenta.
 sync_toml_env() {
   toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || return 0
   apt="$(printf '%s\n' "$toml" | toml_list apt)"
   domains="$(printf '%s\n' "$toml" | toml_list domains)"
-  grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
-  { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; } > "$dir/.env"
+  extensions="$(printf '%s\n' "$toml" | toml_list extensions)"
+  grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' -e '^DEVKIT_PROJECT_EXTENSIONS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
+  { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; printf 'DEVKIT_PROJECT_EXTENSIONS=%s\n' "$extensions"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
 }
 # Zona horaria del Mac, para pasarla al contenedor como TZ (DEVKIT-64): así
@@ -169,6 +174,14 @@ ultima_compatible() {
   done
   return 1
 }
+# origen_sufijo <id>: " (declarada en el proyecto)" si $id vino de
+# `extensions` en .devkit/devkit.toml, vacío si es del template. resolve_extensions
+# fija $ids_proyecto antes de usar esta función.
+origen_sufijo() {
+  case "$ids_proyecto" in
+    *" $1 "*) printf ' (declarada en el proyecto)' ;;
+  esac
+}
 # devkit/vscode/extensions.toml declara las extensiones del editor: una
 # versión fija se instala tal cual, "latest" se resuelve aquí contra Open VSX
 # antes de construir. La resolución queda en $dir/extensions.lock (una por
@@ -177,15 +190,30 @@ ultima_compatible() {
 # sync_dev_template (o de bajar la etiqueta destino en `update`), así que
 # $dir/template/vscode/extensions.toml ya está al día.
 #
-# Además, cada extensión (fija o "latest") se comprueba contra engines.vscode
-# en Open VSX frente a $editor, la versión de openvscode-server que trae la
-# imagen: instalar una que exige un VS Code más nuevo tumbaba el build a
-# mitad del Dockerfile, con el error de openvscode-server, no antes
-# (DEVKIT-73). Sin red para esa comprobación, una versión fija se instala sin
-# verificar, igual que antes de DEVKIT-73.
+# El proyecto suma las suyas sin tocar el template: `extensions` en
+# .devkit/devkit.toml, una lista de "ns.ext" o "ns.ext@versión" (sin versión,
+# "latest"), que sync_toml_env deja cruda en DEVKIT_PROJECT_EXTENSIONS. Si un
+# id aparece en los dos lados, gana la versión del proyecto (DEVKIT-181).
+#
+# Además, cada extensión (fija o "latest"), venga del template o del
+# proyecto, se comprueba contra engines.vscode en Open VSX frente a $editor,
+# la versión de openvscode-server que trae la imagen: instalar una que exige
+# un VS Code más nuevo tumbaba el build a mitad del Dockerfile, con el error
+# de openvscode-server, no antes (DEVKIT-73). Sin red para esa comprobación,
+# una versión fija se instala sin verificar, igual que antes de DEVKIT-73.
 resolve_extensions() {
   toml="$dir/template/vscode/extensions.toml"
-  if [ ! -f "$toml" ]; then
+  proyecto_raw="$(sed -n 's/^DEVKIT_PROJECT_EXTENSIONS=//p' "$dir/.env" 2>/dev/null | tail -1)"
+  declarados_proyecto="$(
+    printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | while IFS= read -r item; do
+      [ -n "$item" ] || continue
+      case "$item" in
+        *@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
+        *)   printf '%s latest\n' "$item" ;;
+      esac
+    done
+  )"
+  if [ ! -f "$toml" ] && [ -z "$declarados_proyecto" ]; then
     echo "devkit: aviso: no hay $toml; se construye sin extensiones" >&2
     grep -v '^DEVKIT_EXTENSIONS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
     mv "$dir/.env.tmp" "$dir/.env"
@@ -198,18 +226,28 @@ resolve_extensions() {
   editor="$(sed -n 's/^ARG OPENVSCODE_VERSION=\([0-9.]*\).*/\1/p' "$dir/template/Dockerfile" | head -1)"
   [ -n "$editor" ] || { echo "devkit: no se encontró ARG OPENVSCODE_VERSION en $dir/template/Dockerfile" >&2; return 1; }
   lock="$dir/extensions.lock"
-  # Una línea no vacía y sin comentario que no calce con "id" = "versión" se
-  # ignoraba en silencio y la extensión desaparecía de la imagen sin aviso
-  # (H5, DEVKIT-67); gen-stack.sh repite este mismo aviso al generar la lista.
-  # El comentario final es opcional: el `sed` de abajo ya lo tolera (H9,
-  # DEVKIT-67), así que la validación admite el mismo formato o avisaría de
-  # una línea que sí se usa.
-  malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$toml" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*(#.*)?$')"
-  if [ -n "$malas" ]; then
-    echo "devkit: aviso: $toml tiene líneas que no calzan con \"id\" = \"versión\" y se ignoran:" >&2
-    printf '%s\n' "$malas" | sed 's/^/  /' >&2
+  declarados_template=""
+  if [ -f "$toml" ]; then
+    # Una línea no vacía y sin comentario que no calce con "id" = "versión" se
+    # ignoraba en silencio y la extensión desaparecía de la imagen sin aviso
+    # (H5, DEVKIT-67); gen-stack.sh repite este mismo aviso al generar la lista.
+    # El comentario final es opcional: el `sed` de abajo ya lo tolera (H9,
+    # DEVKIT-67), así que la validación admite el mismo formato o avisaría de
+    # una línea que sí se usa.
+    malas="$(grep -vE '^[[:space:]]*(#.*)?$' "$toml" | grep -vE '^"[^"]*"[[:space:]]*=[[:space:]]*"[^"]*"[[:space:]]*(#.*)?$')"
+    if [ -n "$malas" ]; then
+      echo "devkit: aviso: $toml tiene líneas que no calzan con \"id\" = \"versión\" y se ignoran:" >&2
+      printf '%s\n' "$malas" | sed 's/^/  /' >&2
+    fi
+    declarados_template="$(sed -n 's/^"\([^"]*\)"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1 \2/p' "$toml")"
   fi
-  declarados="$(sed -n 's/^"\([^"]*\)"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1 \2/p' "$toml")"
+  # Un id del proyecto que repite uno del template gana: va primero en la
+  # concatenación y `awk` solo se queda con la primera ocurrencia de cada id.
+  ids_proyecto=" $(printf '%s\n' "$declarados_proyecto" | awk 'NF{print $1}' | tr '\n' ' ')"
+  declarados="$(
+    { printf '%s\n' "$declarados_proyecto"; printf '%s\n' "$declarados_template"; } \
+      | awk 'NF && !seen[$1]++'
+  )"
   resuelto=""
   while IFS= read -r linea; do
     [ -n "$linea" ] || continue
@@ -220,7 +258,7 @@ resolve_extensions() {
       http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/latest" "$resp")"
       if [ "$http_code" = 404 ]; then
         rm -f "$resp"
-        echo "devkit: extensión $id no existe en Open VSX (404)" >&2
+        echo "devkit: extensión $id no existe en Open VSX (404)$(origen_sufijo "$id")" >&2
         return 1
       fi
       fetched=""; motor=""
@@ -241,7 +279,7 @@ resolve_extensions() {
               fetched="${alt% *}"
             else
               rm -f "$resp"
-              echo "devkit: $id $fetched exige VS Code $motor; la imagen lleva $editor y no hay ninguna versión publicada que calce" >&2
+              echo "devkit: $id $fetched exige VS Code $motor; la imagen lleva $editor y no hay ninguna versión publicada que calce$(origen_sufijo "$id")" >&2
               return 1
             fi
           elif [ "$estado" = desconocido ]; then
@@ -274,7 +312,7 @@ resolve_extensions() {
       http_code="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/$version" "$resp")"
       if [ "$http_code" = 404 ]; then
         rm -f "$resp"
-        echo "devkit: extensión $id $version no existe en Open VSX (404)" >&2
+        echo "devkit: extensión $id $version no existe en Open VSX (404)$(origen_sufijo "$id")" >&2
         return 1
       fi
       if [ "$http_code" = 200 ]; then
@@ -285,7 +323,7 @@ resolve_extensions() {
         else
           estado="$(engine_check "$motor" "$editor")"
           if [ "$estado" = no ]; then
-            echo "devkit: $id $version exige VS Code $motor; la imagen lleva $editor" >&2
+            echo "devkit: $id $version exige VS Code $motor; la imagen lleva $editor$(origen_sufijo "$id")" >&2
             resp2="$(mktemp)"
             if lhttp="$(curl_ovx "https://open-vsx.org/api/$ns/$ext/latest" "$resp2")" && [ "$lhttp" = 200 ] \
                && alt="$(ultima_compatible "$ns" "$ext" "$resp2")"; then
@@ -430,7 +468,7 @@ case "$cmd" in
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
-    resolve_extensions && sync_toml_env && sync_tz_env && compose up -d --build --force-recreate
+    sync_toml_env && resolve_extensions && sync_tz_env && compose up -d --build --force-recreate
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;

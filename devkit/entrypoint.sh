@@ -28,9 +28,11 @@
 #
 #  .devkit/devkit.toml (en el repo del proyecto, no en devkit.env): declara
 #  `template`, `project` (código de Notion), y opcionalmente `python`, `apt`,
-#  `domains` y `reviewer` (usuario de GitHub que aprueba los PRs; lo lee la
-#  skill pr-review). Es la única fuente de esos valores; ver la entrada de
-#  Documentación "Arquitectura del devkit" (Notion), sección 5.2.
+#  `domains`, `extensions` (extensiones del editor, id de Open VSX con
+#  @versión opcional, ej. `extensions = ["GitHub.vscode-github-actions"]`; se
+#  suman a las del template) y `reviewer` (usuario de GitHub que aprueba los
+#  PRs; lo lee la skill pr-review). Es la única fuente de esos valores; ver la
+#  entrada de Documentación "Arquitectura del devkit" (Notion), sección 5.2.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
