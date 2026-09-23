@@ -316,7 +316,13 @@ resolve_extensions() {
           echo "devkit: aviso: $razon_aviso; se usa la última versión resuelta de $id ($cached)" >&2
           version="$cached"
         else
-          echo "devkit: $razon_seco y sin resolución previa para $id; construye una vez con red o fija su versión en extensions.toml" >&2
+          sufijo="$(origen_sufijo "$id")"
+          if [ -n "$sufijo" ]; then
+            sugerencia="fija su versión con @versión en extensions de .devkit/devkit.toml"
+          else
+            sugerencia="fija su versión en extensions.toml"
+          fi
+          echo "devkit: $razon_seco y sin resolución previa para $id; construye una vez con red o $sugerencia$sufijo" >&2
           return 1
         fi
       fi
