@@ -74,12 +74,15 @@ dominio nunca le llega antes del merge (DEVKIT-182). En su lugar:
 
 1. Agrega el dominio a `domains` de `.devkit/devkit.toml`, comitea
    (`feat(<Clave>): agregar <dominio> a domains`) y pushea.
-2. Bloquea la card:
+2. Resuelve `hostname` y `git branch --show-current` como comandos aparte,
+   no como sustitución dentro del argumento de `task-block.sh`: en headless,
+   un `Bash` con `$(...)` pide aprobación aunque el prefijo esté permitido, y
+   nadie la da (H4, DEVKIT-182). Con esos dos valores literales, bloquea la
+   card:
    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
    intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
-   necesito: corre devkit proxy $(hostname) --ref $(git branch
-   --show-current) en el host, mueve la card a En progreso y relanza con dk
-   task-start <Clave>."`
+   necesito: corre devkit proxy <proyecto> --ref <rama> en el host, mueve la
+   card a En progreso y relanza con dk task-start <Clave>."`
    y termina ahí: el motivo lleva los dominios para que el humano los vea
    antes de aprobarlos.
 

@@ -198,12 +198,17 @@ cerrar o bloquear la card, así que el dominio nunca le llega antes del merge
 
 1. Agrega el dominio a `domains` de `.devkit/devkit.toml`, comitea
    (`fix(<Clave>): agregar <dominio> a domains`) y pushea.
-2. Bloquea la card:
+2. Resuelve el proyecto con `hostname`, como comando aparte: en headless, un
+   `Bash` con sustitución de comando (`$(...)`) dentro del argumento de
+   `task-block.sh` pide aprobación aunque el prefijo esté permitido, y nadie
+   la da (H4, DEVKIT-182). La rama ya la tienes de `headRefName` (paso 2); no
+   la vuelvas a resolver con `git branch --show-current`, porque fuera de la
+   copia de trabajo `/tmp/devkit-fix-<N>` devuelve `main`. Con esos dos
+   valores literales, bloquea la card:
    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
    intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
-   necesito: corre devkit proxy $(hostname) --ref $(git branch
-   --show-current) en el host, mueve la card a En progreso y relanza con dk
-   task-start <Clave>."`
+   necesito: corre devkit proxy <proyecto> --ref <headRefName> en el host,
+   mueve la card a En progreso y relanza con dk task-start <Clave>."`
    y termina ahí: el motivo lleva los dominios para que el humano los vea
    antes de aprobarlos. Limpia la copia de trabajo si la creaste (paso 4).
 
