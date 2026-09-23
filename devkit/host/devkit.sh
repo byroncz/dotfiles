@@ -176,10 +176,11 @@ ultima_compatible() {
 }
 # origen_sufijo <id>: " (declarada en el proyecto)" si $id vino de
 # `extensions` en .devkit/devkit.toml, vacío si es del template. resolve_extensions
-# fija $ids_proyecto antes de usar esta función.
+# fija $ids_proyecto (en minúsculas) antes de usar esta función; Open
+# VSX no distingue mayúsculas en el id, así que la comparación tampoco.
 origen_sufijo() {
   case "$ids_proyecto" in
-    *" $1 "*) printf ' (declarada en el proyecto)' ;;
+    *" $(printf '%s' "$1" | tr 'A-Z' 'a-z') "*) printf ' (declarada en el proyecto)' ;;
   esac
 }
 # devkit/vscode/extensions.toml declara las extensiones del editor: una
@@ -253,11 +254,12 @@ resolve_extensions() {
     declarados_template="$(sed -n 's/^"\([^"]*\)"[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1 \2/p' "$toml")"
   fi
   # Un id del proyecto que repite uno del template gana: va primero en la
-  # concatenación y `awk` solo se queda con la primera ocurrencia de cada id.
-  ids_proyecto=" $(printf '%s\n' "$declarados_proyecto" | awk 'NF{print $1}' | tr '\n' ' ')"
+  # concatenación y `awk` solo se queda con la primera ocurrencia de cada id,
+  # sin distinguir mayúsculas (Open VSX tampoco lo hace en el id).
+  ids_proyecto=" $(printf '%s\n' "$declarados_proyecto" | awk 'NF{print tolower($1)}' | tr '\n' ' ')"
   declarados="$(
     { printf '%s\n' "$declarados_proyecto"; printf '%s\n' "$declarados_template"; } \
-      | awk 'NF && !seen[$1]++'
+      | awk 'NF && !seen[tolower($1)]++'
   )"
   resuelto=""
   while IFS= read -r linea; do

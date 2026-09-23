@@ -596,6 +596,19 @@ check_docker "duplicado: no consulta el /latest del template para esa id" no \
              'open-vsx\.org/api/Anthropic/claude-code/latest'
 check        "duplicado: termina bien" 0 "$ESTADO"
 
+# Open VSX no distingue mayúsculas en el id: un duplicado con otra
+# capitalización también debe deduplicarse a favor del proyecto (H2, DEVKIT-181).
+escenario dev
+printf 'extensions = ["anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check        "duplicado con otra capitalización: gana la versión del proyecto" \
+             "anthropic.claude-code=1.2.3" "$(env_ext)"
+check_docker "duplicado con otra capitalización: no consulta el /latest del template" no \
+             'open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "duplicado con otra capitalización: termina bien" 0 "$ESTADO"
+
 escenario dev
 printf 'extensions = ["ms.rota@9.9.9"]\n' >> "$TMP/ws/.devkit/devkit.toml"
 corre recreate
