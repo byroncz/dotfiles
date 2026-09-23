@@ -397,6 +397,15 @@ check_salida "toml sucio: recuerda el camino correcto" "devkit proxy p --ref <ra
 check        "toml sucio: igual recrea si se confirma" 0 "$ESTADO"
 check_docker "toml sucio: igual reconstruye" si 'up -d --build --force-recreate'
 
+# H3, DEVKIT-183: rebuild pasa por confirm_recreate igual que recreate, pero
+# hasta ahora ningún caso lo ejercitaba con el toml sucio.
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+corre rebuild
+check_salida "rebuild con toml sucio avisa que difiere de origin/main" "difiere de origin/main"
+check_docker "rebuild con toml sucio igual reconstruye desde cero" si 'build --no-cache'
+
 escenario dev
 corre up
 check_salida "up muestra la lista de domains que va a escribir" "domains que se van a escribir en .env"
