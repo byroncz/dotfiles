@@ -21,8 +21,26 @@ repo en GitHub.
      filtrada por `Proyecto` = esta fila, ordenada por `Orden`.
    - `Documentación <CÓDIGO>` sobre Documentación, tipo tabla, filtrada por
      `Proyecto` = esta fila, ordenada por `Fecha` descendente.
-4. Verifica y reporta con una lista de tres comprobaciones: fila creada con
-   URL, vista Kanban creada, vista Documentación creada.
-5. Si `.devkit/devkit.toml` aún tiene `project = "PROJ"` (placeholder
-   de `entrypoint.sh`), cámbialo por el código real y haz commit:
-   `chore(<CÓDIGO>-0): registrar proyecto`. Usa `-0` porque aún no hay card.
+4. Si `.devkit/devkit.toml` aún tiene `project = "PROJ"` (placeholder de
+   `entrypoint.sh`), regístralo en git. Nunca hagas push directo a `main`:
+   la protección de rama lo rechaza ("Changes must be made through a pull
+   request", GH013). Mismo patrón que `task-submit.sh`:
+   - Crea la rama `chore/<CÓDIGO>-0-registrar-proyecto` desde `main`.
+   - En `.devkit/devkit.toml`, cambia `project` por el código real.
+   - Si no existe un `.gitignore` en la raíz del proyecto, créalo con un
+     mínimo: `/.claude/`, `*.local`, `.devkit/costos.log`,
+     `.devkit/pr-body.md`, `.devkit/review-*.md`.
+   - Commitea todo lo que generó el arranque y que aún no está en git:
+     `.devkit/devkit.toml`, `AGENTS.md`, `CLAUDE.md` y el `.gitignore` si lo
+     creaste. Mensaje `chore(<CÓDIGO>-0): registrar proyecto`; usa `-0`
+     porque todavía no hay card.
+   - Sube la rama, `gh pr create` y `gh pr merge --auto --squash`. Dile al
+     humano que apruebe ese PR. Hasta que se mergee, `.devkit/devkit.toml`,
+     `AGENTS.md`, `CLAUDE.md` y el `.gitignore` solo existen en la rama
+     `chore/<CÓDIGO>-0-registrar-proyecto`: `main` sigue sin ellos. Ninguna
+     card debe pasar a Lista antes del merge: `task-begin.sh` solo revisa que
+     el workspace esté limpio, no que `main` traiga estos archivos, así que
+     arrancaría la card sobre una rama creada desde ese `main` incompleto.
+5. Verifica y reporta con una lista de cuatro comprobaciones: fila creada
+   con URL, vista Kanban creada, vista Documentación creada, y
+   `git status --porcelain --untracked-files=all` vacío.
