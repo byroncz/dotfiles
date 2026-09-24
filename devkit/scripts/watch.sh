@@ -673,7 +673,7 @@ transient_retry() {  # transient_retry <nombre> <prompt> <clave de launched o ->
 #
 # Tope duro (DEVKIT-185): a los SKILL_KILL segundos ya no solo avisa, mata el
 # árbol completo con `detener_arbol` -mismo mecanismo que el vigilante de
-# modo alto, DEVKIT-137- y dejar una marca en `$RUN_DIR/$name.matada` con los
+# modo alto, DEVKIT-137- y deja una marca en `$RUN_DIR/$name.matada` con los
 # segundos corridos, antes de matar: `run_skill` la lee al volver de `wait`
 # para saber que el corte fue el tope de tiempo, no un error cualquiera, y
 # avisar a la card en vez de reintentar solo.
