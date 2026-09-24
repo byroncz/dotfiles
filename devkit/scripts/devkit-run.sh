@@ -2778,18 +2778,23 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
 }
 
 # Color del glifo de `glifo_estado_fila` para el mismo <estado>. "en curso"
-# vuelve vacío -el girador no lleva color, ya se distingue por moverse-.
-# "Lista para merge" y "Bloqueada" (DEVKIT-132) son los mismos verde/rojo de
-# "terminó"/"bloqueada", pero en negrita -el atributo ANSI que suma
-# `colorear`-: son un veredicto ya tomado por el revisor, no el genérico "el
-# lanzamiento terminó" o "la card quedó bloqueada por otro motivo". "CAMBIOS"
+# (DEVKIT-186) es verde y negrita -la única fila activa, la que más importa
+# distinguir de un vistazo frente a las que ya terminaron- pero
+# `formatear_fila` no lo aplica al girador de la primera columna: ese ya se
+# distingue por moverse, y pintarlo competiría con la alarma ámbar de
+# "lento" que se le suma al lado en DETALLE. "Lista para merge" y
+# "Bloqueada" (DEVKIT-132) son los mismos verde/rojo de "terminó"/
+# "bloqueada", pero en negrita -el atributo ANSI que suma `colorear`-: son
+# un veredicto ya tomado por el revisor, no el genérico "el lanzamiento
+# terminó" o "la card quedó bloqueada por otro motivo". "CAMBIOS"
 # (DEVKIT-132, el tercer veredicto) no tiene caso propio: cae en el `ambar`
 # por defecto, igual que cualquier estado que esta función no reconoce.
 # "Mergeado" (DEVKIT-148, el paso siguiente a "Lista para merge") es morado
-# y negrita, el mismo tono que GitHub usa para el ícono de un PR ya mergeado.
+# y negrita, el mismo tono que GitHub usa para el ícono de un PR ya
+# mergeado.
 color_de_estado_fila() {  # color_de_estado_fila <estado>
   case "$1" in
-    "en curso") printf '' ;;
+    "en curso") printf verde-negrita ;;
     terminó) printf verde ;;
     "Lista para merge") printf verde-negrita ;;
     Mergeado) printf morado-negrita ;;
@@ -2806,7 +2811,12 @@ color_de_estado_fila() {  # color_de_estado_fila <estado>
 # "Revisión automática" son trabajo activo -mismo braille que "en curso"-;
 # "Lista para merge" ya terminó el trabajo del agente; "Lista" es la cola,
 # todavía sin lanzar -mismo icono que "no arrancó"-; "Bloqueada" es la misma
-# palabra que en `estado_filas`.
+# palabra que en `estado_filas`. A diferencia de `formatear_fila`, acá ESTADO
+# no tiene columna propia -el glifo va pegado al texto en la misma celda,
+# `formatear_fila_tablero` arma "<glifo> <estado>" y solo colorea esos
+# primeros caracteres-, así que "En progreso"/"Revisión automática" en verde
+# y negrita (DEVKIT-186) sí tiñe el girador ahí: no hay forma de separarlo
+# del texto como en `--estado`.
 glifo_estado_tablero() {  # glifo_estado_tablero <estado card> <idx> <fijo:0|1> <utf:0|1>
   case "$1" in
     "En progreso"|"Revisión automática") glifo_estado_fila "en curso" "$2" "$3" "$4" ;;
@@ -2819,7 +2829,7 @@ glifo_estado_tablero() {  # glifo_estado_tablero <estado card> <idx> <fijo:0|1> 
 
 color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
   case "$1" in
-    "En progreso"|"Revisión automática") printf '' ;;
+    "En progreso"|"Revisión automática") printf verde-negrita ;;
     "Lista para merge") printf verde ;;
     Bloqueada) printf rojo ;;
     Lista) printf gris ;;
@@ -3012,11 +3022,12 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     # TURNOS excedido ("67/60!", DEVKIT-107).
     case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
     # ESTADO en negrita y color solo para los veredictos de pr-review (DEVKIT-
-    # 132) y "mergeado" (DEVKIT-148): son los únicos casos con "-negrita" en
-    # `color_de_estado_fila`. El resto de los estados ya se distingue por el
-    # color del glifo en la primera columna, sin duplicarlo sobre el texto.
-    # Va antes que PR (DEVKIT-156 H1): todo envoltorio se aplica de <inicio>
-    # mayor a menor, y `off_estado` > `off_pr`.
+    # 132), "mergeado" (DEVKIT-148) y "en curso" (DEVKIT-186): son los únicos
+    # casos con "-negrita" en `color_de_estado_fila`. El resto de los estados
+    # ya se distingue por el color del glifo en la primera columna, sin
+    # duplicarlo sobre el texto. Va antes que PR (DEVKIT-156 H1): todo
+    # envoltorio se aplica de <inicio> mayor a menor, y `off_estado` >
+    # `off_pr`.
     case "$color" in *-negrita) fila=$(pintar_rango "$fila" "$off_estado" "$ANCHO_ESTADO" "$color") ;; esac
     # PR (DEVKIT-156): el hipervínculo OSC 8 con la URL completa. Va antes de
     # SKILL y del icono, cuyos `off_*` son menores (ver el comentario de
@@ -3027,7 +3038,11 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
     # Icono en la posición 0, siempre el último envoltorio: ya no queda ningún
     # `off_*` menor por delante que este `pintar_rango` pudiera correr.
-    [ -z "$color" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
+    # "en curso" queda afuera (DEVKIT-186) aunque ya tenga color: el girador
+    # de esta columna es una alarma aparte que se distingue por moverse, no
+    # por teñirse, y no debe competir con el ⚠ ámbar de "lento" que se le
+    # suma al lado en DETALLE.
+    [ -z "$color" ] || [ "$estado" = "en curso" ] || fila=$(pintar_rango "$fila" 0 "$icono_len" "$color")
   fi
   if [ "$color_habilitado" = 1 ] && [ "$fondo_grupo" = 1 ]; then
     fila=${fila//$'\033[0m'/$'\033[0m'$FONDO_GRUPO}
@@ -6846,6 +6861,23 @@ FIN
   # autoprueba y devuelve un byte suelto en vez de ⠙.
   check "icono: en curso, gira una posición por refresco de --seguir" '⠙' \
     "$(LC_ALL=C.UTF-8 glifo_estado_fila "$(estado_de DEVKIT-57)" 1 0 1)"
+  # DEVKIT-186: "en curso" es la única fila activa sin resaltar frente a
+  # "terminó" (verde) y "Lista para merge" (verde-negrita); ahora comparte
+  # verde-negrita con esta última, y solo el glifo (girador contra ✔ fijo)
+  # las distingue.
+  check "color: en curso, verde y negrita" verde-negrita \
+    "$(color_de_estado_fila "$(estado_de DEVKIT-57)")"
+  # El girador de la primera columna sigue sin color pese a que
+  # `color_de_estado_fila` ya no vuelve vacío para "en curso": es una alarma
+  # aparte que se distingue por moverse, no por teñirse (ver el comentario
+  # de `formatear_fila` sobre el `pintar_rango` del icono).
+  local fila_en_curso_186
+  fila_en_curso_186=$(LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-57 - humano 5m 5m "en curso" opus/high -/60 - 0 1 1)
+  check "formatear_fila: en curso no pinta el girador de la primera columna" no \
+    "$([ "${fila_en_curso_186:0:1}" = $'\033' ] && echo si || echo no)"
+  check "formatear_fila: en curso sí pinta el texto de ESTADO en verde y negrita" si \
+    "$(grep -qF $'\033[1;32m' <<<"$fila_en_curso_186" && echo si || echo no)"
+  unset fila_en_curso_186
   check "icono: terminó" '✔' "$(glifo_estado_fila "$(estado_de DEVKIT-56)" 0 1 1)"
   check "icono: terminó, color verde" verde "$(color_de_estado_fila "$(estado_de DEVKIT-56)")"
   check "icono: error" '✖' "$(glifo_estado_fila "$(estado_de DEVKIT-58)" 0 1 1)"
@@ -7010,9 +7042,11 @@ FIN
   # decidía --estado) la columna PR se envuelve en el hipervínculo OSC 8 con
   # la URL completa que ya armó `url_de_pr`, y el ancho visible -la fila con
   # esos escapes quitados- mide exactamente lo mismo que la fila sin TTY.
-  # "en curso" (`color_de_estado_fila`) no pinta el icono de ningún color: así
-  # la única diferencia entre ambas filas es el envoltorio de PR, sin un
-  # `\033[32m`/`\033[0m` de por medio que confunda la comparación de ancho.
+  # "en curso" (DEVKIT-186, `color_de_estado_fila` verde-negrita) sí suma un
+  # `\033[1;32m`/`\033[0m` sobre el texto de ESTADO, así que además del OSC 8
+  # hay que pelar ese SGR con `sed` antes de comparar el ancho -si no, la
+  # comparación de longitudes cuenta esos bytes de color como si fueran
+  # columnas visibles.
   local abre_156 cierra_156 fila_con_pr_156_tty fila_con_pr_156_sin_osc
   abre_156=$'\033]8;;'"$pr_url_156"$'\033\\'
   cierra_156=$'\033]8;;\033\\'
@@ -7021,6 +7055,7 @@ FIN
     "$([[ "$fila_con_pr_156_tty" == *"$abre_156"* ]] && echo si || echo no)"
   fila_con_pr_156_sin_osc=${fila_con_pr_156_tty//"$abre_156"/}
   fila_con_pr_156_sin_osc=${fila_con_pr_156_sin_osc//"$cierra_156"/}
+  fila_con_pr_156_sin_osc=$(sed -E 's/\x1b\[[0-9;]*m//g' <<<"$fila_con_pr_156_sin_osc")
   check "columna PR con TTY: el texto visible mide lo mismo que sin el enlace" \
     "${#fila_con_pr_134}" "${#fila_con_pr_156_sin_osc}"
   check "columna PR sin PR (task-start) con TTY: sin la secuencia OSC 8" no \
@@ -7174,6 +7209,15 @@ FIN
   check "icono tablero: Lista para merge" '✔' "$(glifo_estado_tablero "Lista para merge" 0 1 1)"
   check "icono tablero: Lista, la cola, todavía sin lanzar" '○' "$(glifo_estado_tablero Lista 0 1 1)"
   check "icono tablero: Bloqueada" '⊘' "$(glifo_estado_tablero Bloqueada 0 1 1)"
+  # DEVKIT-186: mismo verde-negrita que "en curso" en --estado, para las dos
+  # cards que ya comparten el girador (`glifo_estado_tablero`).
+  check "color tablero: En progreso, verde y negrita" verde-negrita \
+    "$(color_de_estado_tablero "En progreso")"
+  check "color tablero: Revisión automática, verde y negrita" verde-negrita \
+    "$(color_de_estado_tablero "Revisión automática")"
+  check "formatear_fila_tablero: En progreso pinta el girador en verde y negrita" si \
+    "$(formatear_fila_tablero DEVKIT-1 "En progreso" feature - 0 1 1 \
+        | grep -qF $'\033[1;32m' && echo si || echo no)"
 
   # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
@@ -7532,10 +7576,14 @@ FIN
   # ámbar quedaba sin su `\033[0m`, filtrándose a las filas siguientes.
   # `$ANCHO_COLUMNAS_FIJAS + 5` (no un número a mano, DEVKIT-134 le sumó
   # ANCHO_PR y desactualizaría cualquier cifra fija): pocas celdas para
-  # DETALLE, cada apertura de color debe tener su cierre igual.
-  check "icono: lento con poco espacio no deja un color ámbar sin cerrar" 1 \
+  # DETALLE, cada apertura de color debe tener su cierre igual. Desde
+  # DEVKIT-186 esta fila lleva dos pares de color, no uno solo -el ámbar de
+  # "lento" y el verde-negrita de "en curso" en ESTADO-, así que se cuentan
+  # todas las aperturas (cualquier SGR que no sea el reset) contra todos los
+  # `\033[0m`, no solo las de `\033[33m`.
+  check "icono: lento con poco espacio no deja un color sin cerrar" 1 \
     "$(fila_lento_angosta=$(COLUMNS=$((ANCHO_COLUMNAS_FIJAS + 5)) LC_ALL=C.UTF-8 formatear_fila task-fix DEVKIT-90 - humano 5m 5m "en curso" opus/high -/60 lento 0 1 1)
-       abre=$(grep -o $'\033\[33m' <<<"$fila_lento_angosta" | wc -l)
+       abre=$(grep -oE $'\033\[[0-9;]+m' <<<"$fila_lento_angosta" | grep -vF $'\033[0m' | wc -l)
        cierra=$(grep -o $'\033\[0m' <<<"$fila_lento_angosta" | wc -l)
        [ "$abre" -eq "$cierra" ] && echo 1 || echo 0)"
 
