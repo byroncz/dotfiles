@@ -758,7 +758,7 @@ check_igual "tope de tiempo: el sha queda marcado como un fallo normal, sin rela
 check_igual "tope de tiempo: comenta en la Clave pasada por watch.sh" "card-185" \
   "$(cut -f1 "$COMENTARIOS_MATADA" 2>/dev/null)"
 check_igual "tope de tiempo: el comentario trae la causa, la duración y el comando para relanzar a mano" 1 \
-  "$(grep -coE 'Skill matada por tope de tiempo: pr-review llevaba [0-9]+ min corriendo \(límite 2s, DEVKIT_WATCH_SKILL_KILL\)\. No se relanza sola; para reintentar a mano: dk pr-review DEVKIT-185' "$COMENTARIOS_MATADA" 2>/dev/null)"
+  "$(grep -coE 'Skill matada por tope de tiempo: pr-review llevaba [0-9]+ min corriendo \(límite 2s, DEVKIT_WATCH_SKILL_KILL\)\. No se relanza sola; para reintentar a mano: dk pr-review 9' "$COMENTARIOS_MATADA" 2>/dev/null)"
 NOTION_OVERRIDE="" CLAVE_OVERRIDE=""
 
 # 3. `result` que termina en pregunta en vez de resolver en un estado

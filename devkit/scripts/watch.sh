@@ -112,7 +112,8 @@
 # árbol con `detener_arbol` (el mismo mecanismo del modo alto, DEVKIT-137),
 # deja "ALARMA: <nombre> matada a los N min" en watch.log y, al volver de
 # `wait`, `run_skill` avisa a la card con la causa, la duración y el comando
-# para relanzar a mano (`dk <skill> <Clave>`) vía `devkit-run --skill-matada`
+# para relanzar a mano (`dk <skill> <arg>`, con el mismo argumento del
+# prompt que se mató: Clave o número de PR) vía `devkit-run --skill-matada`
 # -sin relanzo automático, ni por cuota ni por error transitorio: el sha
 # queda marcado como un fallo normal, igual que cualquier otro rc distinto de
 # cero-. `devkit-run.sh --worker` repite el mismo mecanismo para un

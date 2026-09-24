@@ -1578,7 +1578,7 @@ avisar_skill_matada() {  # avisar_skill_matada <prompt> <logf> <minutos> [clave]
   id=$(jq -r '.id // empty' <<<"$card_json" 2>/dev/null)
   [ -n "$id" ] || return 0
   "$NOTION_BIN" comentar "$id" \
-    "Skill matada por tope de tiempo: $skill llevaba $minutos min corriendo (límite ${SKILL_KILL}s, DEVKIT_WATCH_SKILL_KILL). No se relanza sola; para reintentar a mano: dk $skill $clave" \
+    "Skill matada por tope de tiempo: $skill llevaba $minutos min corriendo (límite ${SKILL_KILL}s, DEVKIT_WATCH_SKILL_KILL). No se relanza sola; para reintentar a mano: dk $(prompt_en_linea "${prompt#/}")" \
     >/dev/null 2>&1
 }
 
