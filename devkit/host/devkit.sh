@@ -469,15 +469,38 @@ warn_host_stale() {
 }
 compose() { docker compose --project-directory "$dir" "$@"; }
 wait_ready() {
-  # El arranque tarda unos segundos (lee secretos, clona). Esperar al marcador
-  # evita seguir sin las variables cargadas.
+  # En frío (Docker recién levantado, secretos, clonar, restaurar el sandbox
+  # desde Dropbox, instalar el plugin de Notion) el arranque puede tardar
+  # varios minutos, no los segundos de un arranque en caliente: hasta 10 min.
+  # Mientras espera, la última línea [devkit] del log dice en qué va -sin el
+  # ruido de socat ni del proxy, que no llevan esa marca- y corta antes del
+  # límite si el contenedor ya no está corriendo, en vez de esperar a uno
+  # muerto (DEVKIT-159).
+  max="${DEVKIT_TEST_WAIT_MAX:-600}"
+  espera="${DEVKIT_TEST_WAIT_SLEEP:-1}"
   i=0
-  until docker exec "devkit-$proj" test -f /run/devkit/ready 2>/dev/null; do
-    i=$((i+1)); [ "$i" -gt 120 ] && { echo "el arranque no terminó en 120 s; mira 'devkit logs $proj'" >&2; return 1; }
-    [ "$i" -eq 1 ] && printf 'esperando el arranque del contenedor'
-    printf '.'; sleep 1
+  while :; do
+    estado="$(docker inspect -f '{{.State.Running}}' "devkit-$proj" 2>/dev/null)" || estado=""
+    if [ "$estado" != true ]; then
+      [ "$i" -gt 0 ] && printf '\n' >&2
+      estado="$(docker inspect -f '{{.State.Status}}' "devkit-$proj" 2>/dev/null)" || estado=""
+      echo "el contenedor devkit-$proj no está corriendo (estado ${estado:-desconocido}); levántalo con 'devkit up $proj'" >&2
+      return 1
+    fi
+    if docker exec "devkit-$proj" test -f /run/devkit/ready 2>/dev/null; then
+      break
+    fi
+    i=$((i+1))
+    if [ "$i" -gt "$max" ]; then
+      printf '\n' >&2
+      echo "el arranque no terminó en ${max} s; mira 'devkit logs $proj'" >&2
+      return 1
+    fi
+    linea="$(docker logs "devkit-$proj" 2>&1 | grep '\[devkit\]' | tail -1)" || linea=""
+    printf '\resperando el arranque de devkit-%s (%ss): %s\033[K' "$proj" "$i" "$linea"
+    sleep "$espera"
   done
-  [ "$i" -gt 0 ] && echo
+  [ "$i" -gt 0 ] && printf '\n'
   return 0
 }
 shell() { wait_ready && docker exec -it "devkit-$proj" zsh; }

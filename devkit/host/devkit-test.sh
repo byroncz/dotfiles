@@ -115,8 +115,20 @@ echo "docker $*" >> "$DEVKIT_TEST_LOG"
 case "${1:-}" in
   compose) exit 0 ;;
   inspect)
-    [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && { echo false; exit 0; }
-    echo true; exit 0 ;;
+    # DEVKIT-159: wait_ready pide dos formatos distintos: Running (true/false,
+    # como ya usaba `devkit awake`) y, solo cuando el contenedor no corre,
+    # Status (el texto del estado real, DEVKIT_TEST_DOWN_STATUS por defecto
+    # "Exited") para el mensaje.
+    case "$3" in
+      *State.Status*) echo "${DEVKIT_TEST_DOWN_STATUS:-Exited}"; exit 0 ;;
+      *)
+        [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && { echo false; exit 0; }
+        echo true; exit 0 ;;
+    esac ;;
+  logs)
+    # DEVKIT-159: wait_ready muestra la última línea [devkit] mientras espera.
+    printf '%s\n' "${DEVKIT_TEST_LOGS_CONTENT:-[devkit] arrancando}"
+    exit 0 ;;
   wait) echo 0; exit 0 ;;
   cp)
     [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && exit 1
@@ -166,7 +178,24 @@ case "${1:-}" in
         ref="${*#git -C /workspace rev-parse --short origin/}"
         [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
         printf 'abc1234'; exit 0 ;;
-      *) exit 0 ;;   # test -f ready, zsh, ...
+      # DEVKIT-159: wait_ready sondea el marcador de arranque. Sin ningún
+      # DEVKIT_TEST_READY_* aparece listo de inmediato (el comportamiento de
+      # siempre); DEVKIT_TEST_READY_NEVER=1 simula un contenedor que nunca
+      # termina de arrancar (para el caso "límite alcanzado");
+      # DEVKIT_TEST_READY_AFTER=<n> simula que el marcador aparece recién en
+      # el intento <n>, con un contador en un archivo porque cada llamada es
+      # un proceso nuevo del doble.
+      "test -f /run/devkit/ready")
+        [ "${DEVKIT_TEST_READY_NEVER:-0}" = 1 ] && exit 1
+        if [ -n "${DEVKIT_TEST_READY_AFTER:-}" ]; then
+          contador="$(dirname "$DEVKIT_TEST_LOG")/ready-counter"
+          n=$(( $(cat "$contador" 2>/dev/null || echo 0) + 1 ))
+          echo "$n" > "$contador"
+          [ "$n" -ge "$DEVKIT_TEST_READY_AFTER" ] && exit 0
+          exit 1
+        fi
+        exit 0 ;;
+      *) exit 0 ;;   # zsh, ...
     esac ;;
 esac
 exit 0
@@ -180,6 +209,7 @@ export PATH="$TMP/bin:$PATH"
 # que el workspace ya no tiene; el workspace lleva MARCA-NUEVA.
 escenario() {
   rm -rf "$TMP/root" "$TMP/ws" "$TMP/origin"
+  rm -f "$TMP/ready-counter"
   mkdir -p "$TMP/root/bin" "$TMP/root/p/template/marca" "$TMP/root/p/template/host" \
            "$TMP/root/p/template/vscode" "$TMP/ws/devkit/marca" "$TMP/ws/devkit/host" \
            "$TMP/ws/devkit/vscode" "$TMP/origin"
@@ -854,6 +884,49 @@ check        "code con open que falla termina en 0" 0 "$ESTADO"
 check_salida "code con open que falla igual imprime la URL" "http://127\.0\.0\.1:3000/\?tkn=secreto123"
 
 open_doble ausente
+
+# --- wait_ready (DEVKIT-159) --------------------------------------------------
+# `devkit code`/`devkit shell` esperan el arranque hasta 10 min mostrando el
+# avance, en vez de rendirse a los 120 s con puntos que no dicen nada; y
+# cortan antes del límite si el contenedor no está corriendo, en vez de
+# esperar a uno muerto.
+
+# El marcador tarda en aparecer (arranque en frío): sigue esperando, muestra
+# la última línea [devkit] del log mientras tanto, y continúa en cuanto
+# aparece.
+escenario dev
+export DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_AFTER=3 \
+  DEVKIT_TEST_LOGS_CONTENT='[devkit] restaurando sandbox.local desde Dropbox'
+corre code 0 secreto123
+unset DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_AFTER DEVKIT_TEST_LOGS_CONTENT
+check        "wait_ready: espera y sigue en cuanto aparece el marcador" 0 "$ESTADO"
+check_salida "wait_ready: muestra la última línea [devkit] del log mientras espera" \
+             "restaurando sandbox\.local desde Dropbox"
+check_salida "wait_ready: tras esperar, code igual imprime la URL" \
+             "http://127\.0\.0\.1:3000/\?tkn=secreto123"
+check_docker "wait_ready: consulta docker logs mientras espera" si '^docker logs devkit-p$'
+
+# El contenedor no está corriendo: corta de inmediato con el estado real, sin
+# esperar el límite.
+escenario dev
+export DEVKIT_TEST_DOWN_STATUS=Exited
+corre shell 1
+unset DEVKIT_TEST_DOWN_STATUS
+check        "wait_ready: contenedor no corriendo corta antes del límite" 1 "$ESTADO"
+check_salida "wait_ready: nombra el estado y manda a levantarlo" \
+             "el contenedor devkit-p no está corriendo \(estado Exited\); levántalo con 'devkit up p'"
+check_docker "wait_ready: contenedor no corriendo no abre un shell" no 'exec -it devkit-p zsh'
+
+# El marcador nunca aparece: corta al llegar al límite, no antes ni después.
+escenario dev
+export DEVKIT_TEST_WAIT_MAX=2 DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_NEVER=1
+corre shell
+unset DEVKIT_TEST_WAIT_MAX DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_NEVER
+check        "wait_ready: si el marcador nunca aparece corta en el límite" 1 "$ESTADO"
+check_salida "wait_ready: al llegar al límite manda a los logs" \
+             "el arranque no terminó en 2 s; mira 'devkit logs p'"
+check_docker "wait_ready: al llegar al límite sigue viendo el contenedor corriendo" si \
+             '^docker inspect -f \{\{\.State\.Running\}\} devkit-p$'
 
 # --- devkit awake ------------------------------------------------------------
 # caffeinate_doble <presente|ausente>: el doble registra la llamada y ejecuta lo
