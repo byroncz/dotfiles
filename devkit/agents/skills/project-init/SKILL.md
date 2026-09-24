@@ -18,9 +18,23 @@ repo en GitHub.
    su `AGENTS.md`.
 3. En la página de esa fila, crea dos vistas enlazadas:
    - `Kanban <CÓDIGO>` sobre Tareas, tipo tablero, agrupada por `Estado`,
-     filtrada por `Proyecto` = esta fila, ordenada por `Orden`.
+     filtrada por `Proyecto` = esta fila, ordenada por `Orden`, con las
+     mismas propiedades en la card que el kanban de DEVKIT: `Título`,
+     `Clave`, `Estado`, `Padre`, `Tipo`, `Prioridad`, `PR`. Todo tablero
+     nuevo nace con "ocultar grupos vacíos" encendido, y ni `create_view` ni
+     `update_view` de este MCP exponen cómo apagarlo (`configure` fuerza
+     `hideEmptyGroups: true` sin excepción, verificado probando `GROUP BY`,
+     `SHOW`/`HIDE` y una sobreescritura directa del campo): pide al humano
+     que lo apague a mano -un clic, menú "..." de la vista → Agrupar por →
+     apagar "Ocultar grupos vacíos"- y anótalo en el reporte final si quedó
+     pendiente.
    - `Documentación <CÓDIGO>` sobre Documentación, tipo tabla, filtrada por
      `Proyecto` = esta fila, ordenada por `Fecha` descendente.
+   - Las dos nacen tituladas "View of Tareas"/"View of Documentación": justo
+     después de crear cada una, renombra la base enlazada (no la vista) a
+     `Tareas <CÓDIGO>` y `Documentación <CÓDIGO>` con `notion-update-page`
+     (`update_properties`, propiedad `title`) sobre el `id` del bloque
+     `<database>` que devolvió `create_view`.
 4. Si `.devkit/devkit.toml` aún tiene `project = "PROJ"` (placeholder de
    `entrypoint.sh`), regístralo en git. Nunca hagas push directo a `main`:
    la protección de rama lo rechaza ("Changes must be made through a pull
@@ -41,6 +55,11 @@ repo en GitHub.
      card debe pasar a Lista antes del merge: `task-begin.sh` solo revisa que
      el workspace esté limpio, no que `main` traiga estos archivos, así que
      arrancaría la card sobre una rama creada desde ese `main` incompleto.
-5. Verifica y reporta con una lista de cuatro comprobaciones: fila creada
-   con URL, vista Kanban creada, vista Documentación creada, y
+5. Verifica y reporta con una lista de comprobaciones: fila creada con URL;
+   vista Kanban creada, agrupada por Estado y mostrando sus ocho columnas
+   (Por refinar, Backlog, Lista, En progreso, Revisión automática, Lista
+   para merge, Hecha, Bloqueada) para que el humano las contraste sin abrir
+   Notion, con una nota si "ocultar grupos vacíos" quedó pendiente de
+   apagar a mano; vista Documentación creada; las dos bases enlazadas
+   tituladas `Tareas <CÓDIGO>` y `Documentación <CÓDIGO>`; y
    `git status --porcelain --untracked-files=all` vacío.
