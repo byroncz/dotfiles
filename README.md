@@ -37,7 +37,11 @@ Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
 estado del editor VS Code del lado del servidor (estado de las extensiones,
 perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
 sí: esas vienen en la imagen, así que una que instales a mano desde el editor
-no sobrevive al `devkit rebuild`. `devkit down` no borra el volumen, igual que
+no sobrevive al `devkit rebuild`. Para que sí sobreviva, declárala en
+`extensions` de `.devkit/devkit.toml` (se suma a las del template, por
+ejemplo `extensions = ["GitHub.vscode-github-actions",
+"ms-python.python@2026.2.0"]`) y corre `devkit recreate`. `devkit down` no
+borra el volumen, igual que
 al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
 `docker volume rm editor-<proyecto>`.
 
@@ -50,7 +54,7 @@ al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
 | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | alpine 3.22 |
 | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. | 0.12.7 |
 | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. | — |
-| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. | 1.109.5 |
+| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Extensiones del template más `extensions` de `.devkit/devkit.toml`. | 1.109.5 |
 | zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. | starship 1.24.2 |
 | Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. | — |
 | Codex | Segundo agente, preparado pero no instalado: mismo `AGENTS.md` y skills. | — |
@@ -180,9 +184,12 @@ Detalle y convenciones de cada transición:
 - **Dropbox**: respaldo continuo de `sandbox.local/`, vía `rclone`. Se
   autoriza una vez con `dropbox-setup.sh`, que genera el secreto
   `rclone_conf_b64`.
-- **Open VSX**: registro de extensiones del editor. Se declaran en
-  `devkit/vscode/extensions.toml` y se resuelven contra Open VSX al
-  construir la imagen.
+- **Open VSX**: registro de extensiones del editor. El template las declara
+  en `devkit/vscode/extensions.toml`; un proyecto suma las suyas con
+  `extensions` en `.devkit/devkit.toml` (por ejemplo `extensions =
+  ["GitHub.vscode-github-actions", "ms-python.python@2026.2.0"]`, sin
+  versión resuelve a la más reciente), y si un id se repite gana la del
+  proyecto. Todas se resuelven contra Open VSX al construir la imagen.
 
 ## Documentación
 

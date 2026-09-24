@@ -11,7 +11,7 @@ debian | Debian | Imagen base sin lenguaje. Usuario `dev` sin `sudo`.
 tinyproxy | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`).
 uv | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos.
 python | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión.
-openvscode | openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token.
+openvscode | openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Extensiones del template más `extensions` de `.devkit/devkit.toml`.
 zsh | zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas.
 claude | Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion.
 codex | Codex | Segundo agente, preparado pero no instalado: mismo `AGENTS.md` y skills.

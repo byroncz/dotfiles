@@ -641,6 +641,108 @@ check        "línea con comentario al final no avisa" no \
 check        "línea con comentario al final se usa igual" \
              "Anthropic.claude-code=1.2.3" "$(env_ext)"
 
+# --- extensions de .devkit/devkit.toml (DEVKIT-181) --------------------------
+# `extensions` en .devkit/devkit.toml se suma a devkit/vscode/extensions.toml
+# del template, el mismo patrón que `apt` y `domains`. sync_toml_env (que
+# corre antes que resolve_extensions en recreate/rebuild/update) la deja
+# cruda en DEVKIT_PROJECT_EXTENSIONS; resolve_extensions la une, resolviendo
+# todo contra Open VSX igual que antes.
+escenario dev
+printf 'extensions = ["ms.otra@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check        "unión: incluye la del proyecto y la del template resuelta" \
+             "ms.otra=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "unión: termina bien" 0 "$ESTADO"
+
+escenario dev
+printf 'extensions = ["Anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check        "duplicado: gana la versión del proyecto" \
+             "Anthropic.claude-code=1.2.3" "$(env_ext)"
+check_docker "duplicado: no consulta el /latest del template para esa id" no \
+             'open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "duplicado: termina bien" 0 "$ESTADO"
+
+# Open VSX no distingue mayúsculas en el id: un duplicado con otra
+# capitalización también debe deduplicarse a favor del proyecto (H2, DEVKIT-181).
+escenario dev
+printf 'extensions = ["anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check        "duplicado con otra capitalización: gana la versión del proyecto" \
+             "anthropic.claude-code=1.2.3" "$(env_ext)"
+check_docker "duplicado con otra capitalización: no consulta el /latest del template" no \
+             'open-vsx\.org/api/Anthropic/claude-code/latest'
+check        "duplicado con otra capitalización: termina bien" 0 "$ESTADO"
+
+escenario dev
+printf 'extensions = ["ms.rota@9.9.9"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+corre recreate
+check_salida "404 de una extensión del proyecto: lo explica y nombra el origen" \
+             'extensión ms\.rota 9\.9\.9 no existe en Open VSX \(404\) \(declarada en el proyecto\)'
+check        "404 de una extensión del proyecto: se detiene" 1 "$ESTADO"
+check_docker "404 de una extensión del proyecto: no construye" no 'up -d'
+
+# Elemento inválido en extensions del proyecto: se avisa y se ignora, sin
+# impedir que las extensiones válidas (del proyecto y del template) resuelvan
+# (H4, DEVKIT-181).
+escenario dev
+printf 'extensions = ["sinpunto", "ms.valida@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check_salida "elemento inválido de extensions del proyecto avisa" \
+             'extensions de \.devkit/devkit\.toml tiene elementos que no calzan'
+check        "elemento inválido no impide construir con las válidas" \
+             "ms.valida=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "elemento inválido: termina bien" 0 "$ESTADO"
+
+# Motor incompatible de una extensión fija del proyecto: se detiene y nombra
+# el origen, igual que el 404 de arriba (H5, DEVKIT-181).
+escenario dev
+printf 'extensions = ["ms.vieja@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE_1_2_3="^2.0.0"
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE_1_2_3
+check_salida "motor incompatible de una extensión del proyecto nombra el origen" \
+             'ms\.vieja 1\.2\.3 exige VS Code \^2\.0\.0; la imagen lleva 1\.109\.5 \(declarada en el proyecto\)'
+check        "motor incompatible de una extensión del proyecto: se detiene" 1 "$ESTADO"
+check_docker "motor incompatible de una extensión del proyecto: no construye" no 'up -d'
+
+# "latest" declarado por el proyecto, sin @versión: se resuelve contra Open
+# VSX igual que "latest" del template (H5, DEVKIT-181).
+escenario dev
+printf 'extensions = ["ms.nueva"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+export DEVKIT_TEST_OVX_ENGINE="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=3.0.0
+corre recreate
+unset DEVKIT_TEST_OVX_ENGINE DEVKIT_TEST_OVX_VERSION
+check        "latest del proyecto sin versión se resuelve" \
+             "ms.nueva=3.0.0 Anthropic.claude-code=3.0.0" "$(env_ext)"
+check        "latest del proyecto sin versión: termina bien" 0 "$ESTADO"
+
+# `update` corre sync_toml_env antes de resolve_extensions: sin ese orden,
+# DEVKIT_PROJECT_EXTENSIONS quedaría con el valor de antes (o vacío) y la
+# extensión declarada en .devkit/devkit.toml no llegaría a la imagen
+# (H5, DEVKIT-181).
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\nextensions = ["ms.nueva@1.0.0"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
+export DEVKIT_TEST_OVX_VERSION=2.1.270
+corre update
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_VERSION
+check        "update resuelve las extensions del proyecto (sync_toml_env corre antes)" \
+             "ms.nueva=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
+check        "update con extensions del proyecto: termina bien" 0 "$ESTADO"
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"

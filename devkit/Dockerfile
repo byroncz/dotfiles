@@ -118,12 +118,13 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
  && claude --version
 
 # --- Extensiones del editor, desde Open VSX ---------------------------------
-# Versionadas en el template (devkit/vscode/extensions.toml), resueltas al
-# construir por devkit.sh (resolve_extensions) y pasadas aquí ya fijas, como
-# "ns.ext=versión" separadas por espacio: nunca "latest" a esta altura, y
-# nunca una extensión a mano en el contenedor. Por cada una se prueba primero
-# el paquete de su plataforma (Open VSX no publica todas así) y, si no existe,
-# el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
+# Versionadas en el template (devkit/vscode/extensions.toml) y, si el proyecto
+# suma las suyas con `extensions` en .devkit/devkit.toml (DEVKIT-181), también
+# esas: resueltas al construir por devkit.sh (resolve_extensions) y pasadas
+# aquí ya fijas, como "ns.ext=versión" separadas por espacio: nunca "latest" a
+# esta altura, y nunca una extensión a mano en el contenedor. Por cada una se
+# prueba primero el paquete de su plataforma (Open VSX no publica todas así)
+# y, si no existe, el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
 # (redirección de descarga) van en `domains` de .devkit/devkit.toml.
 # --retry reintenta un 5xx de Open VSX (un 404 del paquete de plataforma no
 # es un error transitorio, así que cae al universal sin reintentar).
