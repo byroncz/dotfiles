@@ -543,11 +543,6 @@ case "$cmd" in
   recreate) guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
   rebuild)  guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
-    mostrar_fuente_toml
-    if [ "$FUENTE_DIFIERE" = 1 ]; then
-      confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
-        || { echo "devkit: cancelado" >&2; exit 1; }
-    fi
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
     target="$(printf '%s\n' "$toml" | toml_field template)"
@@ -571,6 +566,14 @@ case "$cmd" in
     # `update` no llama). Se detiene en vez de construir un editor incompleto.
     grep -q 'EXTENSIONS:' "$dir/compose.yaml" 2>/dev/null \
       || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh $proj --version $target' antes de actualizar" >&2; exit 1; }
+    # El aviso y la confirmación van después de los chequeos de arriba (H2,
+    # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
+    # pedía aceptar una pérdida y después salía sin recrear nada.
+    mostrar_fuente_toml
+    if [ "$FUENTE_DIFIERE" = 1 ]; then
+      confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
+        || { echo "devkit: cancelado" >&2; exit 1; }
+    fi
     echo "devkit: actualizando template $current -> $target"
     tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
     curl -fsSL "https://github.com/$REPO/archive/refs/tags/v$target.tar.gz" | tar -xz -C "$tmp"

@@ -440,6 +440,17 @@ check        "update con toml limpio no avisa" no \
              "$(grep -q 'difiere de origin/main' "$OUT" && echo si || echo no)"
 check_salida "update con toml limpio sigue de largo" "actualizando template"
 
+# H2, DEVKIT-183: si el proyecto ya está en la versión destino (o en modo
+# dev), update sale sin recrear nada; el aviso y la confirmación no deben
+# pedirse antes de llegar a esa salida.
+escenario dev
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' > "$TMP/origin/main.toml"
+corre update
+check_salida "update en dev con toml sucio manda a recreate sin pedir confirmar" "usa 'devkit recreate p'"
+check        "update en dev con toml sucio no avisa del diff" no \
+             "$(grep -q 'difiere de origin/main' "$OUT" && echo si || echo no)"
+
 # --- devkit proxy (DEVKIT-182) ------------------------------------------------
 # Aplica al proxy los domains de una rama sin esperar el merge. El doble de
 # "origin" es $TMP/origin/<rama>.toml (ver el doble de `docker exec` arriba).
