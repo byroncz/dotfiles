@@ -120,6 +120,15 @@
 #                                                    bloquear (DEVKIT-105); <clave> es
 #                                                    obligatoria para pr-review, que no
 #                                                    la trae en el prompt
+#   devkit-run --skill-matada <prompt> <log>
+#     <minutos> [clave]                             comenta en la card la skill que
+#                                                    `watch_long_running` mató por tope
+#                                                    de tiempo (DEVKIT-185): causa,
+#                                                    duración y el comando para
+#                                                    relanzar a mano; nunca se relanza
+#                                                    sola. <clave> es obligatoria para
+#                                                    pr-review, que no la trae en el
+#                                                    prompt
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
@@ -227,6 +236,11 @@ EN_CURSO="${DEVKIT_EN_CURSO_FILE:-$RUN_DIR/en-curso}"
 # igual que el bucle: skill lenta, con el mismo umbral y sondeo.
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
 SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
+# Mismo tope duro de tiempo que `run_skill` en watch.sh (DEVKIT-185): a los
+# SKILL_KILL segundos, `watch_long_running` ya no solo avisa, mata el árbol
+# con `detener_arbol`. Repetida, no importada -mismo patrón que SKILL_TIMEOUT
+# arriba-.
+SKILL_KILL="${DEVKIT_WATCH_SKILL_KILL:-$((SKILL_TIMEOUT * 3))}"
 # Scripts bash que reemplazan a las skills task-close y task-block (DEVKIT-55).
 # Se pueden sustituir por un doble en la autoprueba, para no tocar Notion.
 TASK_BLOCK_BIN="${DEVKIT_TASK_BLOCK_BIN:-$HERE/task-block.sh}"
@@ -1370,11 +1384,45 @@ esperando_aprobacion() {
     <<<"$activas" 2>/dev/null
 }
 
+# Copia de `matar_arbol`/`detener_arbol` de watch.sh (DEVKIT-137/DEVKIT-185):
+# los dos scripts no se importan entre sí, mismo patrón que SKILL_TIMEOUT de
+# arriba. `--worker` nace con `setsid` en su propia sesión (ver más abajo), así
+# que un SIGTERM al pid que guarda `watch_long_running` no basta: bash no lo
+# reenvía a sus hijos, y `claude -p` es descendiente de ese pid, no el pid
+# mismo. `matar_arbol` baja por `pgrep -P` antes de matar cada nivel, de las
+# hojas hacia la raíz, para no perder de vista a un hijo cuyo padre ya murió.
+matar_arbol() {  # matar_arbol <pid> <señal>
+  local pid=$1 senal=$2 hijo
+  for hijo in $(pgrep -P "$pid" 2>/dev/null); do
+    matar_arbol "$hijo" "$senal"
+  done
+  kill -s "$senal" "$pid" 2>/dev/null
+}
+
+# SIGTERM al árbol completo y, si sigue vivo a los ALTO_KILL_WAIT segundos (10
+# por defecto, mismo tope que el modo alto de watch.sh), SIGKILL.
+ALTO_KILL_WAIT="${DEVKIT_WATCH_ALTO_KILL_WAIT:-10}"
+detener_arbol() {  # detener_arbol <pid raíz>
+  local pid=$1 esperado=0
+  matar_arbol "$pid" TERM
+  while [ "$esperado" -lt "$ALTO_KILL_WAIT" ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    esperado=$((esperado + 1))
+  done
+  kill -0 "$pid" 2>/dev/null && matar_arbol "$pid" KILL
+  return 0
+}
+
 # Alarma de skill lenta (DEVKIT-46), igual que `watch_long_running` en
 # watch.sh pero escribiendo directo a watch.log: `--worker` no comparte
 # proceso con el bucle, así que no puede reusar su función.
-watch_long_running() {  # watch_long_running <prompt> <pid>
-  local prompt=$1 pid=$2 waited=0 alarmed=0
+#
+# Tope duro (DEVKIT-185): a los SKILL_KILL segundos mata el árbol con
+# `detener_arbol` y deja los segundos corridos en <marca> justo antes de
+# matar, para que quien llama (`--worker`, más abajo) sepa al volver de `wait`
+# que el corte fue el tope de tiempo, no un error cualquiera.
+watch_long_running() {  # watch_long_running <prompt> <pid> <archivo de marca>
+  local prompt=$1 pid=$2 marca=$3 waited=0 alarmed=0
   while kill -0 "$pid" 2>/dev/null; do
     sleep "$SKILL_POLL"
     waited=$((waited + SKILL_POLL))
@@ -1382,6 +1430,13 @@ watch_long_running() {  # watch_long_running <prompt> <pid>
       printf '%s devkit-run "%s" ALARMA: lleva %s min corriendo (límite %ss)\n' \
         "$(date +%FT%T%:z)" "$prompt" "$((waited / 60))" "$SKILL_TIMEOUT" >> "$WATCH_LOG"
       alarmed=1
+    fi
+    if [ "$waited" -ge "$SKILL_KILL" ]; then
+      echo "$waited" > "$marca" 2>/dev/null
+      detener_arbol "$pid"
+      printf '%s devkit-run "%s" ALARMA: matada a los %s min (tope de tiempo, límite %ss)\n' \
+        "$(date +%FT%T%:z)" "$prompt" "$((waited / 60))" "$SKILL_KILL" >> "$WATCH_LOG"
+      break
     fi
   done
 }
@@ -1504,6 +1559,26 @@ avisar_presupuesto_excedido() {  # avisar_presupuesto_excedido <prompt> <logf> <
   [ -n "$id" ] || return 0
   "$NOTION_BIN" comentar "$id" \
     "Presupuesto excedido: $turnos turnos contra $presupuesto en $skill; el ciclo sigue" \
+    >/dev/null 2>&1
+}
+
+# DEVKIT-185: la ALARMA de la matada (`ALARMA: ... matada a los N min`) ya
+# quedó en watch.log, escrita por `watch_long_running` en el momento del
+# corte, en cualquiera de los dos scripts. Esta función solo avisa a la card,
+# con Clave: causa, duración y el comando para relanzar a mano -ninguna skill
+# matada por tope de tiempo se relanza sola-. Mismo patrón que
+# `avisar_presupuesto_excedido`, que quien llama (`--skill-matada` desde
+# watch.sh, o `--worker` acá mismo) comparte sin duplicar el trato con Notion.
+avisar_skill_matada() {  # avisar_skill_matada <prompt> <logf> <minutos> [clave]
+  local prompt=$1 logf=$2 minutos=$3 clave=${4:-} skill card_json id
+  skill=$(printf '%s' "$prompt" | sed -nE 's#^/([a-zA-Z-]+).*#\1#p')
+  [ -n "$clave" ] || clave=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
+  [ -n "$clave" ] || return 0
+  card_json=$("$NOTION_BIN" card "$clave" 2>/dev/null)
+  id=$(jq -r '.id // empty' <<<"$card_json" 2>/dev/null)
+  [ -n "$id" ] || return 0
+  "$NOTION_BIN" comentar "$id" \
+    "Skill matada por tope de tiempo: $skill llevaba $minutos min corriendo (límite ${SKILL_KILL}s, DEVKIT_WATCH_SKILL_KILL). No se relanza sola; para reintentar a mano: dk $(prompt_en_linea "${prompt#/}")" \
     >/dev/null 2>&1
 }
 
@@ -1984,7 +2059,17 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
           ;;
         *"terminó con error"*|*"falló (rc="*)
           estado=error
-          detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1); ver $logf" ;;
+          # DEVKIT-185: una skill matada por tope de tiempo también cae acá
+          # (rc distinto de cero, línea de cierre normal), pero con un
+          # detalle propio -"tope de tiempo"-, no el rc del SIGTERM/SIGKILL,
+          # que no dice nada por sí solo. `linea_fin`/`log` en ambos scripts
+          # dejan esa cuña dentro de la misma línea de cierre.
+          if printf '%s' "$fin" | grep -q "tope de tiempo"; then
+            detalle="tope de tiempo; ver $logf"
+          else
+            detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1); ver $logf"
+          fi
+          ;;
         *) estado=terminó ;;
       esac
     elif grep -qF -- "$logf" <<<"$procesos" \
@@ -4239,6 +4324,46 @@ FIN
     'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' \
     "$(grep -oE 'Presupuesto excedido: 99 turnos contra 15 en task-fix; el ciclo sigue' "$RONDA_DIR/comentarios" | head -1)"
   rm -f "$RONDA_DIR/card-DEVKIT-3.json" "$RONDA_DIR/comentarios"
+
+  # --- Tope duro de tiempo (DEVKIT-185) --------------------------------------
+  # A diferencia de SKILL_TIMEOUT, que solo avisa, DEVKIT_WATCH_SKILL_KILL sí
+  # corta: `watch_long_running` mata el árbol con `detener_arbol` y `--worker`
+  # avisa a la card, sin bloquear ni relanzar sola. El doble duerme mucho más
+  # que el tope (2s aquí, muy por debajo del real de 3600s) para que la
+  # prueba no tarde.
+  local matador bloqueo_matador espera_matada
+  matador="$tmp/claude-matador-tope"
+  cat >"$matador" <<'FIN'
+#!/usr/bin/env bash
+sleep 20
+printf '{"result":"no debería llegar","total_cost_usd":0.1,"num_turns":2}\n'
+FIN
+  chmod +x "$matador"
+  bloqueo_matador="$tmp/task-block-doble-matador"
+  printf '#!/usr/bin/env bash\nprintf "%%s|" "$@" >"%s/bloqueo-matador.args"\n' "$tmp" >"$bloqueo_matador"
+  chmod +x "$bloqueo_matador"
+  printf '{"id":"card-185","estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-185.json"
+  rm -f "$tmp/bloqueo-matador.args" "$RONDA_DIR/comentarios"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$matador" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo_matador" \
+    DEVKIT_WATCH_SKILL_TIMEOUT=100 DEVKIT_WATCH_SKILL_POLL=1 DEVKIT_WATCH_SKILL_KILL=2 \
+    bash "$HERE/devkit-run.sh" task-fix DEVKIT-185 >/dev/null 2>&1
+  espera_matada=0
+  while [ ! -s "$RONDA_DIR/comentarios" ] && [ "$espera_matada" -lt 100 ]; do
+    sleep 0.1
+    espera_matada=$((espera_matada + 1))
+  done
+  check "tope de tiempo: no bloquea la card con task-block.sh" 0 \
+    "$([ -e "$tmp/bloqueo-matador.args" ] && echo 1 || echo 0)"
+  check "tope de tiempo: watch_long_running deja su propia ALARMA al matar" 1 \
+    "$(grep -coE 'devkit-run "/task-fix DEVKIT-185" ALARMA: matada a los [0-9]+ min \(tope de tiempo, límite 2s\)' "$tmp/run/watch.log")"
+  check "tope de tiempo: la línea de cierre trae la cuña para el monitor (--estado)" 1 \
+    "$(grep -coE 'devkit-run "/task-fix DEVKIT-185" falló \(rc=[0-9]+\) \[task-fix-[0-9]+\]: tope de tiempo, matada a los [0-9]+ min' "$tmp/run/watch.log")"
+  check "tope de tiempo: el comentario trae la causa, la duración y el comando para relanzar a mano" 1 \
+    "$(grep -coE 'Skill matada por tope de tiempo: task-fix llevaba [0-9]+ min corriendo \(límite 2s, DEVKIT_WATCH_SKILL_KILL\)\. No se relanza sola; para reintentar a mano: dk task-fix DEVKIT-185' "$RONDA_DIR/comentarios")"
+  rm -f "$RONDA_DIR/card-DEVKIT-185.json" "$RONDA_DIR/comentarios"
 
   # --- Anulación de `model_index` por skill (DEVKIT-72) ---------------------
   # `epic-plan.model_index` anula `revision.model_index`, igual que ya hacía
@@ -7126,6 +7251,40 @@ FIN
     "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '2p' | cut -f5)"
 
+  # DEVKIT-185 H3 (revisión sobre el PR #129): la línea de cierre de una
+  # skill matada por tope de tiempo, en sus dos formas -bucle (watch.sh,
+  # "ALARMA: <id> terminó con error") y --worker (devkit-run.sh, "devkit-run
+  # \"...\" falló (rc=N) [<id>]")-, deja la fila como error con "tope de
+  # tiempo" en el detalle, no el rc del SIGTERM/SIGKILL.
+  local log_tope_bucle pslist_tope
+  log_tope_bucle="$tmp/tope-bucle-watch.log"
+  cat >"$log_tope_bucle" <<FIN
+2026-09-19T10:00:00Z task-fix-33-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-96" log=$est/task-fix-33-abc.log
+2026-09-19T10:20:00Z ALARMA: task-fix-33-abc terminó con error (rc=143): tope de tiempo, matada a los 20 min; ver $est/task-fix-33-abc.log
+FIN
+  pslist_tope="$tmp/ps-tope"
+  printf '#!/usr/bin/env bash\n' >"$pslist_tope"
+  chmod +x "$pslist_tope"
+  check "tope de tiempo (bucle): la fila queda como error" "error" \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_bucle" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-96" {print $5}')"
+  check "tope de tiempo (bucle): el detalle es tope de tiempo, no el rc" 1 \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_bucle" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-96" {print $6}' | grep -c '^tope de tiempo;')"
+
+  local log_tope_worker
+  log_tope_worker="$tmp/tope-worker-watch.log"
+  cat >"$log_tope_worker" <<FIN
+2026-09-19T11:00:00Z pr-review-9-def lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/pr-review 9" log=$est/pr-review-9-def.log
+2026-09-19T11:15:00Z devkit-run "/pr-review 9" falló (rc=143) [pr-review-9-def]: tope de tiempo, matada a los 15 min; ver $est/pr-review-9-def.log
+FIN
+  check "tope de tiempo (--worker): la fila queda como error" "error" \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_worker" "$ahora" \
+        | awk -F'\t' '$1 == "pr-review" {print $5}')"
+  check "tope de tiempo (--worker): el detalle es tope de tiempo, no el rc" 1 \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_worker" "$ahora" \
+        | awk -F'\t' '$1 == "pr-review" {print $6}' | grep -c '^tope de tiempo;')"
+
   # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
   # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
   local modelo_log
@@ -9182,7 +9341,9 @@ case "${1:-}" in
     # Las alarmas de skill lenta, error y pregunta abierta son las mismas de
     # `run_skill` en watch.sh (DEVKIT-46/DEVKIT-50): un lanzamiento manual o
     # desde task-close/epic-plan no corre por el bucle, así que las repite
-    # aquí en vez de perderlas.
+    # aquí en vez de perderlas. El tope duro de tiempo (DEVKIT-185) también:
+    # a los SKILL_KILL segundos, `watch_long_running` mata el árbol igual que
+    # en el bucle, y este `--worker` avisa a la card sin relanzar solo.
     cd "$WS" 2>/dev/null || exit 1
     mkdir -p "$RUN_DIR"
     prompt=${2:-} logf=${3:-} modelo=${4:-} esfuerzo=${5:-} presupuesto=${6:-} manual=${7:-} ronda=${8:--}
@@ -9260,14 +9421,32 @@ $card_md"
     # `--worker` en modo alto igual que mata lo que lanza el bucle.
     clave_en_curso=$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)
     printf '%s\t%s\t%s\n' "$(basename "$logf" .log)" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
-    watch_long_running "$prompt" "$skill_pid" &
+    # DEVKIT-185: archivo de marca del tope duro de tiempo, junto al resto de
+    # $RUN_DIR. `watch_long_running` lo escribe justo antes de matar el árbol,
+    # así que ya existe cuando `wait` de abajo vuelve a soltar el control acá
+    # -sin ninguna carrera con el momento en que el proceso muere-.
+    matada_file="$RUN_DIR/$(basename "$logf" .log).matada"
+    rm -f "$matada_file"
+    watch_long_running "$prompt" "$skill_pid" "$matada_file" &
     watcher_pid=$!
     wait "$skill_pid"
     rc=$?
     rm -f "$EN_CURSO"
-    kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+    # DEVKIT-185: si el corte fue el tope de tiempo, matarlo también es una
+    # carrera que puede cortarle a `watch_long_running` su propia ALARMA a
+    # medias (mismo trato que `run_skill` en watch.sh); alcanza con esperarlo.
+    if [ -f "$matada_file" ]; then
+      wait "$watcher_pid" 2>/dev/null
+    else
+      kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+    fi
     flock -u 9
     exec 9>&-
+    matada_min=""
+    if [ -f "$matada_file" ]; then
+      matada_min=$(( $(cat "$matada_file" 2>/dev/null || echo 0) / 60 ))
+      rm -f "$matada_file"
+    fi
     # rc=3 (DEVKIT-93, "nada que revisar") corta antes de cualquier `claude
     # -p` real: no hay session_id que buscar. Cubre task-start, task-close,
     # epic-plan y `devkit-run <skill> <Clave>` manual (DEVKIT-102, H2): antes
@@ -9280,6 +9459,13 @@ $card_md"
       # lanzó: ", `confirmar_arranque` lo reconoce igual que el corte de
       # task-begin.sh y no lo trata como un worker muerto.
       resumen_txt="no lanzó: $(tr '\n' ' ' < "$logf" 2>/dev/null | sed -E 's/[[:space:]]+$//')"
+    elif [ -n "$matada_min" ]; then
+      # DEVKIT-185: el log del `claude -p` matado a medias puede venir vacío o
+      # a medio escribir; `resumen` no tiene nada confiable que parsear, así
+      # que el resumen es el propio corte, con la misma cuña "tope de tiempo"
+      # que `estado_filas` busca para la columna DETALLE.
+      estado="falló (rc=$rc)"
+      resumen_txt="tope de tiempo, matada a los $matada_min min; ver $logf"
     else
       [ $rc -eq 0 ] || estado="falló (rc=$rc)"
       resumen_txt="$(resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "$ronda")"
@@ -9333,6 +9519,13 @@ $card_md"
       fi
     elif [ "$rc" -eq 3 ]; then
       : # DEVKIT-93: nada que revisar; no es un error, sin ALARMA.
+    elif [ -n "$matada_min" ]; then
+      # DEVKIT-185: `watch_long_running` ya dejó su propia ALARMA en el
+      # momento del corte, y `linea_fin` de arriba ya trae "tope de tiempo"
+      # en $resumen_txt -sin repetir una segunda ALARMA de error-. Acá solo
+      # avisa a la card: causa, duración y el comando para relanzar a mano.
+      # Nunca se relanza sola.
+      avisar_skill_matada "$prompt" "$logf" "$matada_min" "$clave_en_curso"
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
@@ -9374,6 +9567,16 @@ $card_md"
        && [ "${5:-}" -gt "${4:-}" ] 2>/dev/null; then
       avisar_presupuesto_excedido "${2:-}" "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     fi
+    exit 0
+    ;;
+  --skill-matada)
+    # --skill-matada <prompt> <logf> <minutos> [clave]: DEVKIT-185. `watch.sh`
+    # lanza pr-review, task-fix y task-document con `--sync`, un camino aparte
+    # de `--worker`; este subcomando le da el mismo aviso a la card tras el
+    # tope duro de tiempo, mismo `avisar_skill_matada` que usa `--worker`, para
+    # no duplicar el trato con Notion. `clave` viaja aparte porque
+    # `/pr-review <N>` no la trae en el prompt.
+    avisar_skill_matada "${2:-}" "${3:-}" "${4:-}" "${5:-}"
     exit 0
     ;;
   --estado)

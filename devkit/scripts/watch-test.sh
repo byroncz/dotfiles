@@ -400,6 +400,7 @@ corre_doble() {
   DEVKIT_WATCH_TRANSIENT_WAITS="${TRANSIENT_WAITS_OVERRIDE:-1,1,1}" \
   DEVKIT_WATCH_SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}" \
   DEVKIT_WATCH_SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}" \
+  DEVKIT_WATCH_SKILL_KILL="${DEVKIT_WATCH_SKILL_KILL:-3600}" \
     bash "$WATCH" --run-skill "${NOMBRE:-pr-review-9-abc1234}" "${PROMPT:-/pr-review 9}" "revisar:9:abc1234" \
     "${CLAVE_OVERRIDE:-}" \
     >"$OUT" 2>&1
@@ -720,6 +721,45 @@ check_igual "un error que no es de cuota no reintenta" 1 "$LLAMADAS"
 DEVKIT_TEST_SLEEP=2 DEVKIT_WATCH_SKILL_TIMEOUT=1 DEVKIT_WATCH_SKILL_POLL=1 corre_doble 0
 check_log "alarma por skill que excede el tiempo límite" \
   'ALARMA: pr-review-9-abc1234 lleva [0-9]+ min corriendo \(límite 1s\)'
+
+# --- Tope duro de tiempo (DEVKIT-185) ---------------------------------------
+# A diferencia de SKILL_TIMEOUT, que solo avisa, DEVKIT_WATCH_SKILL_KILL sí
+# mata el árbol con `detener_arbol` (mismo mecanismo del modo alto,
+# DEVKIT-137) y deja el sha como un fallo normal, sin relanzo automático. El
+# doble duerme mucho más que el tope (2s aquí, muy por debajo del real de
+# 3600s) para que la prueba no tarde; SKILL_TIMEOUT queda muy por encima para
+# no mezclar su propia alarma de "lento" con la de la matada.
+COMENTARIOS_MATADA="$TMP/comentarios-matada"
+NOTION_MATADA="$TMP/notion-matada"
+cat >"$NOTION_MATADA" <<FIN
+#!/usr/bin/env bash
+case "\$1" in
+  card) printf '{"id":"card-185","clave":"%s","estado":"Revisión automática"}\n' "\$2" ;;
+  comentar) printf '%s\t%s\n' "\$2" "\$3" >>"$COMENTARIOS_MATADA" ;;
+esac
+FIN
+chmod +x "$NOTION_MATADA"
+rm -f "$COMENTARIOS_MATADA"
+# PRESEED: en el bucle real, quien llama a `run_skill` (`caso_fix`/
+# `caso_revisar`/`caso_fix_humano`) ya marcó la clave en `launched` antes de
+# invocarlo -acá se reproduce eso a mano, ya que `--run-skill` la salta-, para
+# comprobar que el corte por tope de tiempo no la desmarca (a diferencia del
+# corte por modo alto, que sí la libera).
+PRESEED="revisar:9:abc1234" \
+DEVKIT_TEST_SLEEP=20 DEVKIT_WATCH_SKILL_TIMEOUT=100 DEVKIT_WATCH_SKILL_POLL=1 DEVKIT_WATCH_SKILL_KILL=2 \
+  NOTION_OVERRIDE="$NOTION_MATADA" CLAVE_OVERRIDE="DEVKIT-185" corre_doble 0
+check_log "tope de tiempo: watch_long_running deja su propia ALARMA al matar" \
+  'ALARMA: pr-review-9-abc1234 matada a los [0-9]+ min \(tope de tiempo, límite 2s\)'
+check_log "tope de tiempo: la línea de cierre queda como error con la cuña para el monitor" \
+  'ALARMA: pr-review-9-abc1234 terminó con error \(rc=[0-9]+\): tope de tiempo, matada a los [0-9]+ min'
+check_igual "tope de tiempo: no reintenta sola" 1 "$LLAMADAS"
+check_igual "tope de tiempo: el sha queda marcado como un fallo normal, sin relanzo automático" \
+  "revisar:9:abc1234" "$(tr '\n' ' ' <"$LAUNCHED_FILE" 2>/dev/null | sed 's/ *$//')"
+check_igual "tope de tiempo: comenta en la Clave pasada por watch.sh" "card-185" \
+  "$(cut -f1 "$COMENTARIOS_MATADA" 2>/dev/null)"
+check_igual "tope de tiempo: el comentario trae la causa, la duración y el comando para relanzar a mano" 1 \
+  "$(grep -coE 'Skill matada por tope de tiempo: pr-review llevaba [0-9]+ min corriendo \(límite 2s, DEVKIT_WATCH_SKILL_KILL\)\. No se relanza sola; para reintentar a mano: dk pr-review 9' "$COMENTARIOS_MATADA" 2>/dev/null)"
+NOTION_OVERRIDE="" CLAVE_OVERRIDE=""
 
 # 3. `result` que termina en pregunta en vez de resolver en un estado
 # observable (el defecto de DEVKIT-17/26/40 que AGENTS.md prohíbe).

@@ -106,6 +106,19 @@
 # (origen=bucle): ..." que `devkit-run --estado` usa para mostrarlo en curso
 # aunque su `claude -p` todavía no exista.
 #
+# Tope duro de tiempo (DEVKIT-185): a diferencia de SKILL_TIMEOUT, que solo
+# avisa, `DEVKIT_WATCH_SKILL_KILL` (3600s por defecto, 3x SKILL_TIMEOUT) sí
+# corta -matar tarde es mejor que no matar-. `watch_long_running` mata el
+# árbol con `detener_arbol` (el mismo mecanismo del modo alto, DEVKIT-137),
+# deja "ALARMA: <nombre> matada a los N min" en watch.log y, al volver de
+# `wait`, `run_skill` avisa a la card con la causa, la duración y el comando
+# para relanzar a mano (`dk <skill> <arg>`, con el mismo argumento del
+# prompt que se mató: Clave o número de PR) vía `devkit-run --skill-matada`
+# -sin relanzo automático, ni por cuota ni por error transitorio: el sha
+# queda marcado como un fallo normal, igual que cualquier otro rc distinto de
+# cero-. `devkit-run.sh --worker` repite el mismo mecanismo para un
+# lanzamiento manual o de task-close/epic-plan, que no corre por acá.
+#
 # Interruptor de tres posiciones (DEVKIT-136/DEVKIT-137), leído de MODO_FILE
 # con `devkit-run --pausa/--alto/--reanudar`: en pausa, `pasada` (el cuerpo
 # de cada vuelta) deja de llamar a `intentar_lanzar_cola` -no toma la
@@ -172,6 +185,13 @@ TRANSIENT_RETRIES=${#TRANSIENT_WAITS[@]}
 # alarma de skill lenta; `ORPHAN_MAX_AGE`, la de rama huérfana.
 SKILL_TIMEOUT="${DEVKIT_WATCH_SKILL_TIMEOUT:-1200}"
 SKILL_POLL="${DEVKIT_WATCH_SKILL_POLL:-5}"
+# Tope duro de tiempo (DEVKIT-185): a diferencia de SKILL_TIMEOUT, que solo
+# avisa, superar este umbral mata la skill con `detener_arbol` -matar tarde
+# es mejor que no matar-. 3x por defecto: deja margen a un task-start largo
+# (presupuesto 120 turnos) sin dejar que una skill perdida corra toda la
+# noche. `devkit-run.sh` repite la misma variable para `--worker`, mismo
+# patrón que SKILL_TIMEOUT/SKILL_POLL: los dos scripts no se importan entre sí.
+SKILL_KILL="${DEVKIT_WATCH_SKILL_KILL:-$((SKILL_TIMEOUT * 3))}"
 ORPHAN_MAX_AGE="${DEVKIT_WATCH_ORPHAN_AGE:-1800}"
 # Cierre y bloqueo en bash (DEVKIT-55). MERGED_INTERVAL es el tick del bucle de
 # PRs mergeados: una consulta liviana a GitHub (una lista de PRs) cada 30 s
@@ -650,6 +670,13 @@ transient_retry() {  # transient_retry <nombre> <prompt> <clave de launched o ->
 # segundo plano, avisa una sola vez si supera SKILL_TIMEOUT segundos. Sondea
 # cada SKILL_POLL segundos con `kill -0`; ambos son configurables para que la
 # prueba no tenga que esperar 20 minutos de verdad.
+#
+# Tope duro (DEVKIT-185): a los SKILL_KILL segundos ya no solo avisa, mata el
+# árbol completo con `detener_arbol` -mismo mecanismo que el vigilante de
+# modo alto, DEVKIT-137- y deja una marca en `$RUN_DIR/$name.matada` con los
+# segundos corridos, antes de matar: `run_skill` la lee al volver de `wait`
+# para saber que el corte fue el tope de tiempo, no un error cualquiera, y
+# avisar a la card en vez de reintentar solo.
 watch_long_running() {  # watch_long_running <nombre> <pid>
   local name=$1 pid=$2 waited=0 alarmed=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -658,6 +685,12 @@ watch_long_running() {  # watch_long_running <nombre> <pid>
     if [ "$alarmed" -eq 0 ] && [ "$waited" -ge "$SKILL_TIMEOUT" ]; then
       log "ALARMA: $name lleva $((waited / 60)) min corriendo (límite ${SKILL_TIMEOUT}s)"
       alarmed=1
+    fi
+    if [ "$waited" -ge "$SKILL_KILL" ]; then
+      echo "$waited" > "$RUN_DIR/$name.matada" 2>/dev/null
+      detener_arbol "$pid"
+      log "ALARMA: $name matada a los $((waited / 60)) min (tope de tiempo, límite ${SKILL_KILL}s)"
+      break
     fi
   done
 }
@@ -732,7 +765,7 @@ vigilar_alto_once() {
 # ("/task-fix DEVKIT-94 ..."); pr-review no ("/pr-review 68"), así que quien
 # la conoce por el título del PR la pasa aparte.
 run_skill() {
-  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales clave_en_curso
+  local name=$1 prompt=$2 key=${3:--} attempt=${4:-1} forzado=${5:-} clave=${6:-} logf rc summary modelo esfuerzo presupuesto ronda skill_pid watcher_pid resultado en_linea turnos_reales clave_en_curso matada_min
   # Guarda de modo (DEVKIT-137, H3 de la revisión sobre el PR #103): en alto
   # no se lanza nada, ni siquiera un relanzamiento ya programado por
   # `quota_pause`/`transient_retry` que despierta después del corte. Se
@@ -798,14 +831,34 @@ run_skill() {
   # bloquear la card correcta.
   clave_en_curso=${clave:-$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)}
   printf '%s\t%s\t%s\n' "$name" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
+  # Limpia una marca vieja del mismo nombre antes de vigilar de nuevo: si
+  # watch.sh murió entre una matada anterior y su lectura, un relanzamiento
+  # con el mismo nombre (mismo PR y sha) heredaba esa marca vieja y el corte
+  # nuevo se leía como tope de tiempo aunque terminara por su cuenta.
+  rm -f "$RUN_DIR/$name.matada"
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!
   wait "$skill_pid"
   rc=$?
   rm -f "$EN_CURSO"
-  kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+  # DEVKIT-185: si el corte fue el tope de tiempo, `watch_long_running` es
+  # quien mató a `$skill_pid` y todavía le falta dejar su propia ALARMA antes
+  # de volver -la marca ya existe para entonces, escrita antes de matar-.
+  # Matarlo también, como el resto de los casos, es una carrera real que
+  # puede cortarle esa línea a medias: alcanza con esperarlo, ya rompió su
+  # propio bucle y va a terminar solo, apenas un instante más tarde.
+  if [ -f "$RUN_DIR/$name.matada" ]; then
+    wait "$watcher_pid" 2>/dev/null
+  else
+    kill "$watcher_pid" 2>/dev/null; wait "$watcher_pid" 2>/dev/null
+  fi
   flock -u 9
   exec 9>&-
+  matada_min=""
+  if [ -f "$RUN_DIR/$name.matada" ]; then
+    matada_min=$(( $(cat "$RUN_DIR/$name.matada" 2>/dev/null || echo 0) / 60 ))
+    rm -f "$RUN_DIR/$name.matada"
+  fi
   summary=$("$DEVKIT_RUN" --resumen "$logf" "$modelo" "$esfuerzo" "$presupuesto" "${ronda:--}")
   # rc=3 (DEVKIT-93, "nada que revisar") corta antes de cualquier `claude -p`
   # real: no hay session_id que buscar. `guardar_transcripcion` vive en
@@ -825,6 +878,17 @@ run_skill() {
     # nada que revisar antes de gastar un turno de Opus; no es un error, así
     # que no hay ALARMA. El motivo va en texto plano en $logf, no JSON.
     log "$name no lanzó: nada que revisar ($(tr '\n' ' ' < "$logf" 2>/dev/null | sed -E 's/[[:space:]]+$//'))"
+  elif [ -n "$matada_min" ]; then
+    # DEVKIT-185: `watch_long_running` ya dejó su propia ALARMA en el momento
+    # del corte; esta repite el formato de la alarma 3 de 4 -mismo prefijo
+    # que reconoce `estado_filas` en devkit-run.sh para el cierre de la fila-
+    # con "tope de tiempo" para que la tabla de `--estado` distinga este
+    # corte de un error cualquiera. `--skill-matada` es quien de verdad avisa
+    # a la card (Notion), mismo patrón que `--presupuesto-corte`: sin
+    # relanzo automático, ni por cuota ni por error transitorio (el texto de
+    # este corte no calza con ninguno de los dos).
+    log "ALARMA: $name terminó con error (rc=$rc): tope de tiempo, matada a los $matada_min min; ver $logf"
+    "$DEVKIT_RUN" --skill-matada "$prompt" "$logf" "$matada_min" "$clave"
   else
     # Alarma 3 de 4: cualquier skill que termina con error.
     log "ALARMA: $name terminó con error (rc=$rc): $summary; ver $logf"
@@ -848,7 +912,11 @@ run_skill() {
   # lanzamiento, ambos gastan del mismo presupuesto de reintentos en vez de
   # tener el suyo propio. Es un caso raro -las dos causas de corte son
   # distintas- y no vale la pena separar los contadores para eso.
-  if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then
+  # DEVKIT-185: una skill matada por tope de tiempo nunca reintenta sola,
+  # aunque su log truncado calzara por casualidad con el texto de cuota o de
+  # un error transitorio -matar tarde es mejor que no matar, pero matar no
+  # autoriza a insistir sin que alguien lo pida-.
+  if [ $rc -ne 0 ] && [ $rc -ne 3 ] && [ -z "$matada_min" ]; then
     if quota_hit "$logf"; then
       quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
     elif transient_hit "$logf"; then
