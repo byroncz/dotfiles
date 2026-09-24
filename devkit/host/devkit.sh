@@ -507,7 +507,7 @@ wait_ready() {
       linea="$(docker logs "devkit-$proj" 2>&1 | grep '\[devkit\]' | tail -1)" || linea=""
     fi
     esc="$(printf '\033')"
-    linea="$(printf '%s' "$linea" | sed "s/${esc}\\[[0-9;]*m//g")"
+    linea="$(printf '%s' "$linea" | sed "s/${esc}\\[[0-9;]*[A-Za-z]//g" | tr -d '[:cntrl:]')"
     texto="esperando el arranque de devkit-$proj (${transcurrido}s): $linea"
     cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
     texto="$(printf '%s' "$texto" | cut -c "1-$((cols - 1))")"

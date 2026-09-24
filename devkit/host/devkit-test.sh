@@ -922,6 +922,18 @@ esc="$(printf '\033')"
 mas_larga="$(grep -o $'\r[^\r]*' "$OUT" | tr -d '\r' | sed "s/${esc}\\[K\$//" | awk '{ print length }' | sort -rn | head -1)"
 check "wait_ready: recorta la línea de avance al ancho de la terminal" 79 "${mas_larga:-0}"
 
+# El servicio `dev` corre con tty: true, así que docker logs devuelve cada
+# línea terminada en \r\n. Si no se limpia ese \r, printf '\r%s\033[K' vuelve
+# a la columna 0 con él y \033[K borra la fila entera: el avance queda en
+# blanco durante toda la espera (H4, DEVKIT-159).
+escenario dev
+export DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_AFTER=3 COLUMNS=200 \
+  DEVKIT_TEST_LOGS_CONTENT="$(printf '\033[1;34m[devkit]\033[0m restaurando sandbox\r')"
+corre code 0 secreto123
+unset DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_AFTER COLUMNS DEVKIT_TEST_LOGS_CONTENT
+check_salida "wait_ready: quita el \\r final bajo tty antes de imprimir el avance" \
+             $'restaurando sandbox\033\\[K'
+
 # El contenedor no está corriendo: corta de inmediato con el estado real, sin
 # esperar el límite.
 escenario dev
