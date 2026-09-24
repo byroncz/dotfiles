@@ -204,8 +204,13 @@ cerrar o bloquear la card, así que el dominio nunca le llega antes del merge
    la da (H4, DEVKIT-182). La rama ya la tienes de `headRefName` (paso 2); no
    la vuelvas a resolver con `git branch --show-current`, porque fuera de la
    copia de trabajo `/tmp/devkit-fix-<N>` devuelve `main`. Con esos dos
-   valores literales, bloquea la card:
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
+   valores literales, bloquea la card con `DEVKIT_HALLAZGO_TITULO` puesta
+   antes del comando: le dice a `task-block.sh` que además del bloqueo cree
+   una card de hallazgo en DEVKIT -un dominio nuevo bloqueado es un problema
+   del template, no de la card en curso (DEVKIT-184)-:
+   `DEVKIT_HALLAZGO_TITULO="Dominio <dominio(s)> bloqueado por el proxy en
+   <proyecto>"
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
    intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
    necesito: corre devkit proxy <proyecto> --ref <headRefName> en el host,
    mueve la card a En progreso y relanza con dk task-start <Clave>."`

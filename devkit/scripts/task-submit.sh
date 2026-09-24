@@ -163,7 +163,11 @@ if ! git -C "$WS" push -q origin "HEAD:$rama" 2>"$push_err"; then
     err "push rechazado por falta del scope workflow; card bloqueada, no reintentes"
     cat "$push_err" >&2
     rm -f "$push_err"
-    "$HERE/task-block.sh" "$clave" "Qué intenté: push de la rama; GitHub lo rechazó porque el token del bot no tiene el scope workflow. Qué necesito: añade el scope workflow al token del bot, mueve la card $clave a En progreso y relanza con dk task-start $clave" \
+    # DEVKIT-184: además de bloquear, task-block.sh deja un hallazgo en
+    # DEVKIT -el scope del token es un problema del template, no de este
+    # proyecto (ejemplo real: DEVKIT-180).
+    DEVKIT_HALLAZGO_TITULO="Token del bot sin scope workflow" \
+      "$HERE/task-block.sh" "$clave" "Qué intenté: push de la rama; GitHub lo rechazó porque el token del bot no tiene el scope workflow. Qué necesito: añade el scope workflow al token del bot, mueve la card $clave a En progreso y relanza con dk task-start $clave" \
       || err "$clave: push sin scope workflow, pero no pude bloquear la card"
     exit 1
   fi

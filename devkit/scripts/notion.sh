@@ -23,6 +23,16 @@
 #                                             Markdown que llega por stdin
 #                                             como bloques: {id,url}
 #                                             (task-document.sh, DEVKIT-92)
+#   notion.sh crear-tarea <código> <titulo> <tipo> <prioridad> [agente]
+#                                             crea una card en Tareas, Estado
+#                                             `Por refinar` y Nivel `Tarea`,
+#                                             en el proyecto de ese Código
+#                                             (resuelto en Proyectos, no el
+#                                             proyecto de quien llama), con el
+#                                             cuerpo Markdown que llega por
+#                                             stdin como bloques: {id,url,clave}
+#                                             (task-block.sh, DEVKIT-184: card
+#                                             de hallazgo sobre el template)
 #   notion.sh reemplazar-doc <page_id> [rama] [pr]
 #                                             vacía los bloques de una página
 #                                             de Documentación y los reemplaza
@@ -471,6 +481,29 @@ cmd_crear_doc() {  # cmd_crear_doc <tarea_id> <proyecto_id> <titulo> <tipo> [ram
   id=$(jq -r .id <<<"$page")
   agregar_bloques "$id" "$cuerpo" || return
   jq -c '{id, url}' <<<"$page"
+}
+
+cmd_crear_tarea() {  # cmd_crear_tarea <código> <titulo> <tipo> <prioridad> [agente]  (cuerpo Markdown por stdin)
+  local codigo=$1 titulo=$2 tipo=$3 prioridad=$4 agente=${5:-claude} cuerpo proyecto props page id
+  cuerpo=$(cat)
+  proyecto=$(proyecto_id "$codigo") || return
+  [ -n "$proyecto" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  props=$(jq -nc --arg titulo "$titulo" --arg proyecto "$proyecto" --arg tipo "$tipo" \
+    --arg prioridad "$prioridad" --arg agente "$agente" --arg db "$(db_id tareas)" '
+    {parent: {database_id: $db},
+     properties: {
+       "Título": {title: [{text: {content: $titulo}}]},
+       "Proyecto": {relation: [{id: $proyecto}]},
+       "Estado": {select: {name: "Por refinar"}},
+       "Nivel": {select: {name: "Tarea"}},
+       "Tipo": {select: {name: $tipo}},
+       "Prioridad": {select: {name: $prioridad}},
+       "Agente": {select: {name: $agente}}
+     }}') || return
+  page=$(api POST "/pages" "$props") || return
+  id=$(jq -r .id <<<"$page")
+  agregar_bloques "$id" "$cuerpo" || return
+  jq -c --arg codigo "$codigo" '{id, url, clave: ($codigo + "-" + (.properties.ID.unique_id.number | tostring))}' <<<"$page"
 }
 
 cmd_reemplazar_doc() {  # cmd_reemplazar_doc <page_id> [rama] [pr]  (cuerpo Markdown por stdin)
@@ -948,6 +981,21 @@ $largo
   check "crear-doc: agrega el cuerpo como bloques hijos de la página nueva" 1 \
     "$(grep -c '^PATCH /blocks/doc-nueva/children' "$tmp/llamadas")"
 
+  # crear-tarea (DEVKIT-184): resuelve el proyecto por Código en Proyectos
+  # -acá "DEVKIT", con el fixture proy-1 de más arriba-, no el de quien llama,
+  # y arma la Clave con el unique_id que devuelve la API al crear la página.
+  resp POST__pages '{"id":"tarea-nueva","url":"https://www.notion.so/tareanueva","properties":{"ID":{"unique_id":{"number":184}}}}'
+  resp PATCH__blocks_tarea-nueva_children '{"results":[]}'
+  got=$(printf '## Objetivo\nInvestigar el hallazgo.' \
+    | env "${entorno[@]}" bash "$HERE/notion.sh" crear-tarea DEVKIT "Dominio bloqueado" bug media)
+  check "crear-tarea: {id,url,clave} de la página nueva" \
+    '{"id":"tarea-nueva","url":"https://www.notion.so/tareanueva","clave":"DEVKIT-184"}' "$got"
+  check "crear-tarea: propiedades con Proyecto resuelto por Código, Por refinar y Tarea" \
+    '{"parent":{"database_id":"dbtareas"},"properties":{"Título":{"title":[{"text":{"content":"Dominio bloqueado"}}]},"Proyecto":{"relation":[{"id":"proy-1"}]},"Estado":{"select":{"name":"Por refinar"}},"Nivel":{"select":{"name":"Tarea"}},"Tipo":{"select":{"name":"bug"}},"Prioridad":{"select":{"name":"media"}},"Agente":{"select":{"name":"claude"}}}}' \
+    "$(grep '^POST /pages ' "$tmp/llamadas" | tail -1 | cut -d' ' -f3-)"
+  check "crear-tarea: agrega el cuerpo como bloques hijos de la página nueva" 1 \
+    "$(grep -c '^PATCH /blocks/tarea-nueva/children' "$tmp/llamadas")"
+
   # reemplazar-doc: vacía los bloques existentes (DELETE, uno por uno),
   # agrega los nuevos y solo toca Rama/PR si llegan.
   resp GET__blocks_doc-1_children '{"results":[{"id":"b1"},{"id":"b2"}],"has_more":false}'
@@ -1189,6 +1237,7 @@ case "${1:-}" in
   comentar) cmd_comentar "${2:?page_id}" "${3:-}" ;;
   documentacion) cmd_documentacion "${2:?page_id}" "${3:-}" ;;
   crear-doc) cmd_crear_doc "${2:?tarea_id}" "${3:?proyecto_id}" "${4:?titulo}" "${5:?tipo}" "${6:-}" "${7:-}" ;;
+  crear-tarea) cmd_crear_tarea "${2:?código}" "${3:?titulo}" "${4:?tipo}" "${5:?prioridad}" "${6:-}" ;;
   reemplazar-doc) cmd_reemplazar_doc "${2:?page_id}" "${3:-}" "${4:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   sueltas) cmd_sueltas "${2:?código}" ;;
