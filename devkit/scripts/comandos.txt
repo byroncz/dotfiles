@@ -5,7 +5,7 @@
 # comentarios (`#` sin `|`) y las líneas vacías se ignoran.
 
 ## En el host: `devkit`
-devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta). Antes de actuar dice de dónde sale `.devkit/devkit.toml` tras un recrear y la lista de `domains`/`apt` que va a escribir en `.env`.
+devkit up <proyecto> | devkit up ventas | Levanta los contenedores (construye la imagen si falta). Antes de actuar dice de dónde sale `.devkit/devkit.toml` tras un recrear y la lista de `domains`/`apt` que ya hay en `.env` y va a usar compose (no la sincroniza: eso solo lo hace recrear).
 devkit shell <proyecto> | devkit shell ventas | Abre una shell dentro del contenedor. Úsalo para depurar o correr un comando suelto sin abrir el editor.
 devkit code <proyecto> | devkit code ventas | Abre el editor en el navegador; sin `open`, imprime la URL para pegarla a mano (macOS la abre sola). Úsalo para el trabajo del día a día. Si ves `403 Forbidden`, la cookie del token venció (7 días, valor fijo de openvscode-server): repite el comando para renovarla.
 devkit stop <proyecto> | devkit stop ventas | Detiene sin perder nada.

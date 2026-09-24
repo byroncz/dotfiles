@@ -90,19 +90,33 @@ repo_ref() {
 # sin commit, o una rama de card que aún no llegó a origin/<rama>), avisa con
 # el diff de esos tres campos y dónde va cada uno; deja FUENTE_DIFIERE en 1
 # para que quien llame decida si eso exige una confirmación aparte.
+#
+# `up` no llama a sync_toml_env (no toca domains/apt de .env), así que ahí
+# "se van a escribir" sería falso: con --efectivo imprime en cambio la lista
+# que ya hay en $dir/.env, la que compose usa de verdad, leída sin depender
+# del contenedor (H1, DEVKIT-183: con el contenedor detenido, esa lista debe
+# verse igual).
 FUENTE_DIFIERE=0
-mostrar_fuente_toml() {
+mostrar_fuente_toml() {  # mostrar_fuente_toml [--efectivo]
   FUENTE_DIFIERE=0
   ref="$(repo_ref)"
+  if [ "${1:-}" = --efectivo ]; then
+    dom_env="$(sed -n 's/^DEVKIT_ALLOW_DOMAINS=//p' "$dir/.env" 2>/dev/null | tail -1)"
+    apt_env="$(sed -n 's/^DEVKIT_EXTRA_APT=//p' "$dir/.env" 2>/dev/null | tail -1)"
+    echo "devkit: domains que va a usar compose (de .env): ${dom_env:-(ninguno)}"
+    echo "devkit: apt que va a usar compose (de .env): ${apt_env:-(ninguno)}"
+  fi
   docker exec "devkit-$proj" true 2>/dev/null || {
     echo "devkit: $proj no responde; no se puede mostrar de dónde sale .devkit/devkit.toml" >&2
     return 0
   }
   toml_vivo="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || toml_vivo=""
-  dom_vivo="$(printf '%s\n' "$toml_vivo" | toml_list domains)"
-  apt_vivo="$(printf '%s\n' "$toml_vivo" | toml_list apt)"
-  echo "devkit: domains que se van a escribir en .env (del checkout vivo del contenedor): ${dom_vivo:-(ninguno)}"
-  echo "devkit: apt que se va a escribir en .env (del checkout vivo del contenedor): ${apt_vivo:-(ninguno)}"
+  if [ "${1:-}" != --efectivo ]; then
+    dom_vivo="$(printf '%s\n' "$toml_vivo" | toml_list domains)"
+    apt_vivo="$(printf '%s\n' "$toml_vivo" | toml_list apt)"
+    echo "devkit: domains que se van a escribir en .env (del checkout vivo del contenedor): ${dom_vivo:-(ninguno)}"
+    echo "devkit: apt que se va a escribir en .env (del checkout vivo del contenedor): ${apt_vivo:-(ninguno)}"
+  fi
   sha_ref=""; toml_ref=""
   if docker exec "devkit-$proj" sh -c '. /run/devkit/env 2>/dev/null; git -C /workspace fetch -q origin "$1"' sh "$ref" 2>/dev/null; then
     sha_ref="$(docker exec "devkit-$proj" git -C /workspace rev-parse --short "origin/$ref" 2>/dev/null)" || sha_ref=""
@@ -520,7 +534,7 @@ proxy_cmd() {  # proxy_cmd <rama-en-origin | "">
   echo "devkit: dominios aplicados al proxy: ${union:-(ninguno)}"
 }
 case "$cmd" in
-  up)       mostrar_fuente_toml; sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
+  up)       mostrar_fuente_toml --efectivo; sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
   awake)    awake ;;

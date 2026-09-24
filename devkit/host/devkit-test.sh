@@ -406,10 +406,21 @@ corre rebuild
 check_salida "rebuild con toml sucio avisa que difiere de origin/main" "difiere de origin/main"
 check_docker "rebuild con toml sucio igual reconstruye desde cero" si 'build --no-cache'
 
+# H1, DEVKIT-183: up no llama a sync_toml_env (no escribe domains/apt en
+# .env), así que muestra la lista que ya hay en .env -la que compose usa de
+# verdad-, no la del checkout vivo. Se ve igual con el contenedor caído,
+# porque se lee del Mac sin pasar por Docker.
 escenario dev
+printf 'DEVKIT_ALLOW_DOMAINS=b.com\nDEVKIT_EXTRA_APT=jq\n' >> "$TMP/root/p/.env"
 corre up
-check_salida "up muestra la lista de domains que va a escribir" "domains que se van a escribir en .env"
-check_salida "up muestra la lista de apt que va a escribir" "apt que se va a escribir en .env"
+check_salida "up muestra los domains efectivos de .env" 'domains que va a usar compose \(de \.env\): b\.com'
+check_salida "up muestra el apt efectivo de .env" 'apt que va a usar compose \(de \.env\): jq'
+
+escenario dev
+printf 'DEVKIT_ALLOW_DOMAINS=b.com\nDEVKIT_EXTRA_APT=jq\n' >> "$TMP/root/p/.env"
+corre up 1
+check_salida "up sin contenedor igual muestra los domains efectivos" 'domains que va a usar compose \(de \.env\): b\.com'
+check        "up sin contenedor no falla" 0 "$ESTADO"
 
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\ndomains  = ["c.com"]\n' > "$TMP/ws/.devkit/devkit.toml"
