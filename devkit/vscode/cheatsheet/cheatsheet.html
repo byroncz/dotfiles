@@ -79,12 +79,12 @@
 <div class="tarjeta">
   <div class="comando">dk --estado [--seguir]</div>
   <div class="ejemplo">$ dk --estado --seguir</div>
-  <p class="descripcion">Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor. La columna PR muestra <code>#&lt;número&gt;</code> y, en una terminal que soporte hipervínculos, se abre con Ctrl/Cmd+clic.</p>
+  <p class="descripcion">Muestra todos los agentes del contenedor y se refresca cada 3 s. Úsalo para saber qué está corriendo; Ctrl-C cierra solo el monitor. La columna PR muestra <code>#&lt;número&gt;</code> y, en una terminal que soporte hipervínculos, se abre con Ctrl/Cmd+clic. ESTADO se colorea: en curso y Lista para merge en verde y negrita, terminó en verde, Mergeado en morado y negrita, la bloqueada de un veredicto de pr-review en rojo y negrita, error/bloqueada genérica en rojo, no arrancó/no lanzó en gris y el resto en ámbar.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">dk --tablero [--seguir]</div>
   <div class="ejemplo">$ dk --tablero --seguir</div>
-  <p class="descripcion">Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada.</p>
+  <p class="descripcion">Muestra las cards activas del proyecto en una tabla y se refresca cada 30 s. Úsalo para ver de un vistazo qué card está en progreso o bloqueada. En progreso y Revisión automática se pintan del mismo verde y negrita que "en curso" en <code>dk --estado</code>.</p>
 </div>
 <div class="tarjeta">
   <div class="comando">dk &lt;skill&gt; &lt;Clave&gt;</div>
