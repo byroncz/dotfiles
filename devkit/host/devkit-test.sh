@@ -121,6 +121,9 @@ case "${1:-}" in
     # "Exited") para el mensaje.
     case "$3" in
       *State.Status*) echo "${DEVKIT_TEST_DOWN_STATUS:-Exited}"; exit 0 ;;
+      # DEVKIT-159 (H3): wait_ready pide el arranque del contenedor actual para
+      # no leer logs de un arranque anterior con --since.
+      *State.StartedAt*) echo "${DEVKIT_TEST_STARTED_AT:-2024-01-01T00:00:00.000000000Z}"; exit 0 ;;
       *)
         [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && { echo false; exit 0; }
         echo true; exit 0 ;;
@@ -895,16 +898,29 @@ open_doble ausente
 # la última línea [devkit] del log mientras tanto, y continúa en cuanto
 # aparece.
 escenario dev
-export DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_AFTER=3 \
+export DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_AFTER=3 COLUMNS=200 \
   DEVKIT_TEST_LOGS_CONTENT='[devkit] restaurando sandbox.local desde Dropbox'
 corre code 0 secreto123
-unset DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_AFTER DEVKIT_TEST_LOGS_CONTENT
+unset DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_AFTER COLUMNS DEVKIT_TEST_LOGS_CONTENT
 check        "wait_ready: espera y sigue en cuanto aparece el marcador" 0 "$ESTADO"
 check_salida "wait_ready: muestra la última línea [devkit] del log mientras espera" \
              "restaurando sandbox\.local desde Dropbox"
 check_salida "wait_ready: tras esperar, code igual imprime la URL" \
              "http://127\.0\.0\.1:3000/\?tkn=secreto123"
-check_docker "wait_ready: consulta docker logs mientras espera" si '^docker logs devkit-p$'
+check_docker "wait_ready: consulta docker logs del arranque actual mientras espera" si \
+             '^docker logs --since [^[:space:]]+ devkit-p$'
+
+# La línea de avance se recorta al ancho de la terminal: con un prefijo de
+# ~47 columnas y una línea real de entrypoint.sh de más de 200 caracteres, no
+# debe pasar de 80 columnas ni saltar de fila (H1, DEVKIT-159).
+escenario dev
+export DEVKIT_TEST_WAIT_SLEEP=0 DEVKIT_TEST_READY_AFTER=3 COLUMNS=80 \
+  DEVKIT_TEST_LOGS_CONTENT="[devkit] $(printf 'x%.0s' $(seq 1 200))"
+corre code 0 secreto123
+unset DEVKIT_TEST_WAIT_SLEEP DEVKIT_TEST_READY_AFTER COLUMNS DEVKIT_TEST_LOGS_CONTENT
+esc="$(printf '\033')"
+mas_larga="$(grep -o $'\r[^\r]*' "$OUT" | tr -d '\r' | sed "s/${esc}\\[K\$//" | awk '{ print length }' | sort -rn | head -1)"
+check "wait_ready: recorta la línea de avance al ancho de la terminal" 79 "${mas_larga:-0}"
 
 # El contenedor no está corriendo: corta de inmediato con el estado real, sin
 # esperar el límite.

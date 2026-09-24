@@ -471,18 +471,23 @@ compose() { docker compose --project-directory "$dir" "$@"; }
 wait_ready() {
   # En frío (Docker recién levantado, secretos, clonar, restaurar el sandbox
   # desde Dropbox, instalar el plugin de Notion) el arranque puede tardar
-  # varios minutos, no los segundos de un arranque en caliente: hasta 10 min.
-  # Mientras espera, la última línea [devkit] del log dice en qué va -sin el
-  # ruido de socat ni del proxy, que no llevan esa marca- y corta antes del
-  # límite si el contenedor ya no está corriendo, en vez de esperar a uno
-  # muerto (DEVKIT-159).
+  # varios minutos, no los segundos de un arranque en caliente: hasta 10 min,
+  # medidos en tiempo real y no en número de intentos, que docker inspect y
+  # docker exec ya alargan un poco en cada vuelta. Mientras espera, la última
+  # línea [devkit] del log del arranque actual (no de uno anterior, con
+  # --since) dice en qué va -sin el ruido de socat ni del proxy, que no
+  # llevan esa marca-, recortada al ancho de la terminal para que ocupe una
+  # sola línea que se sobreescribe, y corta antes del límite si el contenedor
+  # ya no está corriendo, en vez de esperar a uno muerto (DEVKIT-159).
   max="${DEVKIT_TEST_WAIT_MAX:-600}"
   espera="${DEVKIT_TEST_WAIT_SLEEP:-1}"
-  i=0
+  inicio="$(date +%s)"
+  inicio_contenedor="$(docker inspect -f '{{.State.StartedAt}}' "devkit-$proj" 2>/dev/null)" || inicio_contenedor=""
+  mostrado=0
   while :; do
     estado="$(docker inspect -f '{{.State.Running}}' "devkit-$proj" 2>/dev/null)" || estado=""
     if [ "$estado" != true ]; then
-      [ "$i" -gt 0 ] && printf '\n' >&2
+      [ "$mostrado" -gt 0 ] && printf '\n' >&2
       estado="$(docker inspect -f '{{.State.Status}}' "devkit-$proj" 2>/dev/null)" || estado=""
       echo "el contenedor devkit-$proj no está corriendo (estado ${estado:-desconocido}); levántalo con 'devkit up $proj'" >&2
       return 1
@@ -490,17 +495,27 @@ wait_ready() {
     if docker exec "devkit-$proj" test -f /run/devkit/ready 2>/dev/null; then
       break
     fi
-    i=$((i+1))
-    if [ "$i" -gt "$max" ]; then
+    transcurrido=$(( $(date +%s) - inicio ))
+    if [ "$transcurrido" -ge "$max" ]; then
       printf '\n' >&2
       echo "el arranque no terminó en ${max} s; mira 'devkit logs $proj'" >&2
       return 1
     fi
-    linea="$(docker logs "devkit-$proj" 2>&1 | grep '\[devkit\]' | tail -1)" || linea=""
-    printf '\resperando el arranque de devkit-%s (%ss): %s\033[K' "$proj" "$i" "$linea"
+    if [ -n "$inicio_contenedor" ]; then
+      linea="$(docker logs --since "$inicio_contenedor" "devkit-$proj" 2>&1 | grep '\[devkit\]' | tail -1)" || linea=""
+    else
+      linea="$(docker logs "devkit-$proj" 2>&1 | grep '\[devkit\]' | tail -1)" || linea=""
+    fi
+    esc="$(printf '\033')"
+    linea="$(printf '%s' "$linea" | sed "s/${esc}\\[[0-9;]*m//g")"
+    texto="esperando el arranque de devkit-$proj (${transcurrido}s): $linea"
+    cols="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+    texto="$(printf '%s' "$texto" | cut -c "1-$((cols - 1))")"
+    printf '\r%s\033[K' "$texto"
+    mostrado=1
     sleep "$espera"
   done
-  [ "$i" -gt 0 ] && printf '\n'
+  [ "$mostrado" -gt 0 ] && printf '\n'
   return 0
 }
 shell() { wait_ready && docker exec -it "devkit-$proj" zsh; }
