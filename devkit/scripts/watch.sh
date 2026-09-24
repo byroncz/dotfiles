@@ -831,6 +831,11 @@ run_skill() {
   # bloquear la card correcta.
   clave_en_curso=${clave:-$(printf '%s' "$prompt" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1)}
   printf '%s\t%s\t%s\n' "$name" "${clave_en_curso:--}" "$skill_pid" > "$EN_CURSO" 2>/dev/null
+  # Limpia una marca vieja del mismo nombre antes de vigilar de nuevo: si
+  # watch.sh murió entre una matada anterior y su lectura, un relanzamiento
+  # con el mismo nombre (mismo PR y sha) heredaba esa marca vieja y el corte
+  # nuevo se leía como tope de tiempo aunque terminara por su cuenta.
+  rm -f "$RUN_DIR/$name.matada"
   watch_long_running "$name" "$skill_pid" &
   watcher_pid=$!
   wait "$skill_pid"
