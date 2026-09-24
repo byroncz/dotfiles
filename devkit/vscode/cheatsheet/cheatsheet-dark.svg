@@ -9,9 +9,9 @@
 <text x="60" y="70" class="t">devkit: comandos</text>
 <text x="60" y="150" class="g">En el host</text>
 <text x="60" y="184" class="c">devkit code &lt;proyecto&gt;</text>
-<text x="60" y="202" class="d">Abre el editor en el navegador; sin open, imprime la URL …</text>
+<text x="60" y="202" class="d">Espera el arranque, hasta 10 min mostrando el avance, y a…</text>
 <text x="60" y="230" class="c">devkit shell &lt;proyecto&gt;</text>
-<text x="60" y="248" class="d">Abre una shell dentro del contenedor. Úsalo para depurar …</text>
+<text x="60" y="248" class="d">Espera el arranque, hasta 10 min mostrando el avance, y a…</text>
 <text x="60" y="276" class="c">devkit recreate &lt;proyecto&gt;</text>
 <text x="60" y="294" class="d">Recrea los contenedores, reconstruyendo solo las capas qu…</text>
 <text x="60" y="322" class="c">devkit rebuild &lt;proyecto&gt;</text>
