@@ -18,6 +18,21 @@
 # tomado por quien llama, que se declara con DEVKIT_LOCK_HELD=1).
 #
 # Idempotente: una card ya `Bloqueada` no se toca ni se vuelve a comentar.
+#
+# DEVKIT_HALLAZGO_TITULO (DEVKIT-184): si llega no vacía, además de bloquear
+# crea una card de hallazgo en el proyecto DEVKIT (resuelto por su Código en
+# Proyectos, no el de la Clave que se bloquea) con ese título, Tipo `bug` y
+# Estado `Por refinar`, con el motivo en el cuerpo bajo "Detectado en
+# <Clave>". Así el reporte de un problema del template (dominio del proxy,
+# scope del token, cualquier otro) cae en el Kanban de DEVKIT, no en el del
+# proyecto donde se detectó -antes había que reasignarlo a mano (DEVKIT-180 a
+# 183). Si la Clave bloqueada ya es de DEVKIT, no tiene sentido duplicarla:
+# se omite. Si ya hay una card sin Hecha con ese mismo título en DEVKIT (el
+# mismo bloqueo repetido, u otra card u otro proyecto con el mismo hallazgo),
+# tampoco se crea otra: se comenta en la que ya existe (H2, DEVKIT-184). Un
+# fallo al crear o comentar el hallazgo no revierte el bloqueo ya hecho, solo
+# avisa por stderr: quien bloquea a un humano no debe quedar sin respuesta
+# por un problema aparte al crear el reporte.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
@@ -61,6 +76,27 @@ printf '%s task-block.sh %s Bloqueada desde %s: %s\n' "$(date +%FT%T%:z)" "$clav
   >>"${DEVKIT_WATCH_LOG:-$RUN_DIR/watch.log}" 2>/dev/null
 "$NOTION" comentar "$id" "Bloqueada desde $anterior.
 $motivo" || echo "task-block: $clave quedó Bloqueada pero no pude comentar el motivo" >&2
+
+# Card de hallazgo en DEVKIT (DEVKIT-184): ver la nota del encabezado.
+if [ -n "${DEVKIT_HALLAZGO_TITULO:-}" ]; then
+  codigo_origen=${clave%-*}
+  if [ "$codigo_origen" = DEVKIT ]; then
+    echo "task-block: $clave ya es de DEVKIT; no se duplica el hallazgo"
+  else
+    existente=$("$NOTION" buscar-titulo DEVKIT "$DEVKIT_HALLAZGO_TITULO" 2>/dev/null)
+    if [ -n "$existente" ]; then
+      "$NOTION" comentar "$(jq -r .id <<<"$existente")" "Detectado también en $clave: $motivo" \
+        && echo "task-block: ya había un hallazgo en DEVKIT ($(jq -r .clave <<<"$existente")); se agregó un comentario" \
+        || echo "task-block: $clave quedó Bloqueada pero no pude comentar el hallazgo existente en DEVKIT" >&2
+    else
+      hallazgo=$(printf '## Objetivo\nRevisar y corregir el hallazgo detectado en %s (proyecto %s).\n\n## Criterios de aceptación\n- Por definir al refinar la card.\n\n## Notas\nDetectado en %s al bloquear la card:\n%s' \
+          "$clave" "$codigo_origen" "$clave" "$motivo" \
+        | "$NOTION" crear-tarea DEVKIT "$DEVKIT_HALLAZGO_TITULO" bug media) \
+        && echo "task-block: hallazgo creado en DEVKIT: $(jq -r .url <<<"$hallazgo")" \
+        || echo "task-block: $clave quedó Bloqueada pero no pude crear el hallazgo en DEVKIT" >&2
+    fi
+  fi
+fi
 
 # Trabajo sin guardar en la rama de la card.
 guardar_wip() {

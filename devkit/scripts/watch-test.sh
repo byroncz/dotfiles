@@ -830,6 +830,8 @@ case "$1" in
   documentacion) cat "$d/doc-$2.json" 2>/dev/null || exit 1 ;;
   criterios) cat "$d/criterios-$2.txt" 2>/dev/null ;;
   set|comentar) ;;
+  crear-tarea) cat >"$d/crear-tarea-cuerpo"; echo '{"id":"hallazgo-1","url":"https://notion.so/hallazgo-1","clave":"DEVKIT-999"}' ;;
+  buscar-titulo) cat "$d/buscar-titulo-resultado.json" 2>/dev/null ;;
   *) exit 64 ;;
 esac
 FIN
@@ -1331,6 +1333,45 @@ salida=$(env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez 2>&1
 check_igual "task-block: card Hecha no se toca" 0 "$(grep -cE '^(set|comentar)' "$N/llamadas")"
 check_igual "task-block: card Hecha se niega con error" "1 task-block: DEVKIT-3 ya está Hecha; no se bloquea" \
   "$rc $salida"
+
+# DEVKIT_HALLAZGO_TITULO (DEVKIT-184): una card de otro proyecto bloqueada
+# con la variable puesta crea el hallazgo en DEVKIT, con "Detectado en
+# ITSC-1" en el cuerpo; sin la variable no crea nada; y una Clave que ya es
+# de DEVKIT la omite aunque la variable venga puesta (H1 de pr-review #128).
+jq -nc '{id: "card-itsc-1", estado: "Revisión automática"}' >"$N/card-ITSC-1.json"
+rm -f "$N/crear-tarea-cuerpo"; : >"$N/llamadas"
+env "${ciclo_env[@]}" DEVKIT_HALLAZGO_TITULO="Dominio bloqueado" \
+  bash "$HERE/task-block.sh" ITSC-1 "Qué intenté: X. Qué necesito: Y." >/dev/null 2>&1
+check_igual "hallazgo: crea exactamente un crear-tarea DEVKIT con el título" 1 \
+  "$(grep -c '^crear-tarea DEVKIT Dominio bloqueado bug media$' "$N/llamadas")"
+check_igual "hallazgo: el cuerpo cita la card y el proyecto de origen" 1 \
+  "$(grep -c 'Detectado en ITSC-1' "$N/crear-tarea-cuerpo" 2>/dev/null)"
+
+jq -nc '{id: "card-itsc-2", estado: "Revisión automática"}' >"$N/card-ITSC-2.json"
+rm -f "$N/crear-tarea-cuerpo"; : >"$N/llamadas"
+env "${ciclo_env[@]}" bash "$HERE/task-block.sh" ITSC-2 "otro motivo" >/dev/null 2>&1
+check_igual "hallazgo: sin DEVKIT_HALLAZGO_TITULO no crea nada en DEVKIT" 0 \
+  "$(grep -c '^crear-tarea' "$N/llamadas")"
+
+tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
+: >"$N/llamadas"
+env "${ciclo_env[@]}" DEVKIT_HALLAZGO_TITULO="Dominio bloqueado" \
+  bash "$HERE/task-block.sh" DEVKIT-3 "motivo" >/dev/null 2>&1
+check_igual "hallazgo: una Clave ya de DEVKIT no se duplica" 0 \
+  "$(grep -c '^crear-tarea' "$N/llamadas")"
+
+# Ya existe un hallazgo con ese título en DEVKIT (H2 de pr-review #128): en
+# vez de crear otro, comenta en el que ya está.
+jq -nc '{id: "card-itsc-3", estado: "Revisión automática"}' >"$N/card-ITSC-3.json"
+jq -nc '{id: "hallazgo-viejo", url: "https://notion.so/hallazgo-viejo", clave: "DEVKIT-500"}' \
+  >"$N/buscar-titulo-resultado.json"
+: >"$N/llamadas"
+env "${ciclo_env[@]}" DEVKIT_HALLAZGO_TITULO="Dominio bloqueado" \
+  bash "$HERE/task-block.sh" ITSC-3 "otra vez el mismo dominio" >/dev/null 2>&1
+check_igual "hallazgo duplicado: no crea una card nueva" 0 "$(grep -c '^crear-tarea' "$N/llamadas")"
+check_igual "hallazgo duplicado: comenta en el hallazgo existente" 1 \
+  "$(grep -c '^comentar hallazgo-viejo Detectado también en ITSC-3' "$N/llamadas")"
+rm -f "$N/buscar-titulo-resultado.json"
 
 # --- task-fix vacío con CAMBIOS vigente (DEVKIT-57) --------------------------
 # El caso `fix` completo por el hook --fix: devkit-run.sh real, un doble de

@@ -78,11 +78,18 @@ dominio nunca le llega antes del merge (DEVKIT-182). En su lugar:
    no como sustitución dentro del argumento de `task-block.sh`: en headless,
    un `Bash` con `$(...)` pide aprobación aunque el prefijo esté permitido, y
    nadie la da (H4, DEVKIT-182). Con esos dos valores literales, bloquea la
-   card:
-   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué
-   intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué
-   necesito: corre devkit proxy <proyecto> --ref <rama> en el host, mueve la
-   card a En progreso y relanza con dk task-start <Clave>."`
+   card con `DEVKIT_HALLAZGO_TITULO` puesta antes del comando, en la misma
+   línea -no en una asignación de shell aparte, que sin `export` no pasaría
+   al comando siguiente-: es lo que le dice a `task-block.sh` que además del
+   bloqueo cree una card de hallazgo en DEVKIT, con `<proyecto>` y
+   `<dominio(s)>` ya resueltos, no un problema de la card en curso sino del
+   template (DEVKIT-184: sin esto, cada dominio nuevo bloqueado se perdía
+   sin quedar registrado para el template):
+
+   ```sh
+   DEVKIT_HALLAZGO_TITULO="Dominio <dominio(s)> bloqueado por el proxy en <proyecto>" "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué intenté: <comando> necesitaba <dominio(s)>, rechazados por el proxy. Qué necesito: corre devkit proxy <proyecto> --ref <rama> en el host, mueve la card a En progreso y relanza con dk task-start <Clave>."
+   ```
+
    y termina ahí: el motivo lleva los dominios para que el humano los vea
    antes de aprobarlos.
 

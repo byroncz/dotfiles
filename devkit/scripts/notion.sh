@@ -23,6 +23,21 @@
 #                                             Markdown que llega por stdin
 #                                             como bloques: {id,url}
 #                                             (task-document.sh, DEVKIT-92)
+#   notion.sh crear-tarea <código> <titulo> <tipo> <prioridad> [agente]
+#                                             crea una card en Tareas, Estado
+#                                             `Por refinar` y Nivel `Tarea`,
+#                                             en el proyecto de ese Código
+#                                             (resuelto en Proyectos, no el
+#                                             proyecto de quien llama), con el
+#                                             cuerpo Markdown que llega por
+#                                             stdin como bloques: {id,url,clave}
+#                                             (task-block.sh, DEVKIT-184: card
+#                                             de hallazgo sobre el template)
+#   notion.sh buscar-titulo <código> <titulo> card con ese Título exacto y
+#                                             Estado != Hecha en ese proyecto,
+#                                             o vacío: {id,url,clave}
+#                                             (task-block.sh, DEVKIT-184: no
+#                                             duplicar un hallazgo repetido)
 #   notion.sh reemplazar-doc <page_id> [rama] [pr]
 #                                             vacía los bloques de una página
 #                                             de Documentación y los reemplaza
@@ -471,6 +486,44 @@ cmd_crear_doc() {  # cmd_crear_doc <tarea_id> <proyecto_id> <titulo> <tipo> [ram
   id=$(jq -r .id <<<"$page")
   agregar_bloques "$id" "$cuerpo" || return
   jq -c '{id, url}' <<<"$page"
+}
+
+cmd_crear_tarea() {  # cmd_crear_tarea <código> <titulo> <tipo> <prioridad> [agente]  (cuerpo Markdown por stdin)
+  local codigo=$1 titulo=$2 tipo=$3 prioridad=$4 agente=${5:-claude} cuerpo proyecto props page id
+  cuerpo=$(cat)
+  proyecto=$(proyecto_id "$codigo") || return
+  [ -n "$proyecto" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  props=$(jq -nc --arg titulo "$titulo" --arg proyecto "$proyecto" --arg tipo "$tipo" \
+    --arg prioridad "$prioridad" --arg agente "$agente" --arg db "$(db_id tareas)" '
+    {parent: {database_id: $db},
+     properties: {
+       "Título": {title: [{text: {content: $titulo}}]},
+       "Proyecto": {relation: [{id: $proyecto}]},
+       "Estado": {select: {name: "Por refinar"}},
+       "Nivel": {select: {name: "Tarea"}},
+       "Tipo": {select: {name: $tipo}},
+       "Prioridad": {select: {name: $prioridad}},
+       "Agente": {select: {name: $agente}}
+     }}') || return
+  page=$(api POST "/pages" "$props") || return
+  id=$(jq -r .id <<<"$page")
+  agregar_bloques "$id" "$cuerpo" || return
+  jq -c --arg codigo "$codigo" '{id, url, clave: ($codigo + "-" + (.properties.ID.unique_id.number | tostring))}' <<<"$page"
+}
+
+# Evita duplicar un hallazgo (DEVKIT-184, H2 de pr-review #128): una card
+# con el mismo Título que no esté Hecha en ese proyecto, o vacío si no hay
+# ninguna. Quien llama decide si comenta ahí en vez de crear otra.
+cmd_buscar_titulo() {  # cmd_buscar_titulo <código> <titulo>
+  local codigo=$1 titulo=$2 proy filas
+  proy=$(proyecto_id "$codigo") || return
+  [ -n "$proy" ] || { err "no hay proyecto con Código $codigo"; return 1; }
+  filas=$(query_all "$(db_id tareas)" "$(jq -nc --arg p "$proy" --arg t "$titulo" \
+    '{and: [{property: "Proyecto", relation: {contains: $p}},
+            {property: "Título", title: {equals: $t}},
+            {property: "Estado", select: {does_not_equal: "Hecha"}}]}')") || return
+  jq -c --arg codigo "$codigo" '(.[0] // empty) | select(. != null) |
+    {id, url, clave: ($codigo + "-" + (.properties.ID.unique_id.number | tostring))}' <<<"$filas"
 }
 
 cmd_reemplazar_doc() {  # cmd_reemplazar_doc <page_id> [rama] [pr]  (cuerpo Markdown por stdin)
@@ -948,6 +1001,42 @@ $largo
   check "crear-doc: agrega el cuerpo como bloques hijos de la página nueva" 1 \
     "$(grep -c '^PATCH /blocks/doc-nueva/children' "$tmp/llamadas")"
 
+  # crear-tarea (DEVKIT-184): resuelve el proyecto por Código en Proyectos
+  # -acá "DEVKIT", con el fixture proy-1 de más arriba-, no el de quien llama,
+  # y arma la Clave con el unique_id que devuelve la API al crear la página.
+  resp POST__pages '{"id":"tarea-nueva","url":"https://www.notion.so/tareanueva","properties":{"ID":{"unique_id":{"number":184}}}}'
+  resp PATCH__blocks_tarea-nueva_children '{"results":[]}'
+  got=$(printf '## Objetivo\nInvestigar el hallazgo.' \
+    | env "${entorno[@]}" bash "$HERE/notion.sh" crear-tarea DEVKIT "Dominio bloqueado" bug media)
+  check "crear-tarea: {id,url,clave} de la página nueva" \
+    '{"id":"tarea-nueva","url":"https://www.notion.so/tareanueva","clave":"DEVKIT-184"}' "$got"
+  check "crear-tarea: propiedades con Proyecto resuelto por Código, Por refinar y Tarea" \
+    '{"parent":{"database_id":"dbtareas"},"properties":{"Título":{"title":[{"text":{"content":"Dominio bloqueado"}}]},"Proyecto":{"relation":[{"id":"proy-1"}]},"Estado":{"select":{"name":"Por refinar"}},"Nivel":{"select":{"name":"Tarea"}},"Tipo":{"select":{"name":"bug"}},"Prioridad":{"select":{"name":"media"}},"Agente":{"select":{"name":"claude"}}}}' \
+    "$(grep '^POST /pages ' "$tmp/llamadas" | tail -1 | cut -d' ' -f3-)"
+  check "crear-tarea: agrega el cuerpo como bloques hijos de la página nueva" 1 \
+    "$(grep -c '^PATCH /blocks/tarea-nueva/children' "$tmp/llamadas")"
+
+  # buscar-titulo (DEVKIT-184, H1/H2 de pr-review #128): resuelve el
+  # proyecto por Código en Proyectos -el mismo filtro que crear-tarea, no el
+  # de quien llama- y filtra Tareas por ese Proyecto, Título exacto y Estado
+  # != Hecha, para que quien bloquea pueda comentar en un hallazgo existente
+  # en vez de duplicarlo.
+  : >"$tmp/llamadas"
+  resp POST__databases_dbtareas_query '{"results":[{"id":"hallazgo-3","url":"https://www.notion.so/hallazgo3","properties":{"ID":{"unique_id":{"number":3}}}}],"has_more":false}'
+  got=$(env "${entorno[@]}" bash "$HERE/notion.sh" buscar-titulo DEVKIT "Dominio bloqueado")
+  check "buscar-titulo: resuelve el proyecto filtrando Proyectos por Código" \
+    '{"property":"Código","rich_text":{"equals":"DEVKIT"}}' \
+    "$(grep '^POST /databases/dbproy/query ' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+  check "buscar-titulo: filtra Tareas por Proyecto, Título exacto y Estado != Hecha" \
+    '{"and":[{"property":"Proyecto","relation":{"contains":"proy-1"}},{"property":"Título","title":{"equals":"Dominio bloqueado"}},{"property":"Estado","select":{"does_not_equal":"Hecha"}}]}' \
+    "$(grep '^POST /databases/dbtareas/query ' "$tmp/llamadas" | tail -1 | cut -d' ' -f3- | jq -c .filter)"
+  check "buscar-titulo: {id,url,clave} de la card encontrada" \
+    '{"id":"hallazgo-3","url":"https://www.notion.so/hallazgo3","clave":"DEVKIT-3"}' "$got"
+
+  resp POST__databases_dbtareas_query '{"results":[],"has_more":false}'
+  got=$(env "${entorno[@]}" bash "$HERE/notion.sh" buscar-titulo DEVKIT "Dominio bloqueado")
+  check "buscar-titulo: vacío si no hay ninguna card con ese Título" "" "$got"
+
   # reemplazar-doc: vacía los bloques existentes (DELETE, uno por uno),
   # agrega los nuevos y solo toca Rama/PR si llegan.
   resp GET__blocks_doc-1_children '{"results":[{"id":"b1"},{"id":"b2"}],"has_more":false}'
@@ -1189,6 +1278,8 @@ case "${1:-}" in
   comentar) cmd_comentar "${2:?page_id}" "${3:-}" ;;
   documentacion) cmd_documentacion "${2:?page_id}" "${3:-}" ;;
   crear-doc) cmd_crear_doc "${2:?tarea_id}" "${3:?proyecto_id}" "${4:?titulo}" "${5:?tipo}" "${6:-}" "${7:-}" ;;
+  crear-tarea) cmd_crear_tarea "${2:?código}" "${3:?titulo}" "${4:?tipo}" "${5:?prioridad}" "${6:-}" ;;
+  buscar-titulo) cmd_buscar_titulo "${2:?código}" "${3:?titulo}" ;;
   reemplazar-doc) cmd_reemplazar_doc "${2:?page_id}" "${3:-}" "${4:-}" ;;
   hijas) cmd_hijas "${2:?page_id}" ;;
   sueltas) cmd_sueltas "${2:?código}" ;;

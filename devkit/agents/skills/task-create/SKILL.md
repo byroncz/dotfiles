@@ -14,6 +14,15 @@ lenguaje natural de una o varias tareas, o una Épica.
    Tareas, y la clave `project` de `.devkit/devkit.toml` para el
    código del proyecto. Busca en Proyectos la fila cuyo Código coincide; su
    URL es la relación Proyecto.
+   Excepción (DEVKIT-184): si la tarea es un hallazgo sobre el template
+   -algo roto o incompleto cuya corrección vive en el repo del template
+   (scripts, skills, monitor, `devkit.toml` como esquema), no en el repo de
+   este proyecto-, busca en cambio la fila cuyo Código es `DEVKIT` y úsala
+   como Proyecto. Sin esto la card contamina el Kanban de un proyecto que no
+   puede resolverla y hay que reasignarla a mano, como pasó con DEVKIT-180 a
+   183. Agrega en `## Notas` una línea "Detectado en `<Clave>`" con la Clave
+   de la card sobre la que trabajabas cuando lo notaste (o, sin una card
+   activa, el proyecto), para no perder de dónde salió.
 2. Para cada tarea pedida, decide `Nivel`: Épica si agrupa varios entregables
    o exige más de un día de trabajo; Tarea si cabe en una rama de menos de un
    día. Una Tarea suelta sin Épica es válida.
