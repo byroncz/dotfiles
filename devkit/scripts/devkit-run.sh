@@ -7251,6 +7251,40 @@ FIN
     "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '2p' | cut -f5)"
 
+  # DEVKIT-185 H3 (revisión sobre el PR #129): la línea de cierre de una
+  # skill matada por tope de tiempo, en sus dos formas -bucle (watch.sh,
+  # "ALARMA: <id> terminó con error") y --worker (devkit-run.sh, "devkit-run
+  # \"...\" falló (rc=N) [<id>]")-, deja la fila como error con "tope de
+  # tiempo" en el detalle, no el rc del SIGTERM/SIGKILL.
+  local log_tope_bucle pslist_tope
+  log_tope_bucle="$tmp/tope-bucle-watch.log"
+  cat >"$log_tope_bucle" <<FIN
+2026-09-19T10:00:00Z task-fix-33-abc lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-96" log=$est/task-fix-33-abc.log
+2026-09-19T10:20:00Z ALARMA: task-fix-33-abc terminó con error (rc=143): tope de tiempo, matada a los 20 min; ver $est/task-fix-33-abc.log
+FIN
+  pslist_tope="$tmp/ps-tope"
+  printf '#!/usr/bin/env bash\n' >"$pslist_tope"
+  chmod +x "$pslist_tope"
+  check "tope de tiempo (bucle): la fila queda como error" "error" \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_bucle" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-96" {print $5}')"
+  check "tope de tiempo (bucle): el detalle es tope de tiempo, no el rc" 1 \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_bucle" "$ahora" \
+        | awk -F'\t' '$2 == "DEVKIT-96" {print $6}' | grep -c '^tope de tiempo;')"
+
+  local log_tope_worker
+  log_tope_worker="$tmp/tope-worker-watch.log"
+  cat >"$log_tope_worker" <<FIN
+2026-09-19T11:00:00Z pr-review-9-def lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/pr-review 9" log=$est/pr-review-9-def.log
+2026-09-19T11:15:00Z devkit-run "/pr-review 9" falló (rc=143) [pr-review-9-def]: tope de tiempo, matada a los 15 min; ver $est/pr-review-9-def.log
+FIN
+  check "tope de tiempo (--worker): la fila queda como error" "error" \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_worker" "$ahora" \
+        | awk -F'\t' '$1 == "pr-review" {print $5}')"
+  check "tope de tiempo (--worker): el detalle es tope de tiempo, no el rc" 1 \
+    "$(PS_BIN="$pslist_tope" LOCK="$est/skill.lock" estado_filas "$log_tope_worker" "$ahora" \
+        | awk -F'\t' '$1 == "pr-review" {print $6}' | grep -c '^tope de tiempo;')"
+
   # DEVKIT-81: columna modelo, con las dos formas de la línea "lanzando" en el
   # mismo log -la vieja, sin modelo=/esfuerzo=/ronda=, y la nueva.
   local modelo_log
