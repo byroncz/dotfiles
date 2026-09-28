@@ -9894,9 +9894,17 @@ $card_md"
     # -la misma que usa el DETALLE de `--estado`/`--tablero`- la recorta y le
     # quita tabs/saltos de línea: un `result` de verdad con un texto largo no
     # debe convertirse en un argumento kilométrico para `task-block.sh`.
+    #
+    # H3 de pr-review en el PR #135: el rc distinto de cero no siempre
+    # significa que la skill se quedó muda a mitad de camino -un pr-review
+    # que ya publicó su veredicto (card fuera de Revisión automática/En
+    # progreso) puede terminar igual con `is_error`-. El motivo no afirma
+    # "sin publicar veredicto": `forzar_task_block` ya agrega el Estado real
+    # de la card antes del bloqueo, que basta para saber si alcanzó a
+    # publicar algo.
     forzar_task_block "${2:-}" "${3:-}" \
-      "terminó con error (rc=${4:-?}) sin publicar veredicto; última línea del log: $(ultima_linea_log "${3:-}")" \
-      "ALARMA: terminó con error (rc=${4:-?}) sin publicar veredicto" \
+      "terminó con error (rc=${4:-?}); última línea del log: $(ultima_linea_log "${3:-}")" \
+      "ALARMA: terminó con error (rc=${4:-?})" \
       "${5:-}"
     exit 0
     ;;
