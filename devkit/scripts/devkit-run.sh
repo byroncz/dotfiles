@@ -1052,12 +1052,21 @@ $cabecera"
   # así que un `run_claude` disparado desde dentro de un `while read` sobre
   # una tubería (watch.sh) sigue sin tragarse la fila que le tocaba a la
   # siguiente vuelta.
-  local prompt_file rc
+  # H5 de pr-review en el PR #135: si el árbol muere antes de este `rm -f`
+  # (tope de tiempo, modo alto matando con SIGTERM/SIGKILL), el temporal
+  # -con el diff completo de un PR, cientos de KB- queda huérfano en /tmp en
+  # cada corte. Se abre un descriptor sobre el archivo y se borra la ruta de
+  # inmediato: el inodo sigue vivo mientras el descriptor esté abierto (lo
+  # que necesita `claude` para leer el prompt de su stdin), pero no queda
+  # ningún archivo que barrer si el proceso muere a mitad de camino.
+  local prompt_file rc prompt_fd
   prompt_file=$(mktemp)
   printf '%s' "$prompt" > "$prompt_file"
-  "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" <"$prompt_file"
-  rc=$?
+  exec {prompt_fd}<"$prompt_file"
   rm -f "$prompt_file"
+  "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" <&"$prompt_fd"
+  rc=$?
+  exec {prompt_fd}<&-
   return "$rc"
 }
 
