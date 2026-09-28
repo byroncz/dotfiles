@@ -174,10 +174,12 @@ trabajo de `pr-review`.
    `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave>
    "<hallazgo> necesita una decisión que no me corresponde: <detalle>.
    Responde en el PR <url>, no aquí en la card: el bucle retoma solo en
-   cuanto comentes ahí."`. `decide` en watch.sh reconoce la frase fija del
-   hallazgo y trata tu siguiente comentario humano en el PR como si
-   respondiera a un bloqueo, aunque el informe siga en CAMBIOS y el PR no
-   tenga marcador `devkit-block`; no hace falta relanzar nada a mano.
+   cuanto comentes ahí."`. `task-block.sh` deja el marcador `devkit-block` en
+   el PR (DEVKIT-246): `decide` en watch.sh lo lee igual que cualquier otro
+   bloqueo. De respaldo, si el marcador faltara, también reconoce la frase
+   fija del hallazgo y trata tu siguiente comentario humano en el PR como si
+   respondiera a un bloqueo, aunque el informe siga en CAMBIOS. No hace falta
+   relanzar nada a mano.
 10. Limpia la copia de trabajo si la creaste (paso 4).
 11. `touch /run/devkit/poke`. Despierta a `watch.sh`, que duerme en tramos de
     5 s, para que no espere el resto del intervalo antes de revisar la
