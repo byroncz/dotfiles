@@ -9649,6 +9649,27 @@ FIN
     "$(printf '%s' "$ts_err" | grep -c 'no es una rama de card válida')"
   git -C "$ts_dir/ws" switch -q feat/DEVKIT-9301-probar-task-submit
 
+  # Rama sin commits ni cambios (DEVKIT-217): antes moría más tarde y peor,
+  # en "falta pr-body.md" (o, si ese archivo existiera, en un push que no
+  # sube nada y un gh pr create sin diff). Ahora sale apenas pasa el paso 1,
+  # sin correr ruff/pytest/bash -n ni tocar Notion.
+  git -C "$ts_dir/ws" fetch -q origin main
+  git -C "$ts_dir/ws" switch -q -c feat/DEVKIT-9302-probar-rama-vacia origin/main
+  git -C "$ts_dir/ws" push -q -u origin feat/DEVKIT-9302-probar-rama-vacia
+  local gh_lineas_previas
+  gh_lineas_previas=$(wc -l <"$ts_dir/llamadas-gh")
+  ts_err=$(env "${ts_env[@]}" bash "$HERE/task-submit.sh" --mensaje "feat(DEVKIT-9302): no debería pasar" 2>&1 >/dev/null)
+  check "task-submit (rama vacía): sale con 1" 1 "$?"
+  check "task-submit (rama vacía): remite a dk task-start" 1 \
+    "$(printf '%s' "$ts_err" | grep -c 'dk task-start DEVKIT-9302')"
+  check "task-submit (rama vacía): dice que la card sigue En progreso" 1 \
+    "$(printf '%s' "$ts_err" | grep -c 'sigue En progreso')"
+  check "task-submit (rama vacía): no toca la card" 1 \
+    "$([ -e "$ts_dir/set-llamadas" ] && echo 0 || echo 1)"
+  check "task-submit (rama vacía): no llama a gh" "$gh_lineas_previas" \
+    "$(wc -l <"$ts_dir/llamadas-gh")"
+  git -C "$ts_dir/ws" switch -q feat/DEVKIT-9301-probar-task-submit
+
   # Sin .devkit/pr-body.md (H7): falla antes de comitear y subir, no después.
   rm -f "$ts_dir/ws/.devkit/pr-body.md"
   echo "cambio que no debería subirse" >>"$ts_dir/ws/archivo.txt"

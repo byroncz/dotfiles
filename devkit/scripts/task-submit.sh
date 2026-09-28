@@ -17,12 +17,18 @@
 # Pasos, en orden, deteniéndose con salida 1 y el error en el primero que
 # falle:
 #   1. Localiza la card por Notion y verifica que está `En progreso`.
-#   2. Verificación local: `ruff check .` y `ruff format --check .` si hay
+#   2. Nada que entregar (DEVKIT-217): si la rama no tiene commits sobre
+#      `origin/main` ni cambios sin comitear, sale con 1 sin correr
+#      verificaciones ni tocar Notion. El caso real: una card se bloqueó
+#      antes de escribir una línea, el humano la devolvió a `En progreso` y
+#      se lanzó `task-submit` igual; el fallo llegaba tarde y confuso, en
+#      "falta pr-body.md".
+#   3. Verificación local: `ruff check .` y `ruff format --check .` si hay
 #      Python (pyproject.toml en la raíz); `uv run pytest` si hay `tests/` o
 #      `pytest` mencionado en pyproject.toml; `bash -n` sobre cada `.sh`
 #      tocado en esta rama (diff contra `main` más los cambios sin commit).
-#   3. Comitea lo pendiente con `--mensaje` y hace push.
-#   4. Lee `.devkit/pr-body.md` (las secciones `## Qué cambia`, `## Cómo
+#   4. Comitea lo pendiente con `--mensaje` y hace push.
+#   5. Lee `.devkit/pr-body.md` (las secciones `## Qué cambia`, `## Cómo
 #      probarlo` y `## Cambios requeridos`, que escribió la skill), le agrega
 #      `## Card` con la URL de la card en Notion y la línea "Implementado con
 #      ..." (DEVKIT-58, de `DEVKIT_MODEL`/`DEVKIT_EFFORT`, las que exporta
@@ -30,14 +36,14 @@
 #      `origin/main` supera 300 líneas, agrega el aviso "Diff grande: N
 #      líneas" (DEVKIT-94): no bloquea, solo lo anota para quien revisa. Crea
 #      el PR si no existe uno para la rama, o actualiza su cuerpo si ya existe.
-#   5. Activa auto-merge (`gh pr merge --auto --squash`). Si GitHub lo
+#   6. Activa auto-merge (`gh pr merge --auto --squash`). Si GitHub lo
 #      rechaza porque el repo no lo permite, comenta el motivo en la card y
 #      sigue: no es un fallo de este script.
-#   6. `PR` y `Estado=Revisión automática` en la card.
-#   7. Comenta en la card las dos primeras líneas de "Qué cambia".
-#   8. `touch /run/devkit/poke`, para que `watch.sh` no espere el resto del
+#   7. `PR` y `Estado=Revisión automática` en la card.
+#   8. Comenta en la card las dos primeras líneas de "Qué cambia".
+#   9. `touch /run/devkit/poke`, para que `watch.sh` no espere el resto del
 #      intervalo antes de lanzar `pr-review`.
-#   9. Borra `.devkit/pr-body.md` (vive fuera de git, en `.gitignore`).
+#  10. Borra `.devkit/pr-body.md` (vive fuera de git, en `.gitignore`).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
@@ -94,7 +100,18 @@ if [ "$estado" != "En progreso" ]; then
   exit 1
 fi
 
-# --- 2. Verificación local ---------------------------------------------------
+# --- 2. Nada que entregar (DEVKIT-217) --------------------------------------
+# Cero commits sobre origin/main (no main local: en el contenedor puede estar
+# atrás) y árbol limpio. Antes esto llegaba hasta "falta pr-body.md" o, si
+# existiera, hasta un push que no sube nada y un gh pr create sin diff: el
+# mensaje apuntaba al síntoma, no a la causa.
+if [ "$(git -C "$WS" rev-list --count origin/main..HEAD 2>/dev/null)" = "0" ] \
+  && [ -z "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
+  err "$clave: la rama $rama no tiene commits ni cambios; no hay nada que entregar. La card sigue En progreso. Para implementarla: dk task-start $clave (reanuda sobre la rama)."
+  exit 1
+fi
+
+# --- 3. Verificación local ---------------------------------------------------
 if [ -f "$WS/pyproject.toml" ]; then
   if ! salida=$(cd "$WS" && "$RUFF" check . 2>&1); then
     err "ruff check . falló:"; printf '%s\n' "$salida" >&2
@@ -145,7 +162,7 @@ for encabezado in "## Qué cambia" "## Cómo probarlo" "## Cambios requeridos"; 
   }
 done
 
-# --- 3. Commit y push --------------------------------------------------------
+# --- 4. Commit y push --------------------------------------------------------
 if [ -n "$(git -C "$WS" status --porcelain 2>/dev/null)" ]; then
   # `git add -A -- . ':!.devkit/pr-body.md'` (la forma obvia de excluirlo)
   # falla con git 2.47: negar un pathspec que además está en .gitignore hace
@@ -176,7 +193,7 @@ if ! git -C "$WS" push -q origin "HEAD:$rama" 2>"$push_err"; then
 fi
 rm -f "$push_err"
 
-# --- 4. Cuerpo del PR y creación/actualización -------------------------------
+# --- 5. Cuerpo del PR y creación/actualización -------------------------------
 # Diff grande (DEVKIT-94): un aviso, no un bloqueo. `--numstat` da líneas
 # añadidas/borradas por archivo; un binario marca "-" en vez de un número,
 # se cuenta como 0 en vez de romper la suma con `awk`.
@@ -214,17 +231,17 @@ else
   pr_url=$(printf '%s' "$pr_url" | tail -1)
 fi
 
-# --- 5. Auto-merge ------------------------------------------------------------
+# --- 6. Auto-merge ------------------------------------------------------------
 if ! (cd "$WS" && "$GH" pr merge --auto --squash "$pr_url") >/dev/null 2>&1; then
   "$NOTION" comentar "$id" "task-submit: no pude activar auto-merge en el PR; falta habilitar \"Allow auto-merge\" en el repositorio." \
     || err "no pude comentar en la card que falta Allow auto-merge"
 fi
 
-# --- 6. Card: PR y Estado -----------------------------------------------------
+# --- 7. Card: PR y Estado -----------------------------------------------------
 "$NOTION" set "$id" "PR=$pr_url" "Estado=Revisión automática" \
   || { err "no pude actualizar PR/Estado de $clave en Notion"; exit 1; }
 
-# --- 7. Comentario -------------------------------------------------------------
+# --- 8. Comentario -------------------------------------------------------------
 que_cambia=$(awk '
   $0 == "## Qué cambia" { activo=1; next }
   /^## / { activo=0 }
@@ -232,10 +249,10 @@ que_cambia=$(awk '
 ' "$PR_BODY_FILE" | head -2)
 "$NOTION" comentar "$id" "$que_cambia" || err "no pude comentar en $clave"
 
-# --- 8. Poke --------------------------------------------------------------------
+# --- 9. Poke --------------------------------------------------------------------
 touch "$RUN_DIR/poke" 2>/dev/null || true
 
-# --- 9. Limpieza ------------------------------------------------------------------
+# --- 10. Limpieza ------------------------------------------------------------------
 rm -f "$PR_BODY_FILE"
 
 echo "task-submit: $clave entregada, PR $pr_url, Revisión automática"
