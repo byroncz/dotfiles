@@ -48,11 +48,21 @@ Argumento: Clave de la Épica (`CÓDIGO-n`).
      que no, no. También depende la hija que necesita código que otra crea
      (un script, una función), aunque no edite su archivo.
 4. Partición (solo si el paso 3 dio más de ocho hijas):
-   - Agrupa las hijas diseñadas en dos conjuntos usando la matriz de
-     archivos del paso 3: las primeras hasta completar ocho, en `Orden`, se
-     quedan en la Épica original; el resto sale a una Épica nueva. Si algún
-     archivo aparece en hijas de los dos conjuntos, la partición no es
-     limpia: salta al último punto de este paso.
+   - Las hijas que ya existían antes de este desglose (`Padre` = la Épica,
+     de un relanzamiento previo) se quedan siempre en la original: no
+     cuentan para el corte de "las primeras ocho". Del resto, agrupa en dos
+     conjuntos usando la matriz de archivos y de dependencias de código del
+     paso 3: junta primero las que comparten archivos o dependen entre sí, y
+     completa hasta ocho, en `Orden`, en la Épica original; el resto sale a
+     una Épica nueva. Si algún archivo aparece en hijas de los dos
+     conjuntos, la partición no es limpia: salta al último punto de este
+     paso. Trata también como cruce cualquier dependencia de código del
+     paso 3 entre los dos conjuntos: si una hija que se queda depende de
+     código de una que sale, la partición tampoco es limpia -la original no
+     puede avanzar sin una Épica que queda bloqueada en Por refinar-; si es
+     al revés, la partición sigue limpia y la Épica nueva lleva a la
+     original en `Depende de`, además de las dependencias propias de sus
+     hijas.
    - Revisa los Criterios de aceptación vigentes de la Épica: cada uno debe
      quedar cubierto por hijas de un solo conjunto. Si alguno necesita
      hijas de los dos lados, la partición tampoco es limpia.
