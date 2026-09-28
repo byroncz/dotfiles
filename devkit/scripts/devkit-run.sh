@@ -6442,6 +6442,51 @@ FIN
   check "DEVKIT-218: el volcado avisa que la rama estaba vacía y a qué sha se movió" 1 \
     "$(printf '%s' "$salida_rama_vacia" | grep -c "rama vacía, movida a origin/main $sha_main_nuevo")"
 
+  # DEVKIT-218 (revisión, H1): la rama local puede haber quedado atrás de
+  # origin/<rama> -sin upstream configurado, el pull --ff-only de arriba
+  # falla en silencio- aunque cuente 0 contra origin/main, como una rama
+  # vacía de verdad. Si origin/<rama> sí tiene commits propios de otra
+  # sesión, reanudar no debe confundir una cosa con la otra ni perderlos
+  # con el force push.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" switch -q -c feat/DEVKIT-9305-local-atras-de-origin
+  sha_base_9305=$(git -C "$tb_dir/ws" rev-parse HEAD)
+  git -C "$tb_dir/ws" push -q origin feat/DEVKIT-9305-local-atras-de-origin
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "feat(DEVKIT-9305): avance real de otra sesión X" --no-gpg-sign
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "feat(DEVKIT-9305): avance real de otra sesión Y" --no-gpg-sign
+  sha_origin_rama_9305=$(git -C "$tb_dir/ws" rev-parse HEAD)
+  git -C "$tb_dir/ws" push -q origin feat/DEVKIT-9305-local-atras-de-origin
+  git -C "$tb_dir/ws" reset -q --hard "$sha_base_9305"
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "chore(DEVKIT-9306): otro merge ajeno mientras DEVKIT-9305 estaba atrás" --no-gpg-sign
+  git -C "$tb_dir/ws" push -q origin main
+  git -C "$tb_dir/ws" switch -q feat/DEVKIT-9305-local-atras-de-origin
+  printf '{"id":"pagina-9305","estado":"En progreso","rama":"https://github.com/o/r/tree/feat/DEVKIT-9305-local-atras-de-origin"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9305.json"
+  DEVKIT_WS="$tb_dir/ws" DEVKIT_NOTION_BIN="$tb_dir/notion-doble" \
+    DEVKIT_RUN_BIN="$tb_dir/otros-agentes-libre" bash "$HERE/task-begin.sh" DEVKIT-9305 >/dev/null 2>&1
+  check "DEVKIT-218 (H1): rama local atrás de origin/<rama> no se toca, aunque cuente 0 contra origin/main" \
+    "$sha_base_9305" "$(git -C "$tb_dir/ws" rev-parse HEAD)"
+  check "DEVKIT-218 (H1): origin/<rama> conserva los commits que la local no vio" \
+    "$sha_origin_rama_9305" \
+    "$(git -C "$tb_dir/ws" ls-remote origin feat/DEVKIT-9305-local-atras-de-origin 2>/dev/null | cut -f1)"
+
+  # DEVKIT-218 (revisión, H3): si la rama ya es igual a origin/main, no hay
+  # nada que mover -el reset y el force push serían un no-op, y la nota
+  # "movida a origin/main" mentiría sobre lo que pasó.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" switch -q -c feat/DEVKIT-9307-rama-igual-a-main
+  git -C "$tb_dir/ws" push -q -u origin feat/DEVKIT-9307-rama-igual-a-main
+  sha_9307=$(git -C "$tb_dir/ws" rev-parse HEAD)
+  printf '{"id":"pagina-9307","estado":"En progreso","rama":"https://github.com/o/r/tree/feat/DEVKIT-9307-rama-igual-a-main"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9307.json"
+  salida_9307=$(DEVKIT_WS="$tb_dir/ws" DEVKIT_NOTION_BIN="$tb_dir/notion-doble" \
+    DEVKIT_RUN_BIN="$tb_dir/otros-agentes-libre" bash "$HERE/task-begin.sh" DEVKIT-9307 2>&1)
+  check "DEVKIT-218 (H3): una rama ya igual a origin/main no se toca" \
+    "$sha_9307" "$(git -C "$tb_dir/ws" rev-parse HEAD)"
+  check "DEVKIT-218 (H3): el volcado no avisa un movimiento que no ocurrió" 0 \
+    "$(printf '%s' "$salida_9307" | grep -c "rama vacía, movida a origin/main")"
+
   # Caso contrario: la rama sí tiene un commit propio, no se toca aunque
   # origin/main avance -sigue siendo el agente quien decide si mezcla main.
   git -C "$tb_dir/ws" switch -q main
