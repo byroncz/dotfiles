@@ -6416,6 +6416,50 @@ FIN
   check "DEVKIT-160: task-begin.sh acepta la primera card tras el registro (crea y sube su rama)" 1 \
     "$(git -C "$tb_dir/ws" ls-remote --heads origin 2>/dev/null | grep -c 'feat/DEVKIT-9300-primera-card-tras-registro')"
 
+  # DEVKIT-218: la rama de una reanudación se creó (DEVKIT-9301) pero se
+  # bloqueó sin escribir ningún commit propio, mientras tanto main avanzó con
+  # un merge ajeno (DEVKIT-9302). Reanudar debe acercar la rama vacía a ese
+  # origin/main nuevo, no dejarla en el main del día en que se creó. Llama a
+  # task-begin.sh directo (no a través de devkit-run.sh) para leer su
+  # volcado sin depender del doble de `claude`, que no lo reproduce.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" switch -q -c feat/DEVKIT-9301-rama-vacia
+  git -C "$tb_dir/ws" push -q -u origin feat/DEVKIT-9301-rama-vacia
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "chore(DEVKIT-9302): merge ajeno mientras DEVKIT-9301 estaba bloqueada" --no-gpg-sign
+  git -C "$tb_dir/ws" push -q origin main
+  sha_main_nuevo=$(git -C "$tb_dir/ws" rev-parse --short origin/main)
+  git -C "$tb_dir/ws" switch -q feat/DEVKIT-9301-rama-vacia
+  printf '{"id":"pagina-9301","estado":"En progreso","rama":"https://github.com/o/r/tree/feat/DEVKIT-9301-rama-vacia"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9301.json"
+  salida_rama_vacia=$(DEVKIT_WS="$tb_dir/ws" DEVKIT_NOTION_BIN="$tb_dir/notion-doble" \
+    DEVKIT_RUN_BIN="$tb_dir/otros-agentes-libre" bash "$HERE/task-begin.sh" DEVKIT-9301 2>&1)
+  check "DEVKIT-218: reanudar una rama vacía la mueve a origin/main (HEAD igual)" \
+    "$(git -C "$tb_dir/ws" rev-parse origin/main)" "$(git -C "$tb_dir/ws" rev-parse HEAD)"
+  check "DEVKIT-218: la rama en origin también queda sobre el origin/main nuevo" \
+    "$(git -C "$tb_dir/ws" rev-parse origin/main)" \
+    "$(git -C "$tb_dir/ws" ls-remote origin feat/DEVKIT-9301-rama-vacia 2>/dev/null | cut -f1)"
+  check "DEVKIT-218: el volcado avisa que la rama estaba vacía y a qué sha se movió" 1 \
+    "$(printf '%s' "$salida_rama_vacia" | grep -c "rama vacía, movida a origin/main $sha_main_nuevo")"
+
+  # Caso contrario: la rama sí tiene un commit propio, no se toca aunque
+  # origin/main avance -sigue siendo el agente quien decide si mezcla main.
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" switch -q -c feat/DEVKIT-9303-rama-con-commit
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "feat(DEVKIT-9303): avance propio" --no-gpg-sign
+  git -C "$tb_dir/ws" push -q -u origin feat/DEVKIT-9303-rama-con-commit
+  sha_propio=$(git -C "$tb_dir/ws" rev-parse HEAD)
+  git -C "$tb_dir/ws" switch -q main
+  git -C "$tb_dir/ws" commit -q --allow-empty -m "chore(DEVKIT-9304): otro merge ajeno" --no-gpg-sign
+  git -C "$tb_dir/ws" push -q origin main
+  git -C "$tb_dir/ws" switch -q feat/DEVKIT-9303-rama-con-commit
+  printf '{"id":"pagina-9303","estado":"En progreso","rama":"https://github.com/o/r/tree/feat/DEVKIT-9303-rama-con-commit"}' \
+    >"$tb_dir/ronda/card-DEVKIT-9303.json"
+  DEVKIT_WS="$tb_dir/ws" DEVKIT_NOTION_BIN="$tb_dir/notion-doble" \
+    DEVKIT_RUN_BIN="$tb_dir/otros-agentes-libre" bash "$HERE/task-begin.sh" DEVKIT-9303 >/dev/null 2>&1
+  check "DEVKIT-218: una rama con commit propio no se toca, aunque main haya avanzado" \
+    "$sha_propio" "$(git -C "$tb_dir/ws" rev-parse HEAD)"
+
   rm -rf "$tb_dir"
 
   # `devkit-run task-block` y `devkit-run task-close` delegan en el script
