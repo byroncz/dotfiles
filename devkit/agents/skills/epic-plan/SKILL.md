@@ -1,6 +1,6 @@
 ---
 name: epic-plan
-description: Descompone una Épica aprobada (en Lista) en Tareas hijas ordenadas, las deja en Lista, publica el desglose como comentario y arranca la primera. Úsala cuando el humano mueva una Épica a Lista o pida planificarla. Argumento: la Clave de la Épica, por ejemplo DEVKIT-1.
+description: Descompone una Épica aprobada (en Lista) en Tareas hijas ordenadas, las deja en Lista, publica el desglose como comentario y arranca la primera. Si el diseño da más de ocho hijas, parte la Épica: la original sigue y lo que sobra va a una Épica nueva en Por refinar; si no se puede partir limpio, bloquea. Úsala cuando el humano mueva una Épica a Lista o pida planificarla. Argumento: la Clave de la Épica, por ejemplo DEVKIT-1.
 ---
 
 # epic-plan
