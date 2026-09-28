@@ -7665,6 +7665,39 @@ FIN
   check "sin registro: la lectura de cuota (-p /usage) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 502')"
 
+  # H9 de pr-review en el PR #135: el `claude -p --model ...` sin prompt en
+  # argv (DEVKIT-247, el `case` de arriba en `filas_sin_registro`) sigue la
+  # misma regla sin excepción cuando no hay ningún lanzamiento activo, y no
+  # duplica un lanzamiento real cuando sí lo hay -`skill.lock` nunca deja
+  # correr más de un `claude -p` real a la vez, así que ese `pid` ya es el de
+  # ese lanzamiento activo, aunque no se pueda decir cuál con más de uno-.
+  local pslist_stdin log_stdin_sin log_stdin_activo
+  pslist_stdin="$tmp/ps-sinregistro-stdin"
+  cat >"$pslist_stdin" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+601 claude -p --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_stdin"
+  log_stdin_sin="$tmp/sin-activos-watch.log"
+  : >"$log_stdin_sin"
+  local filas_stdin_sin
+  filas_stdin_sin=$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
+  check "sin registro (DEVKIT-247, prompt por stdin): sin lanzamientos activos, aparece" 1 \
+    "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+  check "sin registro (DEVKIT-247, prompt por stdin): el detalle nombra el pid, sin prompt" \
+    "claude -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
+    "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro" {print $6}')"
+
+  log_stdin_activo="$tmp/con-activo-watch.log"
+  : >"$est/task-fix-stdin.log"
+  printf '%s task-fix-stdin lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-247" log=%s/task-fix-stdin.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$est" >"$log_stdin_activo"
+  check "sin registro (DEVKIT-247, prompt por stdin): con un lanzamiento activo, no duplica la fila" 0 \
+    "$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
   # DEVKIT-81 H2: un prompt de más de 120 caracteres queda cortado en la
   # línea "lanzando" (`prompt_en_linea`); comparar el `ps` crudo, sin cortar,
   # contra esa forma daba un falso "sin registro".
