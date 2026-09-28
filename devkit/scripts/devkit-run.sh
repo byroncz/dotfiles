@@ -7185,6 +7185,13 @@ FIN
   filas_aviso=$(REPO_NAME_WITH_OWNER_CACHE="$aviso_est/repo.cache" GH_BIN="$gh_doble_pr" LOCK="$aviso_est/skill.lock" estado_filas "$aviso_est/watch2.log" "$aviso_ahora")
   check "bloqueo tras un nuevo lanzamiento de la Clave: no es el veredicto de este informe" \
     "terminó|bucle" "$(fila_aviso DEVKIT-249)"
+  # DEVKIT-248 H2: el bloqueo real de esta secuencia sí es el veredicto de la
+  # fila task-fix-99 -su propio lanzamiento, sin ningún relanzamiento de
+  # DEVKIT-249 entre medio y el bloqueo-, y debe quedar "bloqueada" en
+  # minúscula (genérica), no "Bloqueada" (negrita, solo para el veredicto
+  # propio de un informe de pr-review).
+  check "bloqueo tras un nuevo lanzamiento de la Clave: la fila del relanzamiento sale bloqueada, sin negrita" \
+    "bloqueada" "$(printf '%s\n' "$filas_aviso" | awk -F'\t' '$1 == "task-fix" && $2 == "DEVKIT-249" {print $5; exit}')"
 
   # DEVKIT-248 H1: un relanzamiento de pr-review sobre el MISMO PR también
   # corta la búsqueda, aunque su prompt "/pr-review $arg" no lleve la Clave
