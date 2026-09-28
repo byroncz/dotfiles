@@ -716,6 +716,28 @@ corre_doble 1 "Error: algo se rompió, sin relación con la cuota"
 check_log "alarma por skill con error" 'ALARMA: pr-review-9-abc1234 terminó con error \(rc=1\)'
 check_igual "un error que no es de cuota no reintenta" 1 "$LLAMADAS"
 
+# 1b. DEVKIT-247: ese mismo corte -ni cuota, ni transitorio, ni tope de
+# tiempo- no puede dejar la card flotando en Revisión automática esperando un
+# veredicto que pr-review nunca publicó. `run_skill` debe bloquearla con
+# `--skill-crash`, con el motivo nombrando la skill y la última línea real
+# del log.
+BLOCK_CRASH="$TMP/task-block-crash"
+CRASH_ARGS="$TMP/crash-args"
+cat >"$BLOCK_CRASH" <<FIN
+#!/usr/bin/env bash
+printf '%s|' "\$@" >"$CRASH_ARGS"
+FIN
+chmod +x "$BLOCK_CRASH"
+rm -f "$CRASH_ARGS"
+BLOCK_OVERRIDE="$BLOCK_CRASH" CLAVE_OVERRIDE=DEVKIT-247 \
+  corre_doble 1 "Error: algo se rompió, sin relación con la cuota"
+check_igual "un error real (no cuota/transitorio/tope) bloquea la card (DEVKIT-247)" \
+  "DEVKIT-247" "$(cut -d'|' -f1 "$CRASH_ARGS" 2>/dev/null)"
+check_igual "el motivo del bloqueo nombra la skill que falló" 1 \
+  "$(cut -d'|' -f2 "$CRASH_ARGS" 2>/dev/null | grep -c 'devkit-run: pr-review')"
+check_igual "el motivo del bloqueo trae la última línea real del log" 1 \
+  "$(cut -d'|' -f2 "$CRASH_ARGS" 2>/dev/null | grep -c 'algo se rompió, sin relación con la cuota')"
+
 # 2. Skill que supera el límite de tiempo mientras sigue corriendo: el doble
 # duerme más que DEVKIT_WATCH_SKILL_TIMEOUT, sondeado cada DEVKIT_WATCH_SKILL_POLL.
 DEVKIT_TEST_SLEEP=2 DEVKIT_WATCH_SKILL_TIMEOUT=1 DEVKIT_WATCH_SKILL_POLL=1 corre_doble 0

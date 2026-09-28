@@ -921,6 +921,22 @@ run_skill() {
       quota_pause "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
     elif transient_hit "$logf"; then
       transient_retry "$name" "$prompt" "$key" "$attempt" "$logf" "$forzado" "$clave"
+    elif [ "$(modo_actual)" = alto ]; then
+      : # DEVKIT-137: `vigilar_alto_once` ya mató este árbol y bloqueó la card
+        # con "alto del humano", en un proceso aparte; el `rc` que queda acá
+        # es el de ese SIGTERM/SIGKILL, no un corte mudo que nadie explicó.
+        # Un segundo `task-block.sh` de `--skill-crash` pisaría ese motivo
+        # real con uno genérico.
+    else
+      # DEVKIT-247: un corte real, mudo, que no es cuota, ni un 5xx/timeout
+      # transitorio, ni el tope de tiempo -el caso de origen: `env`/`claude`
+      # muriendo con "Argument list too long" antes de escribir una sola
+      # línea de JSON-. Sin este aviso la ALARMA de arriba quedaba solo en
+      # watch.log y la card seguía en Revisión automática esperando un
+      # veredicto que pr-review/task-fix nunca llegaron a publicar.
+      # `--skill-crash` bloquea con el motivo: qué skill falló y la última
+      # línea real del log, no solo el rc.
+      "$DEVKIT_RUN" --skill-crash "$prompt" "$logf" "$rc" "$clave_en_curso"
     fi
   fi
   return $rc
