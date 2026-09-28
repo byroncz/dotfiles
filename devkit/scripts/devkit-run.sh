@@ -129,6 +129,14 @@
 #                                                    sola. <clave> es obligatoria para
 #                                                    pr-review, que no la trae en el
 #                                                    prompt
+#   devkit-run --skill-crash <prompt> <log>
+#     <rc> [clave]                                   bloquea la card con la última
+#                                                      línea del log (DEVKIT-247): un
+#                                                      corte real sin veredicto, ni
+#                                                      cuota, transitorio ni tope de
+#                                                      tiempo. <clave> es obligatoria
+#                                                      para pr-review, que no la trae
+#                                                      en el prompt
 #   devkit-run --siguiente-modelo <alias>           imprime el modelo disponible
 #                                                    que sigue a <alias> en
 #                                                    `frontera` (vuelve al primero
@@ -962,17 +970,19 @@ $material"
   # falso "no conectado" justo en el caso que la lista blanca de arriba
   # arregla.
   #
-  # `</dev/null` en las dos llamadas de acá abajo no es decorativo, mismo
-  # motivo que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin
-  # esto, un lanzamiento hecho desde dentro de un `while read` sobre una
-  # tubería (watch.sh:1061, `gh pr list | while read -r num url title; do ...
+  # `</dev/null` en la llamada de acá abajo no es decorativo, mismo motivo
+  # que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin esto, un
+  # lanzamiento hecho desde dentro de un `while read` sobre una tubería
+  # (watch.sh:1061, `gh pr list | while read -r num url title; do ...
   # run_skill ...; done`) hereda esa tubería como su entrada estándar y se
   # come la fila que le tocaba a la siguiente vuelta del bucle, que termina
   # pegada al final del prompt real. Pasó con task-fix sobre el PR 68
   # (DEVKIT-94): se tragó la fila de PR #67/DEVKIT-93 de `gh pr list` y la
   # leyó como si fuera "texto recibido como argumento" (paso 3 de la skill),
   # así que respondió un hallazgo `C1` inventado y nunca llegó a los cinco
-  # hallazgos reales del informe (DEVKIT-102).
+  # hallazgos reales del informe (DEVKIT-102). El `claude -p` real de más
+  # abajo ya no necesita su propio `</dev/null` (DEVKIT-247): lee el prompt
+  # de un archivo temporal, no de esta tubería.
   if [ "$NOTION_CHECK" != 0 ] \
      && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list </dev/null 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
     alarma_sin_notion "$1"
@@ -1015,7 +1025,7 @@ $cabecera"
       ;;
   esac
   local -a claude_args=(
-    -p "$prompt"
+    -p
     --model "$2" --effort "$3" --output-format json
     --permission-mode "${perfil[0]}"
     --allowedTools "${perfil[@]:1}"
@@ -1030,7 +1040,34 @@ $cabecera"
   # directories: /workspace". `--add-dir` es justo la vía que Claude Code
   # documenta para sumar un directorio a esa lista.
   [ "$skill" = pr-review ] && [ -n "$worktree" ] && claude_args+=(--add-dir "$worktree")
-  "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" </dev/null
+  # DEVKIT-247: el prompt viaja por stdin, nunca como argumento. Linux limita
+  # tanto el total de `argv` (ARG_MAX) como cada argumento individual (128
+  # KiB, MAX_ARG_STRLEN): un diff de PR con un fixture de texto de algunos
+  # cientos de KB pasaba por encima de los dos límites y `env`/`exec` moría
+  # con "Argument list too long" antes de que `claude` alcanzara a arrancar
+  # -pr-review y task-fix quedaban sin publicar nada y la card se congelaba
+  # esperando un veredicto que nunca llegaba-. Un archivo temporal (no un
+  # pipe) conserva la misma garantía que pedía el `</dev/null` de la sonda de
+  # arriba (DEVKIT-102): no depende de -ni consume- el stdin de quien llama,
+  # así que un `run_claude` disparado desde dentro de un `while read` sobre
+  # una tubería (watch.sh) sigue sin tragarse la fila que le tocaba a la
+  # siguiente vuelta.
+  # H5 de pr-review en el PR #135: si el árbol muere antes de este `rm -f`
+  # (tope de tiempo, modo alto matando con SIGTERM/SIGKILL), el temporal
+  # -con el diff completo de un PR, cientos de KB- queda huérfano en /tmp en
+  # cada corte. Se abre un descriptor sobre el archivo y se borra la ruta de
+  # inmediato: el inodo sigue vivo mientras el descriptor esté abierto (lo
+  # que necesita `claude` para leer el prompt de su stdin), pero no queda
+  # ningún archivo que barrer si el proceso muere a mitad de camino.
+  local prompt_file rc prompt_fd
+  prompt_file=$(mktemp)
+  printf '%s' "$prompt" > "$prompt_file"
+  exec {prompt_fd}<"$prompt_file"
+  rm -f "$prompt_file"
+  "${lanzador[@]}" "$CLAUDE_BIN" "${claude_args[@]}" <&"$prompt_fd"
+  rc=$?
+  exec {prompt_fd}<&-
+  return "$rc"
 }
 
 # Copia recortada de la transcripción de un `claude -p` real, junto a su log
@@ -1077,7 +1114,13 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   # después de terminar (por ejemplo, al reconstruir costos.log) mide igual.
   linea=$(tail -1 "$logf" 2>/dev/null | jq -r '
     "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") duracion=\(if .duration_ms then ((.duration_ms / 1000 | floor) | tostring) else "?" end)s tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
-  [ -n "$linea" ] || linea="$(tail -1 "$logf" 2>/dev/null | cut -c1-160)"
+  # H8 de pr-review en el PR #135: recorte por caracteres en bash, no `cut
+  # -c1-160` (corta por bytes y puede partir un acento), igual que
+  # `ultima_linea_log`.
+  if [ -z "$linea" ]; then
+    linea="$(tail -1 "$logf" 2>/dev/null)"
+    linea="${linea:0:160}"
+  fi
   turnos=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != "-" ] && [ -n "$turnos" ] \
      && [ "$turnos" -gt "$presupuesto" ] 2>/dev/null; then
@@ -1655,13 +1698,13 @@ filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
 }
 
 # El propio `claude -p` de quien llama, entre sus ancestros (DEVKIT-77):
-# descarta `devkit-run.sh` y se queda con `claude ... -p <prompt> ...`, igual
-# que la variante con banderas después del prompt de `filtrar_agentes` (no la
-# variante sin espacio final, `*claude*" -p"`, porque `run_claude` siempre
-# pasa el prompt después de `-p`), pero sobre la ascendencia propia en vez del
-# `ps` completo, y devuelve el primero que encuentra en vez de filtrarlos
-# todos. Puro, para probarlo con una tabla fija: recibe "<pid> <args>" por
-# línea.
+# descarta `devkit-run.sh` y se queda con `claude ... -p ...`, igual que la
+# variante con banderas después de `-p` de `filtrar_agentes` (no la variante
+# sin espacio final, `*claude*" -p"`, porque `run_claude` siempre pone algo
+# después de `-p`: hoy `--model`, ya no el prompt, DEVKIT-247), pero sobre la
+# ascendencia propia en vez del `ps` completo, y devuelve el primero que
+# encuentra en vez de filtrarlos todos. Puro, para probarlo con una tabla
+# fija: recibe "<pid> <args>" por línea.
 propio_de() {
   local pid args prompt
   while read -r pid args; do
@@ -1669,9 +1712,20 @@ propio_de() {
     case "$args" in *devkit-run.sh*) continue ;; esac
     case "$args" in
       *claude*" -p "*)
-        # Solo el argumento de `-p` (el prompt), sin las banderas que siguen
-        # (`--model`, `--effort`, ...): así se lee de un vistazo.
-        prompt=$(printf '%s' "$args" | sed -E 's/^.*-p ([^-].*)$/\1/; s/ --.*$//')
+        case "$args" in
+          # DEVKIT-247, H1: el `claude -p` real ya no trae el prompt en `ps`,
+          # solo banderas justo después de "-p" (`--model`, ...). La skill
+          # sale de `skill_de_entorno` en vez del argumento inexistente.
+          *" -p -"*)
+            prompt="/$(skill_de_entorno "$pid")"
+            [ "$prompt" != "/" ] || prompt="?"
+            ;;
+          *)
+            # Solo el argumento de `-p` (el prompt), sin las banderas que
+            # siguen (`--model`, `--effort`, ...): así se lee de un vistazo.
+            prompt=$(printf '%s' "$args" | sed -E 's/^.*-p ([^-].*)$/\1/; s/ --.*$//')
+            ;;
+        esac
         printf '%s claude -p "%s"' "$pid" "$prompt"
         return 0 ;;
     esac
@@ -1713,12 +1767,38 @@ otros_agentes() {
 # formato viejo sin esos tres campos (un `watch.sh` en memoria, sin
 # `recreate`, todavía puede escribirlo).
 
+# DEVKIT_SKILL de un PID vivo, leído de su entorno real en
+# <DEVKIT_PROC_DIR>/<pid>/environ (DEVKIT-247, H1): desde que `run_claude`
+# pasa el prompt por stdin, ese `claude -p` ya no trae "-p /<skill>" en `ps`,
+# así que `origen_de` y `propio_de` ya no pueden sacar la skill del
+# argumento. El valor sigue disponible porque `run_claude` lo exporta al
+# lanzar (`extra[]`, `DEVKIT_SKILL=$skill`) y todo hijo de ese proceso lo
+# hereda. DEVKIT_PROC_DIR (por defecto `/proc`) se lee en cada llamada, igual
+# que DEVKIT_ORIGEN en `origen_lanzamiento`, y no en una variable resuelta al
+# arrancar el script como PS_BIN: así se prueba con un árbol de archivos fijo
+# sin relanzar el script en un subproceso. Sale 1 sin imprimir nada si el PID
+# ya no existe, no es legible (otro usuario, permisos) o nunca tuvo esa
+# variable.
+skill_de_entorno() {  # skill_de_entorno <pid>
+  local pid=$1 proc_dir="${DEVKIT_PROC_DIR:-/proc}" skill
+  [ -r "$proc_dir/$pid/environ" ] || return 1
+  skill=$(tr '\0' '\n' <"$proc_dir/$pid/environ" 2>/dev/null | sed -n 's/^DEVKIT_SKILL=//p' | head -1)
+  [ -n "$skill" ] || return 1
+  printf '%s' "$skill"
+}
+
 # Origen de un lanzamiento: `humano`, `bucle`, `task-close` o la skill que lo
 # pidió (`epic-plan`). Quien llama puede declararlo con DEVKIT_ORIGEN:
 # watch.sh pone `bucle` y task-close.sh pone `task-close`. Si no viene, se
-# busca entre los ancestros el primer `claude -p /<skill>`: epic-plan llama a
+# busca entre los ancestros el primer `claude -p`: epic-plan llama a
 # devkit-run desde su herramienta Bash, así que su `claude -p` es ancestro.
 # Sin ninguno de los dos, lo lanzó un humano desde la terminal.
+#
+# La skill de ese ancestro sale primero del argumento clásico "-p /<skill>"
+# -formato viejo, todavía posible en medio de un `devkit recreate` a mitad de
+# camino- y, si no aparece, de `skill_de_entorno` (DEVKIT-247, H1): el
+# `claude -p --model ...` real de hoy no trae la skill en `ps`, solo en su
+# entorno.
 #
 # Filtrado puro, como filtrar_agentes: lee "<pid> <args>" de los ancestros,
 # del más cercano al más lejano.
@@ -1727,6 +1807,7 @@ origen_de() {
   while read -r pid args; do
     case "$args" in *devkit-run.sh*) continue ;; *claude*) ;; *) continue ;; esac
     skill=$(printf '%s' "$args" | grep -oE '(^| )-p /[a-zA-Z-]+' | head -1 | sed -E 's#.*-p /##')
+    [ -n "$skill" ] || skill=$(skill_de_entorno "$pid")
     if [ -n "$skill" ]; then
       printf '%s' "$skill"
       return 0
@@ -1761,6 +1842,20 @@ lanzamiento_duplicado() {  # lanzamiento_duplicado <prompt>
     esac
     case "$args" in *devkit-run.sh*) continue ;; esac
     case "$args" in
+      # DEVKIT-247: `run_claude` ya no pasa el prompt como argumento (ARG_MAX),
+      # así que un `claude -p` real lanzado por el bucle (`--sync`, sin
+      # `--worker` de por medio: pr-review/task-fix/task-document) ya no trae
+      # texto que comparar contra `$prompt` -este patrón solo sigue
+      # encontrando un proceso viejo que todavía lo trajera en `ps` (una
+      # versión anterior del binario, en medio de un `devkit recreate`)-. No
+      # alcanza con relajarlo a "cualquier `claude -p --model ...` vivo": un
+      # `epic-plan` (o cualquier skill que encadene otra, DEVKIT-50) sigue
+      # vivo en `ps` mientras su propia llamada a `dk task-start` corre como
+      # hijo, y ese match genérico confundía esa llamada legítima con un
+      # duplicado de sí misma. Sin esta detección puntual, `skill.lock` sigue
+      # siendo la barrera real -un lanzamiento manual duplicado por esta vía
+      # espera el candado en vez de avisar antes-, se pierde el aviso
+      # temprano, no la exclusión mutua.
       *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
     esac
   done
@@ -1773,6 +1868,22 @@ prompt_en_linea() {  # prompt_en_linea <prompt>
   local p
   p=$(printf '%s' "$1" | tr '\n"' '  ')
   printf '%s' "${p:0:120}"
+}
+
+# Última línea de <log>, para el DETALLE de una fila `error` en la tabla de
+# `--estado`/`--tablero` (DEVKIT-247): antes de esto, un corte que ni siquiera
+# alcanzó a producir JSON -`env`/`claude` muriendo con "Argument list too
+# long", por ejemplo- solo mostraba "murió sin resumen" o el `rc`, sin decir
+# nada del motivo real. Sin tabs ni saltos de línea, que romperían el TSV de
+# `estado_filas`, y recortada, igual que `prompt_en_linea`. Se corta por
+# caracteres en bash (H6 de pr-review en el PR #135), no con `cut -c1-160`:
+# `cut -c` de GNU coreutils corta por bytes, y un mensaje de `dk:` con
+# acentos quedaría partido a mitad de un carácter UTF-8 (mismo motivo que
+# describe watch.sh:798-800 sobre `prompt_en_linea`).
+ultima_linea_log() {  # ultima_linea_log <log>
+  local linea
+  linea=$(tail -n1 "$1" 2>/dev/null | tr '\t\n' '  ' | sed -E 's/[[:space:]]+$//')
+  printf '%s' "${linea:0:160}"
 }
 
 # Identidad de un lanzamiento: la skill y su primer argumento (Clave o número
@@ -1868,6 +1979,12 @@ claude_descendiente() {  # claude_descendiente <raíz> <prompt>
     args=${args_de[$pid]:-}
     case "$args" in
       *devkit-run.sh*) ;;
+      # DEVKIT-247: mismo motivo que en `lanzamiento_duplicado`. Acá alcanza
+      # con el patrón genérico sin comparar `$prompt`: la búsqueda ya está
+      # acotada a los descendientes de <raíz> -el worker que este mismo
+      # `confirmar_arranque` acaba de lanzar-, así que no hay otro `claude -p`
+      # con el que confundirse.
+      *claude*" -p --model "*) printf '%s\n' "$pid"; return 0 ;;
       *claude*"-p $prompt "*) printf '%s\n' "$pid"; return 0 ;;
     esac
     for hijo in ${hijos_de[$pid]:-}; do
@@ -2067,7 +2184,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
           if printf '%s' "$fin" | grep -q "tope de tiempo"; then
             detalle="tope de tiempo; ver $logf"
           else
-            detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1); ver $logf"
+            detalle="$(printf '%s' "$fin" | grep -oE 'rc=[0-9]+' | head -1): $(ultima_linea_log "$logf"); ver $logf"
           fi
           ;;
         *) estado=terminó ;;
@@ -2083,7 +2200,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     elif [ "$candado" = ocupado ] && printf '%s\n' "$resto" | grep -qE "^[^ ]+ $id espera: "; then
       estado="en curso"; detalle="espera el candado"
     elif [ -s "$logf" ]; then
-      estado=error; detalle="murió sin resumen; ver $logf"
+      estado=error; detalle="murió sin resumen: $(ultima_linea_log "$logf"); ver $logf"
     else
       estado="no arrancó"; detalle="sin proceso, log ni resumen tras $(hace "$edad")"
     fi
@@ -2238,12 +2355,33 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
   while read -r pid resto; do
     [ -n "$pid" ] || continue
     case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
+    case "$resto" in
+      *claude*" -p --model "*)
+        # DEVKIT-247: el prompt viaja por stdin, no por argv, así que `ps` ya
+        # no trae texto del que sacar una identidad que comparar contra
+        # `activos_id`. `skill.lock` nunca deja correr más de un `claude -p`
+        # real a la vez: si hay al menos un lanzamiento todavía sin resumen
+        # (`activos`), este `pid` es ese -aunque, con más de uno en la lista,
+        # no se pueda decir cuál-. Sin ningún lanzamiento que lo explique,
+        # sigue siendo `sin registro`: no se pierde el caso real de DEVKIT-81,
+        # un `claude -p` corrido por fuera de devkit-run.sh/watch.sh.
+        [ "${#activos[@]}" -gt 0 ] && continue
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" \
+          "claude -p vivo (pid $pid) sin línea lanzando (prompt por stdin)" - - - -
+        continue
+        ;;
+    esac
     prompt=${resto#*" -p "}
-    # `run_claude` siempre pone `--model` justo después del prompt (:585):
-    # cortar ahí, no en el primer " --", evita partir un comentario humano
-    # que trae sus propias banderas (DEVKIT-81 H10). La sonda de modelo y la
-    # de cuota no pasan por `run_claude`; la de cuota no lleva `--model`, así
-    # que se cae al corte por el primer " --" de siempre.
+    # Lo que llega aquí ya no es un `run_claude` real (ese va por el `case`
+    # de arriba, sin prompt en argv, DEVKIT-247): son las dos sondas que
+    # siguen pasando un texto corto y fijo directo como argumento
+    # (`modelo_disponible` con "ok", `leer_cuota` con "/usage"), o un
+    # `claude -p` de una versión anterior del binario todavía vivo en medio
+    # de un `devkit recreate`. `modelo_disponible` pone `--model` justo
+    # después del prompt: cortar ahí, no en el primer " --", evita partir un
+    # comentario humano que trae sus propias banderas (DEVKIT-81 H10).
+    # `leer_cuota` no lleva `--model`, así que se cae al corte por el primer
+    # " --" de siempre.
     case "$prompt" in
       *" --model "*) prompt=${prompt% --model *} ;;
       *) prompt=${prompt%% --*} ;;
@@ -3993,6 +4131,26 @@ run_tests() {
   check "concurrencia: sin un claude -p propio entre los ancestros, no hay salida" "" "$propio_sin"
   check "concurrencia: sin un claude -p propio entre los ancestros, sale con error" 1 "$propio_rc"
 
+  # DEVKIT-247, H1: con el prompt por stdin, el `claude -p` real ya no trae
+  # "-p /<skill>" en `ps`. `filtrar_agentes` no le presta atención al
+  # contenido después de "-p" y sigue encontrándolo igual; `propio_de` sí
+  # necesita `skill_de_entorno` para identificar cuál es.
+  local tabla_nueva proc_concurrencia
+  tabla_nueva='37793 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37794 claude -p --model opus --effort high --output-format json
+40002 claude -p --model fable --effort high --output-format json'
+  check "concurrencia: filtrar_agentes con el formato nuevo (sin skill en argv)" \
+    "40002 claude -p --model fable --effort high --output-format json" \
+    "$(printf '%s\n' "$tabla_nueva" | filtrar_agentes "37793 37794")"
+  proc_concurrencia=$(mktemp -d)
+  mkdir -p "$proc_concurrencia/37794"
+  printf 'DEVKIT_SKILL=task-start\0' >"$proc_concurrencia/37794/environ"
+  check "concurrencia: propio_de con el formato nuevo resuelve por el entorno" \
+    '37794 claude -p "/task-start"' \
+    "$(printf '%s\n' "$tabla_nueva" | grep -E '^(37793|37794) ' \
+       | DEVKIT_PROC_DIR="$proc_concurrencia" propio_de)"
+  rm -rf "$proc_concurrencia"
+
   # DEVKIT-79: lanzamiento_duplicado encuentra el worker vivo del mismo
   # prompt, sin confundirse con un `claude -p` de otra card.
   local tabla_dup
@@ -4407,6 +4565,10 @@ FIN
   cat >"$registra" <<FIN
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$tmp/claude-llamadas"
+# DEVKIT-247: el prompt ya no llega como argumento, sino por stdin. Lo que
+# antes veían estas pruebas en "\$*" (el slash command, "## Material", la
+# cabecera de metadatos) ahora hay que leerlo de acá.
+cat >>"$tmp/claude-llamadas"
 printf '{"result":"listo","total_cost_usd":0.02,"num_turns":3}\n'
 FIN
   chmod +x "$registra"
@@ -4468,6 +4630,37 @@ FIN
     bash "$HERE/devkit-run.sh" --sync '/pr-review 21' >/dev/null 2>&1
   check "PR código simulado: el material de review-prep.sh entra en el prompt" 1 \
     "$(grep -c 'bash -n foo.sh' "$tmp/claude-llamadas")"
+
+  # --- Diff de PR de 500 KB: no revienta con "Argument list too long"
+  # (DEVKIT-247) --------------------------------------------------------------
+  # El caso real: un fixture de texto de ~340 KB (intrinsica, PR #59) hizo
+  # morir a `/usr/bin/env` antes de que `claude` alcanzara a arrancar, porque
+  # el prompt entero (instrucciones + diff) viajaba como argumento de `-p`.
+  # Linux limita tanto el total de `argv` como cada argumento individual (128
+  # KiB, MAX_ARG_STRLEN): un solo material de 500 KB ya excede el segundo
+  # límite por sí solo. Este material de prueba es real texto de 500 KB, y el
+  # `env`/`exec` de abajo es el de verdad, sin mockear el límite del kernel:
+  # si `run_claude` todavía pasara el prompt por argumento, este `--sync`
+  # moriría con rc 126 y "Argument list too long" en stderr, como pasó en el
+  # incidente real.
+  local material_500k salida_500k_rc
+  material_500k=$(printf 'línea de diff número %d, con relleno de sobra\n' $(seq 1 15000))
+  printf '#!/usr/bin/env bash\necho "## Card\nPR simulado con un fixture de texto grande.\n## Comprobaciones mecánicas\n%s"\n' \
+    "$material_500k" >"$tmp/review-prep-500k"
+  chmod +x "$tmp/review-prep-500k"
+  check "el material de prueba de verdad pesa al menos 500 KB" si \
+    "$([ "$(wc -c <"$tmp/review-prep-500k")" -ge 500000 ] && echo si || echo no)"
+  : >"$tmp/claude-llamadas"
+  salida_500k_rc=0
+  DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-500k" \
+    DEVKIT_ROLES_FILE="$tmp/roles-anulacion-modelo.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/frontera-anulacion" \
+    DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    bash "$HERE/devkit-run.sh" --sync '/pr-review 23' >"$tmp/salida-500k.log" 2>&1 || salida_500k_rc=$?
+  check "PR con material de 500 KB: --sync no muere (nada de 'Argument list too long')" 0 \
+    "$(grep -c 'Argument list too long' "$tmp/salida-500k.log")"
+  check "PR con material de 500 KB: --sync sale con 0, claude -p sí llegó a arrancar" 0 "$salida_500k_rc"
+  check "PR con material de 500 KB: el material completo llega por stdin, no por argv" 1 \
+    "$(grep -c 'PR simulado con un fixture de texto grande' "$tmp/claude-llamadas")"
 
   : >"$tmp/claude-llamadas"
   salida_nada=$(DEVKIT_CLAUDE_BIN="$registra" DEVKIT_REVIEW_PREP_BIN="$tmp/review-prep-nada" \
@@ -4648,8 +4841,10 @@ Bash(git fetch:*)' \
       bash "$HERE/devkit-run.sh" --sync "$perfil_prompt" >/dev/null 2>&1
     check "el claude -p de $perfil_skill recibe exactamente su perfil" 1 \
       "$(grep -c -F -- "$linea_esperada" "$tmp/claude-llamadas")"
-    check "el claude -p de $perfil_skill empieza por el slash command" 1 \
-      "$(grep -c -F -- "-p $perfil_prompt" "$tmp/claude-llamadas")"
+    # DEVKIT-247: el prompt ya no va en el argumento de `-p` (línea 1 del
+    # registro, el `$*` de `$registra`), sino por stdin (línea 2 en adelante).
+    check "el claude -p de $perfil_skill empieza por el slash command" "$perfil_prompt" \
+      "$(sed -n '2p' "$tmp/claude-llamadas")"
     case "$perfil_skill" in
       pr-review|task-document)
         check "el claude -p de $perfil_skill recibe la cabecera de metadatos" 1 \
@@ -4781,7 +4976,11 @@ FIN
       bash "$HERE/devkit-run.sh" --sync '/task-fix DEVKIT-3' >/dev/null 2>&1 &
     wait
   }
-  check "el claude -p real no se come la fila que le tocaba al bucle (DEVKIT-102)" "" \
+  # DEVKIT-247: el prompt ahora sí llega por esta misma entrada estándar -ya
+  # no es `</dev/null`, es un archivo temporal-, así que el invariante real ya
+  # no es "queda vacía" sino "trae el prompt exacto, sin la fila ajena
+  # pegada atrás".
+  check "el claude -p real no se come la fila que le tocaba al bucle (DEVKIT-102)" "/task-fix DEVKIT-3" \
     "$(cat "$tmp/stdin-recibido" 2>/dev/null)"
 
   # --- review-prep.sh de verdad: worktree y entorno heredado (DEVKIT-93, H1 y
@@ -5616,7 +5815,10 @@ FIN
   cadena="$tmp/claude-cadena"
   cat >"$cadena" <<FIN
 #!/usr/bin/env bash
-case "\$2" in
+# DEVKIT-247: el prompt ya no llega en \$2 (ahora es "--model"), sino por
+# stdin.
+prompt_stdin=\$(cat)
+case "\$prompt_stdin" in
   */epic-plan*)
     DEVKIT_CLAUDE_BIN="$cadena" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \\
       DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \\
@@ -5770,6 +5972,58 @@ FIN
     'bloquea la card con task-block.sh: DEVKIT-76' \
     "$(grep -oE 'bloquea la card con task-block.sh: DEVKIT-76' "$tmp/run/watch.log" | head -1)"
   rm -f "$RONDA_DIR/card-DEVKIT-76.json"
+
+  # --- --skill-crash (DEVKIT-247) --------------------------------------------
+  # Un corte real y mudo -ni cuota, ni transitorio, ni tope de tiempo, el caso
+  # de origen: `env`/`claude` muriendo con "Argument list too long" antes de
+  # escribir una sola línea de JSON- no puede dejar la card flotando en
+  # Revisión automática. `watch.sh` (run_skill) llama a este subcomando con el
+  # rc y el log; debe bloquear con qué skill falló y la última línea real del
+  # log, no solo el rc.
+  local crash_log
+  crash_log="$tmp/crash-247.log"
+  printf '/usr/bin/env: Argument list too long\n' >"$crash_log"
+  rm -f "$tmp/bloqueo.args"
+  DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" --skill-crash '/pr-review 41' "$crash_log" 1 DEVKIT-247 >/dev/null 2>&1
+  check "--skill-crash bloquea la card con task-block.sh" 'DEVKIT-247' \
+    "$(cut -d'|' -f1 "$tmp/bloqueo.args" 2>/dev/null)"
+  check "--skill-crash: el motivo nombra la skill que falló" 1 \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -c 'devkit-run: pr-review')"
+  check "--skill-crash: el motivo trae la última línea real del log, no solo el rc" 1 \
+    "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -c 'Argument list too long')"
+
+  # H7 de pr-review en el PR #135: un `--worker` vivo cuando el modo pasa a
+  # alto -el caso real es `vigilar_alto_once` (watch.sh) matando el
+  # `skill_pid` que deja en EN_CURSO, en un proceso aparte que ya bloquea la
+  # card con "alto del humano"- no debe pisar ese bloqueo real con el motivo
+  # genérico de "terminó con error" cuando el `wait` de acá abajo vuelve con
+  # el rc de ese corte, que no es ni cuota, ni transitorio, ni el tope de
+  # tiempo propio de `watch_long_running`.
+  local worker_alto_doble worker_alto_pid
+  worker_alto_doble="$tmp/claude-worker-alto"
+  cat >"$worker_alto_doble" <<'FIN'
+#!/usr/bin/env bash
+sleep 0.3
+exit 137
+FIN
+  chmod +x "$worker_alto_doble"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$worker_alto_doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-137' "$tmp/run/worker-alto.log" \
+      modelo-x high 40 >/dev/null 2>&1 &
+  worker_alto_pid=$!
+  sleep 0.1
+  printf alto >"$tmp/run/modo"
+  wait "$worker_alto_pid" 2>/dev/null
+  printf trabajo >"$tmp/run/modo"
+  check "worker matado en modo alto: no pisa el bloqueo real con el motivo genérico" 0 \
+    "$([ -e "$tmp/bloqueo.args" ] && echo 1 || echo 0)"
+  check "worker matado en modo alto: no deja la ALARMA genérica en watch.log" 0 \
+    "$(grep -c 'ALARMA: terminó con error' "$tmp/run/watch.log")"
 
   # DEVKIT-77: `task_start_sin_entregar` usa el mismo doble de notion.sh
   # (`card <Clave>`) para decidir si un task-start dejó la card sin resolver.
@@ -6650,6 +6904,22 @@ FIN
   check "origen: DEVKIT_ORIGEN declarado manda" task-close \
     "$(DEVKIT_ORIGEN=task-close origen_lanzamiento)"
 
+  # DEVKIT-247, H1: el `claude -p` real de hoy ya no trae "-p /<skill>" en
+  # `ps` (el prompt viaja por stdin), así que `origen_de` y `propio_de` deben
+  # resolver la skill por `skill_de_entorno`, con un `/proc` de prueba.
+  local proc_fake="$tmp/proc-origen"
+  mkdir -p "$proc_fake/300" "$proc_fake/301"
+  printf 'PATH=/usr/bin\0DEVKIT_SKILL=epic-plan\0DEVKIT_MODEL=fable\0' >"$proc_fake/300/environ"
+  printf 'PATH=/usr/bin\0' >"$proc_fake/301/environ"
+  check "origen: claude -p --model (formato nuevo) resuelve por el entorno" epic-plan \
+    "$(printf '%s\n' \
+         '500 bash -c devkit-run.sh task-start DEVKIT-3' \
+         '300 claude -p --model fable --effort max --output-format json' \
+       | DEVKIT_PROC_DIR="$proc_fake" origen_de)"
+  check "origen: formato nuevo sin DEVKIT_SKILL en el entorno es humano" humano \
+    "$(printf '%s\n' '301 claude -p --model fable --effort max' \
+       | DEVKIT_PROC_DIR="$proc_fake" origen_de)"
+
   # Siguiente modelo de frontera: el que sigue, y tras el último, el primero.
   check "siguiente modelo tras modelo-barato" modelo-medio \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-sig" WATCH_LOG="$tmp/sonda-watch.log" siguiente_modelo modelo-barato)"
@@ -7389,6 +7659,29 @@ FIN
     "$(PS_BIN="$pslist_bloqueo_pr_doble" LOCK="$est/skill.lock" estado_filas "$log_bloqueo_pr_doble" "$ahora" \
         | awk -F'\t' '$2 == "DEVKIT-95"' | sed -n '2p' | cut -f5)"
 
+  # DEVKIT-247: un corte que murió antes de dejar un resumen ("murió sin
+  # resumen", sin proceso vivo, sin línea de cierre en watch.log) mostraba
+  # solo eso en DETALLE -ni una pista de la causa real-. Ahora suma la última
+  # línea real del log, el caso de origen: `env`/`claude` muriendo con
+  # "Argument list too long" antes de escribir un solo carácter de JSON.
+  local log_crash_est
+  log_crash_est="$tmp/crash-detalle-247.log"
+  printf '/usr/bin/env: Argument list too long\n' >"$log_crash_est"
+  local log_sin_resumen pslist_sin_resumen
+  log_sin_resumen="$tmp/sin-resumen-247-watch.log"
+  cat >"$log_sin_resumen" <<FIN
+2026-09-16T11:55:00Z pr-review-247-abc lanzando (origen=bucle): "/pr-review 247" log=$log_crash_est
+FIN
+  pslist_sin_resumen="$tmp/ps-sin-resumen-247"
+  printf '#!/usr/bin/env bash\n' >"$pslist_sin_resumen"
+  chmod +x "$pslist_sin_resumen"
+  check "murió sin resumen: la fila sigue como error" "error" \
+    "$(PS_BIN="$pslist_sin_resumen" LOCK="$est/skill.lock" estado_filas "$log_sin_resumen" "$ahora" \
+        | awk -F'\t' '$2 == "-" && $1 == "pr-review" {print $5}')"
+  check "murió sin resumen: DETALLE trae la última línea real del log, no solo la frase genérica" 1 \
+    "$(PS_BIN="$pslist_sin_resumen" LOCK="$est/skill.lock" estado_filas "$log_sin_resumen" "$ahora" \
+        | awk -F'\t' '$2 == "-" && $1 == "pr-review" {print $6}' | grep -c 'Argument list too long')"
+
   # DEVKIT-185 H3 (revisión sobre el PR #129): la línea de cierre de una
   # skill matada por tope de tiempo, en sus dos formas -bucle (watch.sh,
   # "ALARMA: <id> terminó con error") y --worker (devkit-run.sh, "devkit-run
@@ -7466,6 +7759,39 @@ FIN
   check "sin registro: la lectura de cuota (-p /usage) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 502')"
 
+  # H9 de pr-review en el PR #135: el `claude -p --model ...` sin prompt en
+  # argv (DEVKIT-247, el `case` de arriba en `filas_sin_registro`) sigue la
+  # misma regla sin excepción cuando no hay ningún lanzamiento activo, y no
+  # duplica un lanzamiento real cuando sí lo hay -`skill.lock` nunca deja
+  # correr más de un `claude -p` real a la vez, así que ese `pid` ya es el de
+  # ese lanzamiento activo, aunque no se pueda decir cuál con más de uno-.
+  local pslist_stdin log_stdin_sin log_stdin_activo
+  pslist_stdin="$tmp/ps-sinregistro-stdin"
+  cat >"$pslist_stdin" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+601 claude -p --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_stdin"
+  log_stdin_sin="$tmp/sin-activos-watch.log"
+  : >"$log_stdin_sin"
+  local filas_stdin_sin
+  filas_stdin_sin=$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
+  check "sin registro (DEVKIT-247, prompt por stdin): sin lanzamientos activos, aparece" 1 \
+    "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+  check "sin registro (DEVKIT-247, prompt por stdin): el detalle nombra el pid, sin prompt" \
+    "claude -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
+    "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro" {print $6}')"
+
+  log_stdin_activo="$tmp/con-activo-watch.log"
+  : >"$est/task-fix-stdin.log"
+  printf '%s task-fix-stdin lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-247" log=%s/task-fix-stdin.log\n' \
+    "$(date -u -d "@$ahora" +%FT%TZ)" "$est" >"$log_stdin_activo"
+  check "sin registro (DEVKIT-247, prompt por stdin): con un lanzamiento activo, no duplica la fila" 0 \
+    "$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+
   # DEVKIT-81 H2: un prompt de más de 120 caracteres queda cortado en la
   # línea "lanzando" (`prompt_en_linea`); comparar el `ps` crudo, sin cortar,
   # contra esa forma daba un falso "sin registro".
@@ -7512,9 +7838,11 @@ FIN
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H10: un comentario humano que trae " --" (por ejemplo "no uses
-  # --forzar aquí") no debe cortarse ahí: `run_claude` siempre pone
-  # `--model` justo después del prompt, así que cortar en el primer " --"
-  # partía el prompt antes de tiempo y daba un falso "sin registro".
+  # --forzar aquí") no debe cortarse ahí: en el `claude -p <prompt> --model
+  # ...` con el prompt en argv (`modelo_disponible`, o un binario viejo
+  # todavía vivo en medio de un `devkit recreate`, DEVKIT-247) `--model` va
+  # justo después del prompt, así que cortar en el primer " --" partía el
+  # prompt antes de tiempo y daba un falso "sin registro".
   local comentario_guiones prompt_guiones log_guiones pslist_guiones
   comentario_guiones="no uses --forzar aquí"
   prompt_guiones="/task-fix DEVKIT-91 $comentario_guiones"
@@ -7966,6 +8294,16 @@ FIN
 90001 90000 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
   check "claude_descendiente: Clave prefijo de otra no da falso positivo" "" \
     "$(printf '%s\n' "$tabla_desc" | claude_descendiente 90000 '/task-start DEVKIT-7')"
+
+  # DEVKIT-247, H1: el `claude -p` real de hoy no trae ningún prompt en `ps`,
+  # solo "-p --model ...". `claude_descendiente` ya cubre ese patrón genérico
+  # -acotado a los descendientes de la raíz, así que no hay con qué
+  # confundirse-, aquí solo falta el caso de prueba.
+  local tabla_desc_nuevo
+  tabla_desc_nuevo='90002 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-80 /run/devkit/task-start-1.log opus high 40
+90003 90002 claude -p --model opus --effort high --output-format json'
+  check "claude_descendiente: formato nuevo (sin prompt en argv)" 90003 \
+    "$(printf '%s\n' "$tabla_desc_nuevo" | claude_descendiente 90002 '/task-start DEVKIT-80')"
 
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
@@ -9668,12 +10006,41 @@ $card_md"
       # avisa a la card: causa, duración y el comando para relanzar a mano.
       # Nunca se relanza sola.
       avisar_skill_matada "$prompt" "$logf" "$matada_min" "$clave_en_curso"
+    elif [ "$(modo_actual)" = alto ]; then
+      : # H7 de pr-review en el PR #135: `vigilar_alto_once` (watch.sh) mata
+        # este `--worker` por su propio EN_CURSO y ya bloquea la card con
+        # "alto del humano", en un proceso aparte. Sin esta guarda, el `wait`
+        # de arriba vuelve con el rc de ese SIGTERM/SIGKILL apenas muere el
+        # pid y corre en carrera con ese bloqueo: si gana este `forzar_task_
+        # block`, pisa el motivo real ("alto del humano") con uno genérico
+        # ("terminó con error (rc=143)..."), y `task-block.sh` -idempotente-
+        # descarta el segundo bloqueo. Mismo trato que `run_skill` en
+        # watch.sh:924.
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
       # segunda alarma por el mismo evento (H5 de pr-review, DEVKIT-65).
-      printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
-        "$(date +%FT%T%:z)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
+      #
+      # H4 de pr-review en el PR #135: hasta acá, este corte solo dejaba la
+      # ALARMA en watch.log, sin tocar la card -un `task-start` lanzado por
+      # el bucle vía `cola.sh`, o un `pr-review`/`task-fix` a mano, podía
+      # morir así y quedar flotando (En progreso o Revisión automática) sin
+      # PR ni bloqueo, mudo salvo por el log-. Mismo remedio que
+      # `--skill-crash` sobre el camino `--sync` (DEVKIT-247): forzar el
+      # bloqueo con `forzar_task_block`, que ya deja su propia ALARMA con el
+      # Estado real de la card antes de bloquear, así que no hace falta
+      # duplicarla aparte.
+      #
+      # H8 de pr-review en el PR #135: el motivo usa `ultima_linea_log`, no
+      # `$resumen_txt` -mismo texto que arma `--skill-crash`-, para no perder
+      # el detalle real de un log que ni siquiera llegó a JSON (el caso de
+      # origen, "Argument list too long"); `resumen()` cae a `cut -c1-160` en
+      # ese caso (H6, corte por bytes). La ALARMA agrega "; ver $logf", que
+      # el aviso de más arriba traía antes de reusar `forzar_task_block`.
+      forzar_task_block "$prompt" "$logf" \
+        "terminó con error (rc=$rc); última línea del log: $(ultima_linea_log "$logf")" \
+        "ALARMA: terminó con error (rc=$rc): $(ultima_linea_log "$logf"); ver $logf" \
+        "$clave_en_curso"
     fi
     # Poke (DEVKIT-108): `--worker` es el camino de cualquier lanzamiento
     # humano (task-start.sh, task-close.sh, epic-plan y un `devkit-run
@@ -9719,6 +10086,35 @@ $card_md"
     # no duplicar el trato con Notion. `clave` viaja aparte porque
     # `/pr-review <N>` no la trae en el prompt.
     avisar_skill_matada "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    exit 0
+    ;;
+  --skill-crash)
+    # --skill-crash <prompt> <logf> <rc> [clave]: DEVKIT-247. `run_skill` en
+    # watch.sh ya descartó cuota, error transitorio de la API y tope de
+    # tiempo -cada uno con su propio relanzamiento o aviso-; lo que queda es
+    # un corte real y mudo (el caso de origen: `env`/`claude` muriendo con
+    # "Argument list too long" antes de escribir una sola línea de JSON). Sin
+    # este aviso la card quedaba flotando en Revisión automática esperando un
+    # veredicto que pr-review/task-fix nunca alcanzaron a publicar. Reusa
+    # `forzar_task_block` -mismo mecanismo que la pregunta abierta o la falta
+    # de acceso a Notion en `--worker`- para bloquear con el motivo: qué
+    # skill falló (lo resuelve `forzar_task_block` del propio prompt) y la
+    # última línea real del log, no solo el código de salida. `ultima_linea_log`
+    # -la misma que usa el DETALLE de `--estado`/`--tablero`- la recorta y le
+    # quita tabs/saltos de línea: un `result` de verdad con un texto largo no
+    # debe convertirse en un argumento kilométrico para `task-block.sh`.
+    #
+    # H3 de pr-review en el PR #135: el rc distinto de cero no siempre
+    # significa que la skill se quedó muda a mitad de camino -un pr-review
+    # que ya publicó su veredicto (card fuera de Revisión automática/En
+    # progreso) puede terminar igual con `is_error`-. El motivo no afirma
+    # "sin publicar veredicto": `forzar_task_block` ya agrega el Estado real
+    # de la card antes del bloqueo, que basta para saber si alcanzó a
+    # publicar algo.
+    forzar_task_block "${2:-}" "${3:-}" \
+      "terminó con error (rc=${4:-?}); última línea del log: $(ultima_linea_log "${3:-}")" \
+      "ALARMA: terminó con error (rc=${4:-?})" \
+      "${5:-}"
     exit 0
     ;;
   --estado)
