@@ -224,6 +224,31 @@ check "DEVKIT-142: informe nuevo sin responder manda sobre la espera" fix a1 \
 check "DEVKIT-142 H2: fix-humano atendido que menciona la aprobación no bloquea revisar" revisar c3 \
   "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)" "$(fix_ok_na T03 c3 a1 C1 c3)"
 
+# --- El marcador cubre lo que la frase de DEVKIT-142 se pierde (DEVKIT-246) --
+# Caso observado (intrinsica, ITSC-237, PR #56): un task-fix que bloquea por
+# aprobación humana, y un bloqueo por dominio con push previo, no dejaban
+# marcador -solo Notion- así que `decide` podía relanzar pr-review sobre una
+# card ya Bloqueada si la frase fija no coincidía exacto. Con task-block.sh
+# publicando el marcador en los dos casos (`block()`, el mismo helper que ya
+# usan los casos de bloqueo de arriba), `decide` los reconoce por el marcador,
+# sin depender de la frase.
+#
+# task-fix bloqueó por aprobación humana, pero su hallazgo no repite la frase
+# fija de DEVKIT-142 (una variación de redacción, o un motivo distinto): sin
+# marcador esto caería en `revisar`; con el marcador que ahora publica
+# task-block.sh, el ciclo se corta igual.
+check "DEVKIT-246: aprobación humana sin la frase exacta, con marcador: no revisa" bloqueado a1 \
+  "$(rev T01 a1 CAMBIOS)" -- \
+  "$(comment "$BOT" T02 '<!-- devkit-fix sha=a1 review=a1 -->\n<!-- devkit-fixes -->\nH3 | descartado | pendiente de una decisión de negocio\n<!-- /devkit-fixes -->')" \
+  "$(block T03 a1)"
+# Bloqueo por dominio con push previo: el commit que agrega el dominio a
+# `domains` cambia el head (e5) antes de bloquear, y quien bloquea no publica
+# ningún `devkit-fix` (SKILL.md de task-fix, "Un dominio bloqueado"). Sin
+# marcador, `$last.sha != $head` manda a `revisar`; con el marcador de
+# task-block.sh sobre ese mismo head nuevo, el bloqueo manda primero.
+check "DEVKIT-246: bloqueo por dominio tras push previo (sin devkit-fix): no revisa" bloqueado e5 \
+  "$(rev T01 a1 CAMBIOS)" -- "$(block T02 e5)"
+
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
 # porque un PR mergeado ya no tiene head que revisar.
@@ -1344,7 +1369,11 @@ check_igual "arrastre: idempotente, no vuelve a mover una hija ya en Lista" 1 \
   "$(wc -l <"$ARRASTRE/llamadas-set" 2>/dev/null | tr -d ' ')"
 
 # Bloqueo por tres ciclos sin OK: marcador en el PR y task-block.sh real.
-tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
+# task-block.sh publica el marcador (DEVKIT-246): necesita la propiedad PR de
+# la card y el PR real -number, headRefOid, comments- para armarlo y para la
+# guarda de idempotencia contra el head vigente.
+tarea card-3 3 "Revisión automática" 1 "" | jq '.pr = "https://github.com/o/r/pull/41"' >"$N/card-DEVKIT-3.json"
+jq -nc '{number: 41, headRefOid: "d4", comments: [], state: "OPEN"}' >"$CICLO/gh/pr.json"
 : >"$N/llamadas"; : >"$CICLO/gh/comentarios"
 env "${ciclo_env[@]}" bash "$WATCH" --block-pr 41 DEVKIT-3 https://github.com/o/r/pull/41 d4 3 >"$CICLO/block.log" 2>&1
 OUT="$CICLO/block.log"
@@ -1353,6 +1382,15 @@ check_igual "bloqueo: marcador devkit-block en el PR" 1 "$(grep -c 'devkit-block
 check_igual "bloqueo: card a Bloqueada" "set card-3 Estado=Bloqueada" "$(grep '^set' "$N/llamadas")"
 check_igual "bloqueo: comenta el estado anterior y el motivo" "comentar card-3 Bloqueada desde Revisión automática." \
   "$(grep '^comentar' "$N/llamadas" | head -1)"
+# Idempotente: con el marcador ya publicado para el head vigente (el PR real
+# ya lo tendría entre sus comentarios tras la llamada de arriba; el doble de
+# `gh` no lo refleja solo, así que se agrega a mano), task-block.sh vuelto a
+# llamar sobre el mismo head no lo repite.
+jq '.comments += [{"body": "<!-- devkit-block sha=d4 -->\nya bloqueado"}]' "$CICLO/gh/pr.json" \
+  >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$CICLO/gh/comentarios"
+env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 "otro motivo, mismo head" >/dev/null 2>&1
+check_igual "bloqueo: mismo head, no repite el marcador" 0 "$(wc -l <"$CICLO/gh/comentarios" | tr -d ' ')"
 tarea card-3 3 Bloqueada 1 "" >"$N/card-DEVKIT-3.json"
 : >"$N/llamadas"
 env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez >/dev/null 2>&1
@@ -1445,6 +1483,9 @@ FIN
 cat >"$FIX/task-block" <<'FIN'
 #!/usr/bin/env bash
 printf '%s|' "$@" >"$FIX_DIR/bloqueo"
+# Simula el marcador que publica el task-block.sh real (DEVKIT-246): este
+# doble existe para aislar atender_fix/block_pr de Notion, no de esto.
+printf 'pr comment 45 --body <!-- devkit-block sha=%s -->\n' "$FIX_HEAD" >>"$FIX_DIR/comentarios"
 FIN
 cat >"$FIX/notion.sh" <<'FIN'
 #!/usr/bin/env bash

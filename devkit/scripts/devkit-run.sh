@@ -6183,6 +6183,89 @@ FIN
   check "--sync /task-close (watch.sh viejo) va al script" 'DEVKIT-3|https://github.com/o/r/pull/9|' \
     "$(cat "$tmp/bloqueo.args" 2>/dev/null)"
 
+  # --- Marcador devkit-block en task-block.sh real (DEVKIT-246) -------------
+  # task-block.sh es la única implementación del marcador que decide() de
+  # watch.sh lee sin consultar Notion: cualquier bloqueo con PR -no solo el de
+  # tres ciclos de block_pr- debe dejarlo. Se corre el script real (no un
+  # doble) contra un `gh` y un notion.sh de mentira.
+  local bloq="$tmp/bloqueo246"
+  mkdir -p "$bloq/bin" "$bloq/notion" "$bloq/gh" "$bloq/run"
+  cat >"$bloq/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+d="$BLOQ246_GH"
+case "$1 $2" in
+  "pr view")
+    case "$3" in
+      *pull/41) cat "$d/pr-41.json" 2>/dev/null ;;
+      *pull/50) cat "$d/pr-50.json" 2>/dev/null ;;
+      feat/DEVKIT-50-dominio) cat "$d/pr-view-rama.json" 2>/dev/null ;;
+      *) exit 1 ;;
+    esac ;;
+  "pr comment") printf '%s\n' "$*" >>"$d/comentarios" ;;
+  *) exit 1 ;;
+esac
+FIN
+  chmod +x "$bloq/bin/gh"
+  cat >"$bloq/notion.sh" <<'FIN'
+#!/usr/bin/env bash
+d="$BLOQ246_N"
+printf '%s\n' "$*" >>"$d/llamadas"
+case "$1" in
+  card) cat "$d/card-$2.json" 2>/dev/null || exit 1 ;;
+  set|comentar) ;;
+  *) exit 64 ;;
+esac
+FIN
+  chmod +x "$bloq/notion.sh"
+  # DEVKIT_GH_BIN=gh (no el valor por defecto de la función): un `export`
+  # de un caso muy anterior de esta misma autoprueba (línea ~4057, sin
+  # `unset`) deja `DEVKIT_GH_BIN` apuntando a un doble ajeno para el resto de
+  # `run_tests`; sin pisarlo aquí, task-block.sh lo heredaría en vez de
+  # resolver "gh" contra el doble de este bloque por PATH.
+  local bloq_env=(BLOQ246_GH="$bloq/gh" BLOQ246_N="$bloq/notion" PATH="$bloq/bin:$PATH"
+                   DEVKIT_GH_BIN=gh DEVKIT_NOTION_BIN="$bloq/notion.sh" DEVKIT_RUN_DIR="$bloq/run" \
+                   DEVKIT_WS="$bloq/ws-sin-git")
+
+  # A. La card ya trae la propiedad PR: task-block.sh la usa directo.
+  printf '{"id":"card-a","estado":"En progreso","pr":"https://github.com/o/r/pull/41"}' \
+    >"$bloq/notion/card-DEVKIT-40.json"
+  jq -nc '{number: 41, headRefOid: "f1", comments: []}' >"$bloq/gh/pr-41.json"
+  env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-40 "necesita aprobación humana" >/dev/null 2>&1
+  check "marcador: publicado con la URL de la propiedad PR" 1 \
+    "$(grep -c 'devkit-block sha=f1' "$bloq/gh/comentarios")"
+
+  # Repetir sobre el mismo head (el PR real ya tendría el comentario entre sus
+  # comments; el doble de `gh` no lo refleja solo) no repite el marcador.
+  jq '.comments += [{"body": "<!-- devkit-block sha=f1 -->\nya bloqueado"}]' "$bloq/gh/pr-41.json" \
+    >"$bloq/gh/pr-41-2.json" && mv "$bloq/gh/pr-41-2.json" "$bloq/gh/pr-41.json"
+  : >"$bloq/gh/comentarios"
+  env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-40 "otro motivo, mismo head" >/dev/null 2>&1
+  check "marcador: idempotente contra el head vigente" 0 \
+    "$(wc -l <"$bloq/gh/comentarios" | tr -d ' ')"
+
+  # B. Sin propiedad PR: task-block.sh la busca con `gh pr view` de la rama
+  # actual, solo si coincide con la Clave que bloquea.
+  printf '{"id":"card-b","estado":"En progreso","pr":""}' >"$bloq/notion/card-DEVKIT-50.json"
+  jq -nc '{url: "https://github.com/o/r/pull/50"}' >"$bloq/gh/pr-view-rama.json"
+  jq -nc '{number: 50, headRefOid: "a9", comments: []}' >"$bloq/gh/pr-50.json"
+  rm -rf "$bloq/ws-rama"
+  git init -q "$bloq/ws-rama"
+  git -C "$bloq/ws-rama" commit -q --allow-empty -m init --no-gpg-sign
+  git -C "$bloq/ws-rama" checkout -q -b feat/DEVKIT-50-dominio
+  : >"$bloq/gh/comentarios"
+  env "${bloq_env[@]}" DEVKIT_WS="$bloq/ws-rama" \
+    bash "$HERE/task-block.sh" DEVKIT-50 "dominio bloqueado" >/dev/null 2>&1
+  check "marcador: sin propiedad PR, la busca en la rama actual" 1 \
+    "$(grep -c 'devkit-block sha=a9' "$bloq/gh/comentarios")"
+
+  # C. Sin PR (ni propiedad, ni rama con PR): se comporta como antes de
+  # DEVKIT-246, solo Notion.
+  printf '{"id":"card-c","estado":"En progreso","pr":""}' >"$bloq/notion/card-DEVKIT-60.json"
+  : >"$bloq/gh/comentarios"
+  env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-60 "sin PR todavía" >/dev/null 2>&1
+  check "marcador: sin PR, no publica nada y bloquea igual en Notion" "0 1" \
+    "$(wc -l <"$bloq/gh/comentarios" | tr -d ' ') $(grep -c '^set card-c Estado=Bloqueada$' "$bloq/notion/llamadas")"
+
   # Modelo vacío (DEVKIT-55): con una lista `frontera` vacía no hay modelo que
   # resolver. Antes se lanzaba `claude --model ""` y moría con un 400; ahora no
   # se lanza, sale con 65 y deja la alarma.

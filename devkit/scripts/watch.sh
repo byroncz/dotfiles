@@ -257,14 +257,19 @@ NOTION_BIN="${DEVKIT_NOTION_BIN:-$SCRIPTS_DIR/notion.sh}"
 # primero (DEVKIT-101, ampliación del 2026-09-18 18:20: antes solo mandaba
 # sobre un OK, y con CAMBIOS vigente el comentario se ignoraba).
 #
-# Excepción a lo anterior (DEVKIT-142): si el último devkit-fix sobre el head
-# vigente descartó un hallazgo con la frase fija "necesita aprobación humana"
-# (SKILL.md de task-fix) y no hay una revisión nueva todavía sin responder,
-# el ciclo se corta -sin marcador devkit-block- igual que un bloqueo: sin
-# comentario humano nuevo, `nada` (ni pr-review ni task-fix se relanzan sobre
-# el mismo hallazgo); con uno, `fix-humano`, aunque el informe siga en
-# CAMBIOS. `decide` no consulta Notion -task-block.sh deja la card Bloqueada
-# ahí, no en el PR- así que se guía solo por esa frase en el propio PR.
+# Excepción a lo anterior (DEVKIT-142, respaldo desde DEVKIT-246): si el
+# último devkit-fix sobre el head vigente descartó un hallazgo con la frase
+# fija "necesita aprobación humana" (SKILL.md de task-fix) y no hay una
+# revisión nueva todavía sin responder, el ciclo se corta igual que un
+# bloqueo: sin comentario humano nuevo, `nada` (ni pr-review ni task-fix se
+# relanzan sobre el mismo hallazgo); con uno, `fix-humano`, aunque el informe
+# siga en CAMBIOS. `decide` no consulta Notion -task-block.sh deja la card
+# Bloqueada ahí, no en el PR- así que antes se guiaba solo por esa frase en
+# el propio PR. Desde DEVKIT-246, task-block.sh también deja el marcador
+# `devkit-block` para este bloqueo (como para cualquier otro con PR), así
+# que en la práctica $blocked ya lo cubre primero (más abajo); esta frase
+# queda de respaldo para un marcador que por lo que sea no llegó a
+# publicarse (el PR no existía todavía, un fallo de `gh`).
 #
 # La guarda de tres ciclos (DEVKIT-56). Un ciclo es un informe CAMBIOS que el
 # corrector respondió con su `devkit-fix`. `bloquear` sale solo cuando ya hay
@@ -1062,8 +1067,11 @@ project_code() {
   sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/.devkit/devkit.toml" | head -1
 }
 
-# Bloqueo por tres ciclos sin OK, en bash (DEVKIT-55). Primero el marcador en
-# el PR: es lo que detiene al bucle aunque falle Notion. Luego la card.
+# Bloqueo por tres ciclos sin OK, en bash (DEVKIT-55). task-block.sh publica
+# el marcador en el PR antes de tocar Notion -es lo que detiene al bucle
+# aunque falle Notion- y luego cambia la card (DEVKIT-246: una sola
+# implementación del marcador, la misma que usa cualquier otro bloqueo con
+# PR: aprobación humana de task-fix, dominio bloqueado, pregunta abierta).
 #
 # [motivo] (sexto argumento, opcional) reemplaza la causa por defecto, "tres
 # ciclos sin OK": lo usa el bloqueo por task-fix vacío (DEVKIT-57).
@@ -1075,10 +1083,6 @@ block_pr() {  # block_pr <num> <Clave> <url> <head> <ciclos> [motivo]
     motivo="Tres ciclos de revisión y corrección sin veredicto OK"
     log "PR #$num ($key) $ciclos ciclos sin OK: bloqueando con task-block.sh"
   fi
-  gh pr comment "$num" --body "<!-- devkit-block sha=$head -->
-$motivo. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
-Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
-    || log "PR #$num: no se pudo publicar el marcador devkit-block"
   out=$("$TASK_BLOCK" "$key" "$motivo en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
   rc=$?
   printf '%s\n' "$out" >"$RUN_DIR/task-block-$num.log"
