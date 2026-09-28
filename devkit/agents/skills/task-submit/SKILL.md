@@ -1,6 +1,6 @@
 ---
 name: task-submit
-description: Entrega para revisión el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a Revisión automática. No emite veredicto; quien revisa es pr-review, en otro proceso. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
+description: Entrega para revisión el trabajo de una card en progreso: verifica, sube la rama, abre el PR con auto-merge, registra la URL del PR y pasa la card a Revisión automática. No emite veredicto; quien revisa es pr-review, en otro proceso. Si la rama no tiene commits ni cambios, sale sin correr nada y remite a task-start para reanudarla. Úsala cuando los criterios de aceptación se cumplan o cuando el humano pida abrir el PR. Argumento opcional: la Clave; por defecto la card de la rama actual.
 ---
 
 # task-submit
@@ -58,6 +58,13 @@ que un script no puede: repasar los criterios y redactar el cuerpo del PR.
    activa auto-merge, deja `PR` y `Estado=Revisión automática` en la card,
    comenta y avisa a `watch.sh`. Si algo falla, se detiene con salida 1 y el
    error en stderr; corrígelo y vuelve a ejecutarlo.
+
+   Si la rama no tiene ni commits sobre `origin/main` ni cambios sin
+   comitear (DEVKIT-217), el script no llega a correr nada de lo anterior:
+   sale con el mensaje de que no hay nada que entregar y remite a `dk
+   task-start <Clave>` para reanudar. No relances `task-start` desde aquí: esa
+   sesión ya tiene el candado de `claude -p` y un segundo lanzamiento
+   chocaría con él; el comando lo corre el humano.
 
 A partir de aquí el ciclo es automático: la skill `pr-review` decide si la
 card pasa a `Lista para merge` o si `task-fix` la corrige y la deja de nuevo
