@@ -1224,7 +1224,7 @@ caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
 # Arrastre de hijas de Backlog a Lista (DEVKIT-121): una Épica movida a
 # Lista o En progreso no debería quedarse a medias porque una hija -creada a
 # mano, o antes de aprobar la Épica- se quedó en Backlog y nadie la arranca.
-# `epic-plan` ya crea sus hijas en Lista (paso 5 de su SKILL.md); esto cubre
+# `epic-plan` ya crea sus hijas en Lista (paso 6 de su SKILL.md); esto cubre
 # las que no pasaron por ahí. Cada pasada del bucle principal (más abajo)
 # revisa las Épicas del proyecto en esos dos Estados, mueve a Lista sus
 # hijas en Backlog y deja un comentario en la Épica con las Claves movidas.
