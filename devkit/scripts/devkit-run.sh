@@ -9830,8 +9830,20 @@ $card_md"
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
       # segunda alarma por el mismo evento (H5 de pr-review, DEVKIT-65).
-      printf '%s devkit-run "%s" ALARMA: terminó con error (rc=%s): %s; ver %s\n' \
-        "$(date +%FT%T%:z)" "$prompt" "$rc" "$resumen_txt" "$logf" >> "$WATCH_LOG"
+      #
+      # H4 de pr-review en el PR #135: hasta acá, este corte solo dejaba la
+      # ALARMA en watch.log, sin tocar la card -un `task-start` lanzado por
+      # el bucle vía `cola.sh`, o un `pr-review`/`task-fix` a mano, podía
+      # morir así y quedar flotando (En progreso o Revisión automática) sin
+      # PR ni bloqueo, mudo salvo por el log-. Mismo remedio que
+      # `--skill-crash` sobre el camino `--sync` (DEVKIT-247): forzar el
+      # bloqueo con `forzar_task_block`, que ya deja su propia ALARMA con el
+      # Estado real de la card antes de bloquear, así que no hace falta
+      # duplicarla aparte.
+      forzar_task_block "$prompt" "$logf" \
+        "terminó con error (rc=$rc); $resumen_txt" \
+        "ALARMA: terminó con error (rc=$rc): $resumen_txt" \
+        "$clave_en_curso"
     fi
     # Poke (DEVKIT-108): `--worker` es el camino de cualquier lanzamiento
     # humano (task-start.sh, task-close.sh, epic-plan y un `devkit-run
