@@ -2235,8 +2235,13 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       # aparece después de $fin y antes de cualquier lanzamiento nuevo de esta
       # Clave, el bloqueo es de esta fila.
       if [ -z "$bloqueo" ] && [ -n "${fin_ln:-}" ]; then
-        bloqueo=$(printf '%s\n' "$resto" | tail -n "+$((fin_ln + 1))" | awk -v c="$clave" '
+        # DEVKIT-248 H1: pr-review se relanza como "/pr-review $arg", sin la
+        # Clave, así que el corte de arriba no lo ve. Un relanzamiento de
+        # pr-review sobre este mismo PR también cierra la ventana: lo que
+        # bloquee después es del informe nuevo, no de esta fila.
+        bloqueo=$(printf '%s\n' "$resto" | tail -n "+$((fin_ln + 1))" | awk -v c="$clave" -v n="$arg" '
           / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
+          $0 ~ ("^[^ ]+ pr-review-" n "-[^ ]+ lanzando \\(origen=") { exit }
           /: bloqueando con task-block\.sh$/ && index($0, "(" c ")") { marcado=1; next }
           marcado && index($0, " task-block.sh " c " Bloqueada") { print; exit }')
       fi
@@ -2272,7 +2277,9 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     # encontrar la primera decisión real, sin pasar la siguiente línea
     # "lanzando (origen=" de esta misma Clave -mismo corte que usa `bloqueo`
     # más arriba-, porque de ahí en adelante cualquier "PR #<num> (<Clave>)"
-    # sería el veredicto de un informe posterior, no de este. Por la reacción
+    # sería el veredicto de un informe posterior, no de este. Un relanzamiento
+    # de pr-review sobre el mismo PR corta igual, aunque su prompt
+    # "/pr-review $arg" no lleve la Clave (DEVKIT-248 H1). Por la reacción
     # inmediata de `procesar_pr` (DEVKIT-108), la primera decisión real
     # encontrada así es siempre la que salió de ESTE informe (ver el
     # comentario de `procesar_pr` en watch.sh). Sin ninguna línea así -el
@@ -2291,6 +2298,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       if [ -n "$decision_ln" ]; then
         decision=$(printf '%s\n' "$resto" | tail -n "+$((decision_ln + 1))" | awk -v c="$clave" -v short="$short_pr" -v n="$arg" '
           / lanzando \(origen=/ && index($0, "\"/") && (index($0, " " c " ") || index($0, " " c "\"")) { exit }
+          $0 ~ ("^[^ ]+ pr-review-" n "-[^ ]+ lanzando \\(origen=") { exit }
           $0 !~ ("^[^ ]+ PR #" n " \\(") { next }
           index($0, " OK en " short) { print; exit }
           $0 ~ (" CAMBIOS en " short ": lanzando task-fix$") { print; exit }
@@ -7177,6 +7185,27 @@ FIN
   filas_aviso=$(REPO_NAME_WITH_OWNER_CACHE="$aviso_est/repo.cache" GH_BIN="$gh_doble_pr" LOCK="$aviso_est/skill.lock" estado_filas "$aviso_est/watch2.log" "$aviso_ahora")
   check "bloqueo tras un nuevo lanzamiento de la Clave: no es el veredicto de este informe" \
     "terminó|bucle" "$(fila_aviso DEVKIT-249)"
+
+  # DEVKIT-248 H1: un relanzamiento de pr-review sobre el MISMO PR también
+  # corta la búsqueda, aunque su prompt "/pr-review $arg" no lleve la Clave
+  # (a diferencia de task-fix/task-start, que sí la llevan). Sin este corte,
+  # la fila del informe viejo (aaa1111) heredaba en negrita el bloqueo real
+  # del informe nuevo (bbb2222).
+  cat >"$aviso_est/watch3.log" <<FIN
+2026-09-28T05:45:00Z PR #58 (DEVKIT-251) head aaa1111 sin informe: lanzando pr-review
+2026-09-28T05:45:00Z pr-review-58-aaa1111 lanzando (origen=bucle): "/pr-review 58" log=$aviso_est/pr-review-58-aaa1111.log
+2026-09-28T05:46:00Z pr-review-58-aaa1111 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
+2026-09-28T05:46:01Z PR #58 (DEVKIT-251) revisar ya lanzada para este informe; esperando
+2026-09-28T05:46:05Z PR #58 (DEVKIT-251) head bbb2222 sin informe: lanzando pr-review
+2026-09-28T05:46:05Z pr-review-58-bbb2222 lanzando (origen=bucle): "/pr-review 58" log=$aviso_est/pr-review-58-bbb2222.log
+2026-09-28T05:47:00Z pr-review-58-bbb2222 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
+2026-09-28T05:47:30Z PR #58 (DEVKIT-251) 3 ciclos sin OK: bloqueando con task-block.sh
+2026-09-28T05:47:31Z task-block.sh DEVKIT-251 Bloqueada desde Revisión automática: Tres ciclos de revisión y corrección sin veredicto OK en el PR https://github.com/o/r/pull/58
+2026-09-28T05:47:32Z task-block-58 terminado: bash :: task-block: DEVKIT-251 Bloqueada desde Revisión automática
+FIN
+  filas_aviso=$(REPO_NAME_WITH_OWNER_CACHE="$aviso_est/repo.cache" GH_BIN="$gh_doble_pr" LOCK="$aviso_est/skill.lock" estado_filas "$aviso_est/watch3.log" "$aviso_ahora")
+  check "relanzamiento de pr-review sobre el mismo PR: el informe viejo no hereda el bloqueo del nuevo" \
+    "terminó|bucle" "$(fila_aviso DEVKIT-251)"
 
   estado_de_fila() { printf '%s\n' "$filas" | awk -F'\t' -v c="$1" '$2 == c {print $5; exit}'; }
   check "icono: Lista para merge, mismo que terminó" '✔' \
