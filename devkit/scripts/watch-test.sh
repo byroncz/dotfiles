@@ -1391,6 +1391,50 @@ jq '.comments += [{"body": "<!-- devkit-block sha=d4 -->\nya bloqueado"}]' "$CIC
 : >"$CICLO/gh/comentarios"
 env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 "otro motivo, mismo head" >/dev/null 2>&1
 check_igual "bloqueo: mismo head, no repite el marcador" 0 "$(wc -l <"$CICLO/gh/comentarios" | tr -d ' ')"
+
+# DEVKIT-246, H2 de pr-review #133: el marcador ya publicado para el head
+# vigente no cuenta si alguien ya lo retomó -un devkit-fix posterior al
+# último devkit-block, aunque el head no cambie (el corrector respondió al
+# comentario humano sin empujar commits)-. Un nuevo bloqueo sobre ese mismo
+# head publica otro marcador, para que `decide` en watch.sh no vea el
+# bloqueo viejo como vigente y siga tratando la card como Bloqueada.
+jq '.comments = [
+      {"body": ("<!-- devkit-block sha=" + .headRefOid + " -->\nbloqueo viejo"), "createdAt": "T01"},
+      {"body": ("<!-- devkit-fix sha=" + .headRefOid + " review=abc1234 -->\nretomado"), "createdAt": "T02"}
+    ]' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$CICLO/gh/comentarios"
+env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 "bloqueo nuevo, mismo head" >/dev/null 2>&1
+check_igual "bloqueo H2: retomado con un devkit-fix posterior, publica un marcador nuevo" 1 \
+  "$(grep -c 'devkit-block sha=d4' "$CICLO/gh/comentarios")"
+
+# DEVKIT-246, H3 de pr-review #133: un PR ya cerrado sin merge no recibe
+# marcador -nadie lo va a leer-.
+jq '.state = "CLOSED"' "$CICLO/gh/pr.json" >"$CICLO/gh/pr2.json" && mv "$CICLO/gh/pr2.json" "$CICLO/gh/pr.json"
+: >"$CICLO/gh/comentarios"
+env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 "pr cerrado" >/dev/null 2>&1
+check_igual "bloqueo H3: PR cerrado, no publica el marcador" 0 \
+  "$(wc -l <"$CICLO/gh/comentarios" | tr -d ' ')"
+
+# DEVKIT-246, H1 de pr-review #133: sin la propiedad PR en la card todavía,
+# el marcador sale igual porque block_pr se la pasa a task-block.sh con
+# --pr, sin depender de Notion para resolverla.
+tarea card-3 3 "Revisión automática" 1 "" >"$N/card-DEVKIT-3.json"
+jq -nc '{number: 41, headRefOid: "e5", comments: [], state: "OPEN"}' >"$CICLO/gh/pr.json"
+: >"$CICLO/gh/comentarios"
+env "${ciclo_env[@]}" bash "$WATCH" --block-pr 41 DEVKIT-3 https://github.com/o/r/pull/41 e5 3 \
+  >"$CICLO/block-sinpr.log" 2>&1
+check_igual "bloqueo H1: sin propiedad PR en la card, el marcador sale con --pr" 1 \
+  "$(grep -c 'devkit-block sha=e5' "$CICLO/gh/comentarios")"
+
+# DEVKIT-246, H1: con --pr explícito, el marcador sale aunque notion.sh card
+# falle del todo -antes, sin URL explícita, el script salía en la primera
+# línea que toca Notion, sin publicar nada.
+jq -nc '{number: 41, headRefOid: "f6", comments: [], state: "OPEN"}' >"$CICLO/gh/pr.json"
+: >"$CICLO/gh/comentarios"
+salida=$(env "${ciclo_env[@]}" bash "$HERE/task-block.sh" --pr https://github.com/o/r/pull/41 DEVKIT-404 "motivo" 2>&1); rc=$?
+check_igual "bloqueo H1: notion.sh card falla, el marcador sale igual" "1 1" \
+  "$rc $(grep -c 'devkit-block sha=f6' "$CICLO/gh/comentarios")"
+
 tarea card-3 3 Bloqueada 1 "" >"$N/card-DEVKIT-3.json"
 : >"$N/llamadas"
 env "${ciclo_env[@]}" bash "$HERE/task-block.sh" DEVKIT-3 otra vez >/dev/null 2>&1
@@ -1518,8 +1562,9 @@ check_log "fix vacío: ALARMA con la frase y el modelo siguiente" \
 check_igual "fix vacío: relanza una vez, con el siguiente modelo" "sonnet fable" \
   "$(tr '\n' ' ' <"$FIX_DIR_ACTUAL/modelos" | sed 's/ $//')"
 check_log "fix vacío: el reintento repite y se registra" 'ALARMA: task-fix-45-a1b2c3d-reintento también terminó con "nada que corregir"'
-check_igual "fix vacío: bloquea la card con task-block.sh" "DEVKIT-9" \
-  "$(cut -d'|' -f1 "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
+check_igual "fix vacío: bloquea la card con task-block.sh, con --pr explícito (H1, DEVKIT-246)" \
+  "--pr|https://github.com/o/r/pull/45|DEVKIT-9" \
+  "$(cut -d'|' -f1-3 "$FIX_DIR_ACTUAL/bloqueo" 2>/dev/null)"
 check_igual "fix vacío: marcador devkit-block en el PR" 1 \
   "$(grep -c 'devkit-block sha=a1b2c3d' "$FIX_DIR_ACTUAL/comentarios" 2>/dev/null)"
 

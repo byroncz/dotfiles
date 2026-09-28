@@ -1072,6 +1072,10 @@ project_code() {
 # aunque falle Notion- y luego cambia la card (DEVKIT-246: una sola
 # implementación del marcador, la misma que usa cualquier otro bloqueo con
 # PR: aprobación humana de task-fix, dominio bloqueado, pregunta abierta).
+# `$url` se le pasa con `--pr` (H1 de pr-review #133): ya lo tenemos del
+# propio ciclo, sin depender de que Notion responda o de que la card ya
+# tenga la propiedad PR, así que task-block.sh publica el marcador antes de
+# tocar Notion también en este caso, no solo cuando ya tiene la card leída.
 #
 # [motivo] (sexto argumento, opcional) reemplaza la causa por defecto, "tres
 # ciclos sin OK": lo usa el bloqueo por task-fix vacío (DEVKIT-57).
@@ -1083,7 +1087,7 @@ block_pr() {  # block_pr <num> <Clave> <url> <head> <ciclos> [motivo]
     motivo="Tres ciclos de revisión y corrección sin veredicto OK"
     log "PR #$num ($key) $ciclos ciclos sin OK: bloqueando con task-block.sh"
   fi
-  out=$("$TASK_BLOCK" "$key" "$motivo en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
+  out=$("$TASK_BLOCK" --pr "$url" "$key" "$motivo en el PR $url; el bucle no lo toca hasta que decidas." 2>&1)
   rc=$?
   printf '%s\n' "$out" >"$RUN_DIR/task-block-$num.log"
   estado=terminado

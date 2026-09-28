@@ -6198,6 +6198,7 @@ case "$1 $2" in
     case "$3" in
       *pull/41) cat "$d/pr-41.json" 2>/dev/null ;;
       *pull/50) cat "$d/pr-50.json" 2>/dev/null ;;
+      *pull/70) cat "$d/pr-70.json" 2>/dev/null ;;
       feat/DEVKIT-50-dominio) cat "$d/pr-view-rama.json" 2>/dev/null ;;
       *) exit 1 ;;
     esac ;;
@@ -6229,7 +6230,7 @@ FIN
   # A. La card ya trae la propiedad PR: task-block.sh la usa directo.
   printf '{"id":"card-a","estado":"En progreso","pr":"https://github.com/o/r/pull/41"}' \
     >"$bloq/notion/card-DEVKIT-40.json"
-  jq -nc '{number: 41, headRefOid: "f1", comments: []}' >"$bloq/gh/pr-41.json"
+  jq -nc '{number: 41, headRefOid: "f1", comments: [], state: "OPEN"}' >"$bloq/gh/pr-41.json"
   env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-40 "necesita aprobación humana" >/dev/null 2>&1
   check "marcador: publicado con la URL de la propiedad PR" 1 \
     "$(grep -c 'devkit-block sha=f1' "$bloq/gh/comentarios")"
@@ -6247,7 +6248,7 @@ FIN
   # actual, solo si coincide con la Clave que bloquea.
   printf '{"id":"card-b","estado":"En progreso","pr":""}' >"$bloq/notion/card-DEVKIT-50.json"
   jq -nc '{url: "https://github.com/o/r/pull/50"}' >"$bloq/gh/pr-view-rama.json"
-  jq -nc '{number: 50, headRefOid: "a9", comments: []}' >"$bloq/gh/pr-50.json"
+  jq -nc '{number: 50, headRefOid: "a9", comments: [], state: "OPEN"}' >"$bloq/gh/pr-50.json"
   rm -rf "$bloq/ws-rama"
   git init -q "$bloq/ws-rama"
   git -C "$bloq/ws-rama" commit -q --allow-empty -m init --no-gpg-sign
@@ -6265,6 +6266,16 @@ FIN
   env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-60 "sin PR todavía" >/dev/null 2>&1
   check "marcador: sin PR, no publica nada y bloquea igual en Notion" "0 1" \
     "$(wc -l <"$bloq/gh/comentarios" | tr -d ' ') $(grep -c '^set card-c Estado=Bloqueada$' "$bloq/notion/llamadas")"
+
+  # D. PR cerrado sin merge (H3 de pr-review #133): no publica el marcador,
+  # nadie lo va a leer.
+  printf '{"id":"card-d","estado":"En progreso","pr":"https://github.com/o/r/pull/70"}' \
+    >"$bloq/notion/card-DEVKIT-70.json"
+  jq -nc '{number: 70, headRefOid: "c3", comments: [], state: "CLOSED"}' >"$bloq/gh/pr-70.json"
+  : >"$bloq/gh/comentarios"
+  env "${bloq_env[@]}" bash "$HERE/task-block.sh" DEVKIT-70 "PR ya cerrado" >/dev/null 2>&1
+  check "marcador: PR cerrado, no publica nada" 0 \
+    "$(wc -l <"$bloq/gh/comentarios" | tr -d ' ')"
 
   # Modelo vacío (DEVKIT-55): con una lista `frontera` vacía no hay modelo que
   # resolver. Antes se lanzaba `claude --model ""` y moría con un 400; ahora no

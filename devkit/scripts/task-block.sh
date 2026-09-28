@@ -4,13 +4,21 @@
 # un agente entero solo porque el contenedor no hablaba con Notion desde bash.
 #
 # Uso:
-#   task-block.sh <Clave> <motivo...>
+#   task-block.sh [--pr <url>] <Clave> <motivo...>
 #
 # Lo llaman `watch.sh` (tres ciclos sin OK), `devkit-run` (barrera de pregunta
 # abierta de DEVKIT-50) y cualquier skill que necesite al humano, por ruta:
 #   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" DEVKIT-7 "Qué intenté: ... Qué necesito: ..."
 # El motivo es la petición concreta al humano: quien llama la redacta, este
 # script no la interpreta.
+#
+# --pr <url> (DEVKIT-246, H1 de pr-review #133): quien ya conoce la URL del PR
+# sin depender de Notion -`block_pr` en watch.sh, que la tiene desde el propio
+# `gh pr view` del ciclo- la pasa aquí para que el marcador se publique antes
+# de leer la card. Sin esto, el marcador solo salía si `notion.sh card`
+# respondía y la card tenía la propiedad `PR`: un fallo de Notion, o una card
+# sin esa propiedad todavía, dejaba al bucle sin marcador y sin nada que lo
+# detenga.
 #
 # Si el workspace está en la rama de la card con cambios sin commit, los
 # guarda con un commit `wip(<Clave>): ...` y push, para no perder trabajo, como
@@ -39,13 +47,27 @@
 # que no sea el bloqueo por tres ciclos de `block_pr`: aprobación humana de
 # task-fix, dominio bloqueado, pregunta abierta, un humano a mano) es invisible
 # para el bucle, que puede relanzar pr-review o task-fix sobre una card ya
-# Bloqueada. Con la URL del PR -la propiedad `PR` de la card, o `gh pr view`
-# de la rama actual si está vacía y coincide con la Clave- se publica el mismo
-# marcador `<!-- devkit-block sha=<head> -->` que antes solo dejaba
-# `block_pr`, para el head vigente del PR. Sin PR, se comporta como antes:
-# solo Notion. Idempotente contra el head: si el último devkit-block del PR ya
-# es del head vigente, no se repite. Va antes del `set` de Notion: es lo que
-# detiene al bucle aunque falle Notion (mismo motivo que tenía `block_pr`).
+# Bloqueada. Con la URL del PR -la que llega por `--pr`, la propiedad `PR` de
+# la card, o `gh pr view` de la rama actual si está vacía y coincide con la
+# Clave- se publica el mismo marcador `<!-- devkit-block sha=<head> -->` que
+# antes solo dejaba `block_pr`, para el head vigente del PR y solo si sigue
+# `OPEN` (H3 de pr-review #133: un PR cerrado sin merge no necesita marcador,
+# nadie lo va a leer). Sin PR, se comporta como antes: solo Notion.
+#
+# Idempotente contra el head, pero no a ciegas (H2 de pr-review #133): si el
+# último devkit-block del PR ya es del head vigente, se busca el mismo caso
+# que `$resumed` calcula en el DECIDE de watch.sh -¿hay un devkit-fix
+# posterior a ese bloqueo?-. Sin ninguno, el bloqueo sigue en pie y no se
+# repite. Con uno, alguien ya retomó ese bloqueo (un comentario humano que
+# fix-humano atendió) y, si esta llamada vuelve a bloquear sin que el head
+# haya cambiado, es un bloqueo nuevo: se publica otro marcador, o `decide`
+# vería el bloqueo viejo como vigente y relanzaría pr-review sobre una card
+# que en Notion ya está Bloqueada de nuevo.
+#
+# Va antes del `set` de Notion cuando llega `--pr`: es lo que detiene al
+# bucle aunque falle Notion o la card no tenga la propiedad PR todavía (mismo
+# motivo que tenía `block_pr`). Sin `--pr`, se publica después de comprobar
+# que la card no esté ya Bloqueada ni Hecha, como antes de DEVKIT-246.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS="${DEVKIT_WS:-/workspace}"
@@ -54,12 +76,67 @@ NOTION="${DEVKIT_NOTION_BIN:-$HERE/notion.sh}"
 GH="${DEVKIT_GH_BIN:-gh}"
 LOCK="${DEVKIT_LOCK:-$RUN_DIR/skill.lock}"
 
+pr_explicito=""
+if [ "${1:-}" = --pr ]; then
+  pr_explicito="${2:-}"
+  shift 2 2>/dev/null
+fi
+
 clave="${1:-}"
 shift 2>/dev/null
 motivo="$*"
 if [ -z "$clave" ] || [ -z "$motivo" ]; then
-  echo "uso: task-block.sh <Clave> <motivo...>" >&2
+  echo "uso: task-block.sh [--pr <url>] <Clave> <motivo...>" >&2
   exit 64
+fi
+
+# publicar_marcador_bloqueo <motivo> [pr]: sin el segundo argumento, usa la
+# propiedad PR de la card ya leída en $card (o, si esa variable no existe
+# todavía, la rama actual) en vez de la URL explícita.
+publicar_marcador_bloqueo() {
+  local motivo=$1 pr=${2:-} rama pr_json numero head repetido
+  if [ -z "$pr" ] && [ -n "${card:-}" ]; then
+    pr=$(jq -r '.pr // ""' <<<"$card")
+  fi
+  if [ -z "$pr" ]; then
+    rama=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null) || rama=""
+    case "$rama" in
+      *"$clave"-*|*"$clave") pr=$("$GH" pr view "$rama" --json url 2>/dev/null | jq -r '.url // empty') ;;
+    esac
+  fi
+  [ -n "$pr" ] || return 0
+  pr_json=$("$GH" pr view "$pr" --json number,headRefOid,comments,state 2>/dev/null) \
+    || { echo "task-block: no pude leer el PR $pr para el marcador devkit-block" >&2; return 0; }
+  if [ "$(jq -r '.state // ""' <<<"$pr_json")" != OPEN ]; then
+    echo "task-block: el PR $pr no está abierto; no se publica el marcador devkit-block"
+    return 0
+  fi
+  numero=$(jq -r '.number // empty' <<<"$pr_json")
+  head=$(jq -r '.headRefOid // empty' <<<"$pr_json")
+  [ -n "$numero" ] && [ -n "$head" ] || return 0
+  repetido=$(jq -r --arg head "$head" '
+    def markers($re): [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x.createdAt} ];
+    (.comments // []) as $c
+    | ($c | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->") | sort_by(.at) | last) as $block
+    | ($c | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->")) as $fixes
+    | if $block == null or $block.sha != $head then "no"
+      elif ([$fixes[] | select(.at > $block.at)] | length) > 0 then "no"
+      else "si"
+      end
+  ' <<<"$pr_json")
+  if [ "$repetido" = si ]; then
+    echo "task-block: el PR $pr ya tiene el marcador devkit-block para $head; no se repite"
+    return 0
+  fi
+  "$GH" pr comment "$numero" --body "<!-- devkit-block sha=$head -->
+$motivo. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
+Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
+    && echo "task-block: marcador devkit-block publicado en $pr" \
+    || echo "task-block: no pude publicar el marcador devkit-block en $pr" >&2
+}
+
+if [ -n "$pr_explicito" ]; then
+  publicar_marcador_bloqueo "$motivo" "$pr_explicito"
 fi
 
 card=$("$NOTION" card "$clave") || { echo "task-block: no pude leer $clave en Notion" >&2; exit 1; }
@@ -80,38 +157,10 @@ if [ "$anterior" = "Hecha" ]; then
   exit 1
 fi
 
-# Marcador en el PR (DEVKIT-246): ver la nota del encabezado. Antes de tocar
-# Notion, para que el bucle se detenga aunque el `set` de abajo falle.
-publicar_marcador_bloqueo() {  # publicar_marcador_bloqueo <motivo>
-  local motivo=$1 rama pr pr_json numero head ultimo_sha
-  pr=$(jq -r '.pr // ""' <<<"$card")
-  if [ -z "$pr" ]; then
-    rama=$(git -C "$WS" rev-parse --abbrev-ref HEAD 2>/dev/null) || rama=""
-    case "$rama" in
-      *"$clave"-*|*"$clave") pr=$("$GH" pr view "$rama" --json url 2>/dev/null | jq -r '.url // empty') ;;
-    esac
-  fi
-  [ -n "$pr" ] || return 0
-  pr_json=$("$GH" pr view "$pr" --json number,headRefOid,comments,state 2>/dev/null) \
-    || { echo "task-block: no pude leer el PR $pr para el marcador devkit-block" >&2; return 0; }
-  numero=$(jq -r '.number // empty' <<<"$pr_json")
-  head=$(jq -r '.headRefOid // empty' <<<"$pr_json")
-  [ -n "$numero" ] && [ -n "$head" ] || return 0
-  ultimo_sha=$(jq -r '
-    [(.comments // [])[] | (.body // "" | capture("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->")).sha]
-    | last // ""
-  ' <<<"$pr_json")
-  if [ "$ultimo_sha" = "$head" ]; then
-    echo "task-block: el PR $pr ya tiene el marcador devkit-block para $head; no se repite"
-    return 0
-  fi
-  "$GH" pr comment "$numero" --body "<!-- devkit-block sha=$head -->
-$motivo. La card pasa a Bloqueada y el bucle no toca este PR hasta que decidas.
-Para retomar: mueve la card a Revisión automática y comenta aquí qué hacer. El bucle lanza task-fix con tu comentario y el conteo de ciclos vuelve a cero." >/dev/null 2>&1 \
-    && echo "task-block: marcador devkit-block publicado en $pr" \
-    || echo "task-block: no pude publicar el marcador devkit-block en $pr" >&2
-}
-publicar_marcador_bloqueo "$motivo"
+# Marcador en el PR (DEVKIT-246): ver la nota del encabezado. Sin --pr, la
+# card no está Bloqueada ni Hecha a esta altura, así que se publica ahora,
+# antes del `set` de Notion, con la propiedad PR de la card ya leída.
+[ -n "$pr_explicito" ] || publicar_marcador_bloqueo "$motivo"
 
 "$NOTION" set "$id" Estado=Bloqueada || { echo "task-block: no pude cambiar el Estado de $clave" >&2; exit 1; }
 # Línea para `devkit-run --estado` (DEVKIT-57): muestra el lanzamiento como
