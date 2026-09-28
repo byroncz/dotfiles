@@ -1695,9 +1695,20 @@ propio_de() {
     case "$args" in *devkit-run.sh*) continue ;; esac
     case "$args" in
       *claude*" -p "*)
-        # Solo el argumento de `-p` (el prompt), sin las banderas que siguen
-        # (`--model`, `--effort`, ...): así se lee de un vistazo.
-        prompt=$(printf '%s' "$args" | sed -E 's/^.*-p ([^-].*)$/\1/; s/ --.*$//')
+        case "$args" in
+          # DEVKIT-247, H1: el `claude -p` real ya no trae el prompt en `ps`,
+          # solo banderas justo después de "-p" (`--model`, ...). La skill
+          # sale de `skill_de_entorno` en vez del argumento inexistente.
+          *" -p -"*)
+            prompt="/$(skill_de_entorno "$pid")"
+            [ "$prompt" != "/" ] || prompt="?"
+            ;;
+          *)
+            # Solo el argumento de `-p` (el prompt), sin las banderas que
+            # siguen (`--model`, `--effort`, ...): así se lee de un vistazo.
+            prompt=$(printf '%s' "$args" | sed -E 's/^.*-p ([^-].*)$/\1/; s/ --.*$//')
+            ;;
+        esac
         printf '%s claude -p "%s"' "$pid" "$prompt"
         return 0 ;;
     esac
@@ -1739,12 +1750,38 @@ otros_agentes() {
 # formato viejo sin esos tres campos (un `watch.sh` en memoria, sin
 # `recreate`, todavía puede escribirlo).
 
+# DEVKIT_SKILL de un PID vivo, leído de su entorno real en
+# <DEVKIT_PROC_DIR>/<pid>/environ (DEVKIT-247, H1): desde que `run_claude`
+# pasa el prompt por stdin, ese `claude -p` ya no trae "-p /<skill>" en `ps`,
+# así que `origen_de` y `propio_de` ya no pueden sacar la skill del
+# argumento. El valor sigue disponible porque `run_claude` lo exporta al
+# lanzar (`extra[]`, `DEVKIT_SKILL=$skill`) y todo hijo de ese proceso lo
+# hereda. DEVKIT_PROC_DIR (por defecto `/proc`) se lee en cada llamada, igual
+# que DEVKIT_ORIGEN en `origen_lanzamiento`, y no en una variable resuelta al
+# arrancar el script como PS_BIN: así se prueba con un árbol de archivos fijo
+# sin relanzar el script en un subproceso. Sale 1 sin imprimir nada si el PID
+# ya no existe, no es legible (otro usuario, permisos) o nunca tuvo esa
+# variable.
+skill_de_entorno() {  # skill_de_entorno <pid>
+  local pid=$1 proc_dir="${DEVKIT_PROC_DIR:-/proc}" skill
+  [ -r "$proc_dir/$pid/environ" ] || return 1
+  skill=$(tr '\0' '\n' <"$proc_dir/$pid/environ" 2>/dev/null | sed -n 's/^DEVKIT_SKILL=//p' | head -1)
+  [ -n "$skill" ] || return 1
+  printf '%s' "$skill"
+}
+
 # Origen de un lanzamiento: `humano`, `bucle`, `task-close` o la skill que lo
 # pidió (`epic-plan`). Quien llama puede declararlo con DEVKIT_ORIGEN:
 # watch.sh pone `bucle` y task-close.sh pone `task-close`. Si no viene, se
-# busca entre los ancestros el primer `claude -p /<skill>`: epic-plan llama a
+# busca entre los ancestros el primer `claude -p`: epic-plan llama a
 # devkit-run desde su herramienta Bash, así que su `claude -p` es ancestro.
 # Sin ninguno de los dos, lo lanzó un humano desde la terminal.
+#
+# La skill de ese ancestro sale primero del argumento clásico "-p /<skill>"
+# -formato viejo, todavía posible en medio de un `devkit recreate` a mitad de
+# camino- y, si no aparece, de `skill_de_entorno` (DEVKIT-247, H1): el
+# `claude -p --model ...` real de hoy no trae la skill en `ps`, solo en su
+# entorno.
 #
 # Filtrado puro, como filtrar_agentes: lee "<pid> <args>" de los ancestros,
 # del más cercano al más lejano.
@@ -1753,6 +1790,7 @@ origen_de() {
   while read -r pid args; do
     case "$args" in *devkit-run.sh*) continue ;; *claude*) ;; *) continue ;; esac
     skill=$(printf '%s' "$args" | grep -oE '(^| )-p /[a-zA-Z-]+' | head -1 | sed -E 's#.*-p /##')
+    [ -n "$skill" ] || skill=$(skill_de_entorno "$pid")
     if [ -n "$skill" ]; then
       printf '%s' "$skill"
       return 0
@@ -4064,6 +4102,26 @@ run_tests() {
   propio_sin=$(printf '%s\n' "$tabla" | grep -E '^(37786|37792|37793) ' | propio_de) || propio_rc=$?
   check "concurrencia: sin un claude -p propio entre los ancestros, no hay salida" "" "$propio_sin"
   check "concurrencia: sin un claude -p propio entre los ancestros, sale con error" 1 "$propio_rc"
+
+  # DEVKIT-247, H1: con el prompt por stdin, el `claude -p` real ya no trae
+  # "-p /<skill>" en `ps`. `filtrar_agentes` no le presta atención al
+  # contenido después de "-p" y sigue encontrándolo igual; `propio_de` sí
+  # necesita `skill_de_entorno` para identificar cuál es.
+  local tabla_nueva proc_concurrencia
+  tabla_nueva='37793 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-54 /run/devkit/task-start-3.log opus high 40
+37794 claude -p --model opus --effort high --output-format json
+40002 claude -p --model fable --effort high --output-format json'
+  check "concurrencia: filtrar_agentes con el formato nuevo (sin skill en argv)" \
+    "40002 claude -p --model fable --effort high --output-format json" \
+    "$(printf '%s\n' "$tabla_nueva" | filtrar_agentes "37793 37794")"
+  proc_concurrencia=$(mktemp -d)
+  mkdir -p "$proc_concurrencia/37794"
+  printf 'DEVKIT_SKILL=task-start\0' >"$proc_concurrencia/37794/environ"
+  check "concurrencia: propio_de con el formato nuevo resuelve por el entorno" \
+    '37794 claude -p "/task-start"' \
+    "$(printf '%s\n' "$tabla_nueva" | grep -E '^(37793|37794) ' \
+       | DEVKIT_PROC_DIR="$proc_concurrencia" propio_de)"
+  rm -rf "$proc_concurrencia"
 
   # DEVKIT-79: lanzamiento_duplicado encuentra el worker vivo del mismo
   # prompt, sin confundirse con un `claude -p` de otra card.
@@ -6692,6 +6750,22 @@ FIN
   check "origen: DEVKIT_ORIGEN declarado manda" task-close \
     "$(DEVKIT_ORIGEN=task-close origen_lanzamiento)"
 
+  # DEVKIT-247, H1: el `claude -p` real de hoy ya no trae "-p /<skill>" en
+  # `ps` (el prompt viaja por stdin), así que `origen_de` y `propio_de` deben
+  # resolver la skill por `skill_de_entorno`, con un `/proc` de prueba.
+  local proc_fake="$tmp/proc-origen"
+  mkdir -p "$proc_fake/300" "$proc_fake/301"
+  printf 'PATH=/usr/bin\0DEVKIT_SKILL=epic-plan\0DEVKIT_MODEL=fable\0' >"$proc_fake/300/environ"
+  printf 'PATH=/usr/bin\0' >"$proc_fake/301/environ"
+  check "origen: claude -p --model (formato nuevo) resuelve por el entorno" epic-plan \
+    "$(printf '%s\n' \
+         '500 bash -c devkit-run.sh task-start DEVKIT-3' \
+         '300 claude -p --model fable --effort max --output-format json' \
+       | DEVKIT_PROC_DIR="$proc_fake" origen_de)"
+  check "origen: formato nuevo sin DEVKIT_SKILL en el entorno es humano" humano \
+    "$(printf '%s\n' '301 claude -p --model fable --effort max' \
+       | DEVKIT_PROC_DIR="$proc_fake" origen_de)"
+
   # Siguiente modelo de frontera: el que sigue, y tras el último, el primero.
   check "siguiente modelo tras modelo-barato" modelo-medio \
     "$(CLAUDE_BIN="$doble" ROLES_FILE="$tmp/roles.toml" FRONTERA_CACHE_DIR="$tmp/frontera-sig" WATCH_LOG="$tmp/sonda-watch.log" siguiente_modelo modelo-barato)"
@@ -8031,6 +8105,16 @@ FIN
 90001 90000 claude -p /task-start DEVKIT-79 --model opus --effort high --output-format json'
   check "claude_descendiente: Clave prefijo de otra no da falso positivo" "" \
     "$(printf '%s\n' "$tabla_desc" | claude_descendiente 90000 '/task-start DEVKIT-7')"
+
+  # DEVKIT-247, H1: el `claude -p` real de hoy no trae ningún prompt en `ps`,
+  # solo "-p --model ...". `claude_descendiente` ya cubre ese patrón genérico
+  # -acotado a los descendientes de la raíz, así que no hay con qué
+  # confundirse-, aquí solo falta el caso de prueba.
+  local tabla_desc_nuevo
+  tabla_desc_nuevo='90002 1 bash /workspace/devkit/scripts/devkit-run.sh --worker /task-start DEVKIT-80 /run/devkit/task-start-1.log opus high 40
+90003 90002 claude -p --model opus --effort high --output-format json'
+  check "claude_descendiente: formato nuevo (sin prompt en argv)" 90003 \
+    "$(printf '%s\n' "$tabla_desc_nuevo" | claude_descendiente 90002 '/task-start DEVKIT-80')"
 
   # El doble genérico no trae "Current session"/"Current week": mostrar_estado
   # no se cae por eso, solo agrega el bloque Consumo con el aviso de que
