@@ -64,4 +64,10 @@ Convenciones comunes a todas:
 - Idempotencia: cada skill comprueba el estado actual antes de actuar y no
   repite lo que ya está hecho.
 - Nunca push a `main`, nunca force push, nunca merge desde el agente: el
-  merge lo hace GitHub con auto-merge tras el approve humano.
+  merge lo hace GitHub con auto-merge tras el approve humano. Única
+  excepción: `task-begin.sh`, al reanudar una card `En progreso` cuya rama
+  no tiene ningún commit propio (se creó y se bloqueó antes de escribir
+  nada, mientras main seguía avanzando), la mueve a `origin/main` con
+  `reset --hard` y `push --force-with-lease` -no hay historia de nadie que
+  reescribir- y lo avisa en el volcado de la card (DEVKIT-218). Si la rama
+  ya tiene un commit propio, no la toca.

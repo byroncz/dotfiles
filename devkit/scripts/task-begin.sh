@@ -125,6 +125,7 @@ url_remoto() {
   printf '%s' "${url%.git}"
 }
 
+rama_vacia=""
 if [ "$reanudacion" = 1 ]; then
   rama=$(printf '%s' "$rama_actual" | sed -E 's#^.*/tree/##')
   if [ -z "$rama" ]; then
@@ -146,6 +147,39 @@ if [ "$reanudacion" = 1 ]; then
   else
     err "no encuentro la rama $rama (ni local ni en origin) para reanudar $clave."
     exit 1
+  fi
+
+  # DEVKIT-218: la rama pudo crearse y quedar sin un solo commit propio -la
+  # card se bloqueó antes de escribir nada- mientras main siguió avanzando
+  # con otros merges. Reanudar así de largo dejaba al agente implementando
+  # sobre una base vieja: el PR salía con conflictos o ignoraba lo ya
+  # mergeado (ITSC-213). Sin commits propios sobre origin/main no hay
+  # historia de nadie que reescribir, así que la rama se mueve a origin/main
+  # con --force-with-lease: la única excepción aceptada a "nunca force push"
+  # de AGENTS.md, y solo por eso.
+  if git -C "$WS" fetch -q origin main "$rama" 2>/dev/null \
+      && [ -z "$(git -C "$WS" status --porcelain --untracked-files=all 2>/dev/null)" ] \
+      && [ "$(git -C "$WS" rev-list --count origin/main.."$rama" 2>/dev/null)" = "0" ] \
+      && { ! git -C "$WS" show-ref --verify --quiet "refs/remotes/origin/$rama" \
+             || [ "$(git -C "$WS" rev-list --count origin/main..origin/"$rama" 2>/dev/null)" = "0" ]; } \
+      && [ "$(git -C "$WS" rev-parse "$rama")" != "$(git -C "$WS" rev-parse origin/main)" ]; then
+    sha_main=$(git -C "$WS" rev-parse --short origin/main)
+    # Lease explícito sobre el sha de origin/$rama recién traído: sin esto,
+    # un origin/$rama con commits que la rama local no vio (upstream sin
+    # configurar, fallo de red en el pull --ff-only de arriba) se pierde con
+    # el force push, aunque la condición de arriba ya lo descarta (H1,
+    # DEVKIT-218 revisión).
+    lease="$rama"
+    if git -C "$WS" show-ref --verify --quiet "refs/remotes/origin/$rama"; then
+      lease="$rama:$(git -C "$WS" rev-parse origin/"$rama")"
+    fi
+    if git -C "$WS" reset -q --hard origin/main \
+        && git -C "$WS" push -q "--force-with-lease=$lease" origin "$rama"; then
+      rama_vacia="rama vacía, movida a origin/main $sha_main"
+    else
+      err "la rama $rama está vacía respecto a origin/main, pero no pude moverla (reset --hard/push --force-with-lease)."
+      exit 1
+    fi
   fi
 else
   if ! git -C "$WS" fetch -q origin 2>/dev/null; then
@@ -248,7 +282,8 @@ cat <<EOF
 - Prioridad: ${prioridad:-sin Prioridad}
 - Estado: En progreso
 - Rama: $rama_actual
-- PR: ${pr:-sin PR}
+- PR: ${pr:-sin PR}${rama_vacia:+
+- Nota: $rama_vacia}
 
 $contenido
 

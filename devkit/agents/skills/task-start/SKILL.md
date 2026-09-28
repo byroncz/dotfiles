@@ -28,6 +28,13 @@ orden -los que amplían el alcance cuentan, DEVKIT-41-.
   progreso`, con su rama creada y en uso (o, en una reanudación, ya estás
   sobre ella). No vuelvas a consultar Notion ni a tocar git para nada de
   esto: ya está hecho. Sigue directo a "Comenta el plan".
+- En una reanudación, si la rama no tenía ningún commit propio (la card se
+  bloqueó antes de escribir nada) y main había avanzado mientras tanto,
+  `task-begin.sh` ya la movió a `origin/main` con `--force-with-lease` antes
+  de entregarte el prompt (DEVKIT-218): no es una rama nueva ni perdiste
+  nada tuyo, solo se descartó una base vieja sin historia propia. El volcado
+  trae una línea `- Nota: rama vacía, movida a origin/main <sha>` cuando
+  esto pasó; si no aparece, la rama ya tenía tu trabajo y no se tocó.
 - Si no está -te invocaron a mano, sin pasar por `devkit-run`, por ejemplo
   desde una sesión interactiva- ejecútalo tú mismo:
   `"${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-begin.sh" <Clave>`
