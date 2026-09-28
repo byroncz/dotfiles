@@ -5987,6 +5987,38 @@ FIN
   check "--skill-crash: el motivo trae la última línea real del log, no solo el rc" 1 \
     "$(cut -d'|' -f2 "$tmp/bloqueo.args" 2>/dev/null | grep -c 'Argument list too long')"
 
+  # H7 de pr-review en el PR #135: un `--worker` vivo cuando el modo pasa a
+  # alto -el caso real es `vigilar_alto_once` (watch.sh) matando el
+  # `skill_pid` que deja en EN_CURSO, en un proceso aparte que ya bloquea la
+  # card con "alto del humano"- no debe pisar ese bloqueo real con el motivo
+  # genérico de "terminó con error" cuando el `wait` de acá abajo vuelve con
+  # el rc de ese corte, que no es ni cuota, ni transitorio, ni el tope de
+  # tiempo propio de `watch_long_running`.
+  local worker_alto_doble worker_alto_pid
+  worker_alto_doble="$tmp/claude-worker-alto"
+  cat >"$worker_alto_doble" <<'FIN'
+#!/usr/bin/env bash
+sleep 0.3
+exit 137
+FIN
+  chmod +x "$worker_alto_doble"
+  rm -f "$tmp/bloqueo.args"
+  : >"$tmp/run/watch.log"
+  DEVKIT_CLAUDE_BIN="$worker_alto_doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
+    DEVKIT_ROLES_FILE="$tmp/roles.toml" DEVKIT_FRONTERA_CACHE_DIR="$tmp/run/frontera" \
+    DEVKIT_TASK_BLOCK_BIN="$bloqueo" \
+    bash "$HERE/devkit-run.sh" --worker '/task-fix DEVKIT-137' "$tmp/run/worker-alto.log" \
+      modelo-x high 40 >/dev/null 2>&1 &
+  worker_alto_pid=$!
+  sleep 0.1
+  printf alto >"$tmp/run/modo"
+  wait "$worker_alto_pid" 2>/dev/null
+  printf trabajo >"$tmp/run/modo"
+  check "worker matado en modo alto: no pisa el bloqueo real con el motivo genérico" 0 \
+    "$([ -e "$tmp/bloqueo.args" ] && echo 1 || echo 0)"
+  check "worker matado en modo alto: no deja la ALARMA genérica en watch.log" 0 \
+    "$(grep -c 'ALARMA: terminó con error' "$tmp/run/watch.log")"
+
   # DEVKIT-77: `task_start_sin_entregar` usa el mismo doble de notion.sh
   # (`card <Clave>`) para decidir si un task-start dejó la card sin resolver.
   printf '{"estado":"En progreso"}\n' >"$RONDA_DIR/card-DEVKIT-63.json"
@@ -9841,6 +9873,16 @@ $card_md"
       # avisa a la card: causa, duración y el comando para relanzar a mano.
       # Nunca se relanza sola.
       avisar_skill_matada "$prompt" "$logf" "$matada_min" "$clave_en_curso"
+    elif [ "$(modo_actual)" = alto ]; then
+      : # H7 de pr-review en el PR #135: `vigilar_alto_once` (watch.sh) mata
+        # este `--worker` por su propio EN_CURSO y ya bloquea la card con
+        # "alto del humano", en un proceso aparte. Sin esta guarda, el `wait`
+        # de arriba vuelve con el rc de ese SIGTERM/SIGKILL apenas muere el
+        # pid y corre en carrera con ese bloqueo: si gana este `forzar_task_
+        # block`, pisa el motivo real ("alto del humano") con uno genérico
+        # ("terminó con error (rc=143)..."), y `task-block.sh` -idempotente-
+        # descarta el segundo bloqueo. Mismo trato que `run_skill` en
+        # watch.sh:924.
     elif [ "$rc" -ne 67 ]; then
       # rc=67 (sin Notion conectada) ya dejó su propia alarma en
       # `alarma_sin_notion`, dentro de `run_claude`; repetirla aquí es una
