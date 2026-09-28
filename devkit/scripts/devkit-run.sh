@@ -970,17 +970,19 @@ $material"
   # falso "no conectado" justo en el caso que la lista blanca de arriba
   # arregla.
   #
-  # `</dev/null` en las dos llamadas de acá abajo no es decorativo, mismo
-  # motivo que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin
-  # esto, un lanzamiento hecho desde dentro de un `while read` sobre una
-  # tubería (watch.sh:1061, `gh pr list | while read -r num url title; do ...
+  # `</dev/null` en la llamada de acá abajo no es decorativo, mismo motivo
+  # que en `modelo_disponible` (DEVKIT-54): `claude` lee stdin. Sin esto, un
+  # lanzamiento hecho desde dentro de un `while read` sobre una tubería
+  # (watch.sh:1061, `gh pr list | while read -r num url title; do ...
   # run_skill ...; done`) hereda esa tubería como su entrada estándar y se
   # come la fila que le tocaba a la siguiente vuelta del bucle, que termina
   # pegada al final del prompt real. Pasó con task-fix sobre el PR 68
   # (DEVKIT-94): se tragó la fila de PR #67/DEVKIT-93 de `gh pr list` y la
   # leyó como si fuera "texto recibido como argumento" (paso 3 de la skill),
   # así que respondió un hallazgo `C1` inventado y nunca llegó a los cinco
-  # hallazgos reales del informe (DEVKIT-102).
+  # hallazgos reales del informe (DEVKIT-102). El `claude -p` real de más
+  # abajo ya no necesita su propio `</dev/null` (DEVKIT-247): lee el prompt
+  # de un archivo temporal, no de esta tubería.
   if [ "$NOTION_CHECK" != 0 ] \
      && ! "${lanzador[@]}" "$CLAUDE_BIN" mcp list </dev/null 2>/dev/null | grep -qiE 'notion.*(connected|✔)'; then
     alarma_sin_notion "$1"
@@ -1045,10 +1047,10 @@ $cabecera"
   # con "Argument list too long" antes de que `claude` alcanzara a arrancar
   # -pr-review y task-fix quedaban sin publicar nada y la card se congelaba
   # esperando un veredicto que nunca llegaba-. Un archivo temporal (no un
-  # pipe) conserva la misma garantía que ya pedía `</dev/null` más abajo
-  # (DEVKIT-102): no depende de -ni consume- el stdin de quien llama, así que
-  # un `run_claude` disparado desde dentro de un `while read` sobre una
-  # tubería (watch.sh) sigue sin tragarse la fila que le tocaba a la
+  # pipe) conserva la misma garantía que pedía el `</dev/null` de la sonda de
+  # arriba (DEVKIT-102): no depende de -ni consume- el stdin de quien llama,
+  # así que un `run_claude` disparado desde dentro de un `while read` sobre
+  # una tubería (watch.sh) sigue sin tragarse la fila que le tocaba a la
   # siguiente vuelta.
   local prompt_file rc
   prompt_file=$(mktemp)
@@ -1681,13 +1683,13 @@ filtrar_agentes() {  # filtrar_agentes <lista de pids propios>
 }
 
 # El propio `claude -p` de quien llama, entre sus ancestros (DEVKIT-77):
-# descarta `devkit-run.sh` y se queda con `claude ... -p <prompt> ...`, igual
-# que la variante con banderas después del prompt de `filtrar_agentes` (no la
-# variante sin espacio final, `*claude*" -p"`, porque `run_claude` siempre
-# pasa el prompt después de `-p`), pero sobre la ascendencia propia en vez del
-# `ps` completo, y devuelve el primero que encuentra en vez de filtrarlos
-# todos. Puro, para probarlo con una tabla fija: recibe "<pid> <args>" por
-# línea.
+# descarta `devkit-run.sh` y se queda con `claude ... -p ...`, igual que la
+# variante con banderas después de `-p` de `filtrar_agentes` (no la variante
+# sin espacio final, `*claude*" -p"`, porque `run_claude` siempre pone algo
+# después de `-p`: hoy `--model`, ya no el prompt, DEVKIT-247), pero sobre la
+# ascendencia propia en vez del `ps` completo, y devuelve el primero que
+# encuentra en vez de filtrarlos todos. Puro, para probarlo con una tabla
+# fija: recibe "<pid> <args>" por línea.
 propio_de() {
   local pid args prompt
   while read -r pid args; do
@@ -2349,11 +2351,16 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
         ;;
     esac
     prompt=${resto#*" -p "}
-    # `run_claude` siempre pone `--model` justo después del prompt (:585):
-    # cortar ahí, no en el primer " --", evita partir un comentario humano
-    # que trae sus propias banderas (DEVKIT-81 H10). La sonda de modelo y la
-    # de cuota no pasan por `run_claude`; la de cuota no lleva `--model`, así
-    # que se cae al corte por el primer " --" de siempre.
+    # Lo que llega aquí ya no es un `run_claude` real (ese va por el `case`
+    # de arriba, sin prompt en argv, DEVKIT-247): son las dos sondas que
+    # siguen pasando un texto corto y fijo directo como argumento
+    # (`modelo_disponible` con "ok", `leer_cuota` con "/usage"), o un
+    # `claude -p` de una versión anterior del binario todavía vivo en medio
+    # de un `devkit recreate`. `modelo_disponible` pone `--model` justo
+    # después del prompt: cortar ahí, no en el primer " --", evita partir un
+    # comentario humano que trae sus propias banderas (DEVKIT-81 H10).
+    # `leer_cuota` no lleva `--model`, así que se cae al corte por el primer
+    # " --" de siempre.
     case "$prompt" in
       *" --model "*) prompt=${prompt% --model *} ;;
       *) prompt=${prompt%% --*} ;;
@@ -7651,9 +7658,11 @@ FIN
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H10: un comentario humano que trae " --" (por ejemplo "no uses
-  # --forzar aquí") no debe cortarse ahí: `run_claude` siempre pone
-  # `--model` justo después del prompt, así que cortar en el primer " --"
-  # partía el prompt antes de tiempo y daba un falso "sin registro".
+  # --forzar aquí") no debe cortarse ahí: en el `claude -p <prompt> --model
+  # ...` con el prompt en argv (`modelo_disponible`, o un binario viejo
+  # todavía vivo en medio de un `devkit recreate`, DEVKIT-247) `--model` va
+  # justo después del prompt, así que cortar en el primer " --" partía el
+  # prompt antes de tiempo y daba un falso "sin registro".
   local comentario_guiones prompt_guiones log_guiones pslist_guiones
   comentario_guiones="no uses --forzar aquí"
   prompt_guiones="/task-fix DEVKIT-91 $comentario_guiones"
