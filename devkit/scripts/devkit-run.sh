@@ -1114,7 +1114,13 @@ resumen() {  # resumen <log> <modelo> <esfuerzo> <presupuesto> [ronda]
   # después de terminar (por ejemplo, al reconstruir costos.log) mide igual.
   linea=$(tail -1 "$logf" 2>/dev/null | jq -r '
     "costo=\(.total_cost_usd // "?") turnos=\(.num_turns // "?") duracion=\(if .duration_ms then ((.duration_ms / 1000 | floor) | tostring) else "?" end)s tokens: entrada=\(.usage.input_tokens // "?") cache=\(.usage.cache_read_input_tokens // "?") salida=\(.usage.output_tokens // "?") :: \((.result // "") | gsub("\n"; " ") | .[0:160])"' 2>/dev/null)
-  [ -n "$linea" ] || linea="$(tail -1 "$logf" 2>/dev/null | cut -c1-160)"
+  # H8 de pr-review en el PR #135: recorte por caracteres en bash, no `cut
+  # -c1-160` (corta por bytes y puede partir un acento), igual que
+  # `ultima_linea_log`.
+  if [ -z "$linea" ]; then
+    linea="$(tail -1 "$logf" 2>/dev/null)"
+    linea="${linea:0:160}"
+  fi
   turnos=$(tail -1 "$logf" 2>/dev/null | jq -r '.num_turns // empty' 2>/dev/null)
   if [ -n "$presupuesto" ] && [ "$presupuesto" != "-" ] && [ -n "$turnos" ] \
      && [ "$turnos" -gt "$presupuesto" ] 2>/dev/null; then
@@ -9897,9 +9903,16 @@ $card_md"
       # bloqueo con `forzar_task_block`, que ya deja su propia ALARMA con el
       # Estado real de la card antes de bloquear, así que no hace falta
       # duplicarla aparte.
+      #
+      # H8 de pr-review en el PR #135: el motivo usa `ultima_linea_log`, no
+      # `$resumen_txt` -mismo texto que arma `--skill-crash`-, para no perder
+      # el detalle real de un log que ni siquiera llegó a JSON (el caso de
+      # origen, "Argument list too long"); `resumen()` cae a `cut -c1-160` en
+      # ese caso (H6, corte por bytes). La ALARMA agrega "; ver $logf", que
+      # el aviso de más arriba traía antes de reusar `forzar_task_block`.
       forzar_task_block "$prompt" "$logf" \
-        "terminó con error (rc=$rc); $resumen_txt" \
-        "ALARMA: terminó con error (rc=$rc): $resumen_txt" \
+        "terminó con error (rc=$rc); última línea del log: $(ultima_linea_log "$logf")" \
+        "ALARMA: terminó con error (rc=$rc): $(ultima_linea_log "$logf"); ver $logf" \
         "$clave_en_curso"
     fi
     # Poke (DEVKIT-108): `--worker` es el camino de cualquier lanzamiento
