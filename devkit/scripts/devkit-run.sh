@@ -1869,9 +1869,15 @@ prompt_en_linea() {  # prompt_en_linea <prompt>
 # alcanzó a producir JSON -`env`/`claude` muriendo con "Argument list too
 # long", por ejemplo- solo mostraba "murió sin resumen" o el `rc`, sin decir
 # nada del motivo real. Sin tabs ni saltos de línea, que romperían el TSV de
-# `estado_filas`, y recortada, igual que `prompt_en_linea`.
+# `estado_filas`, y recortada, igual que `prompt_en_linea`. Se corta por
+# caracteres en bash (H6 de pr-review en el PR #135), no con `cut -c1-160`:
+# `cut -c` de GNU coreutils corta por bytes, y un mensaje de `dk:` con
+# acentos quedaría partido a mitad de un carácter UTF-8 (mismo motivo que
+# describe watch.sh:798-800 sobre `prompt_en_linea`).
 ultima_linea_log() {  # ultima_linea_log <log>
-  tail -n1 "$1" 2>/dev/null | tr '\t\n' '  ' | sed -E 's/[[:space:]]+$//' | cut -c1-160
+  local linea
+  linea=$(tail -n1 "$1" 2>/dev/null | tr '\t\n' '  ' | sed -E 's/[[:space:]]+$//')
+  printf '%s' "${linea:0:160}"
 }
 
 # Identidad de un lanzamiento: la skill y su primer argumento (Clave o número
