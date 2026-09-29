@@ -1965,6 +1965,77 @@ check_igual "procesar_pr: OK encadena vía cola.sh (lanzar_cola) una sola vez, e
 check_igual "procesar_pr: se detiene tras llegar a nada, sin de más" 6 \
   "$(grep -c '^pr view$' "$PP_STATE/gh-calls" 2>/dev/null || echo 0)"
 
+# --- Draft: fuera del ciclo automático (DEVKIT-250) -------------------------
+# Un PR draft no lanza pr-review/task-fix/task-document/bloqueo, ni toca la
+# card. `procesar_pr` corta apenas ve `isDraft=true` -del mismo `gh pr list`
+# que ya arma la lista de PRs en `pasada`, simulado acá con el sexto argumento
+# de `--procesar-pr`- sin siquiera llamar a `gh pr view`: el doble de `gh` de
+# abajo falla si alguien lo intenta.
+DRAFT=$(mktemp -d -p "$TMP")
+mkdir -p "$DRAFT/run" "$DRAFT/bin"
+cat >"$DRAFT/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+echo "gh no debería llamarse para un PR draft" >&2
+exit 1
+FIN
+chmod +x "$DRAFT/bin/gh"
+
+DEVKIT_RUN_DIR="$DRAFT/run" PATH="$DRAFT/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  bash "$WATCH" --procesar-pr 90 https://github.com/o/r/pull/90 "DEVKIT-90 algo" "" true \
+  >"$DRAFT/watch.log" 2>&1
+OUT="$DRAFT/watch.log"
+check_log "draft: primera vez, avisa una línea y no toca gh" \
+  'PR #90 \(DEVKIT-90\) en draft; el bucle no lo toca'
+
+# Segunda pasada sobre el mismo PR, todavía draft: no repite la línea.
+DEVKIT_RUN_DIR="$DRAFT/run" PATH="$DRAFT/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+  bash "$WATCH" --procesar-pr 90 https://github.com/o/r/pull/90 "DEVKIT-90 algo" "" true \
+  >>"$DRAFT/watch.log" 2>&1
+check_igual "draft: solo avisa una vez mientras siga en draft" 1 \
+  "$(grep -c 'en draft; el bucle no lo toca' "$OUT")"
+
+# Al dejar de ser draft (`gh pr ready`), la siguiente pasada avisa y lo toma
+# como un head cualquiera sin informe: lanza pr-review, sin nada especial.
+DRAFT2=$(mktemp -d -p "$TMP")
+mkdir -p "$DRAFT2/run" "$DRAFT2/bin"
+cat >"$DRAFT2/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") printf '{"headRefOid":"d1d1d1d","reviews":[],"comments":[],"body":"","isDraft":false}' ;;
+  *) exit 1 ;;
+esac
+FIN
+chmod +x "$DRAFT2/bin/gh"
+cat >"$DRAFT2/devkit-run" <<'FIN'
+#!/usr/bin/env bash
+case "$1" in
+  --rol) echo "sonnet medium - 1" ;;
+  --sync) printf '{"result":"listo","total_cost_usd":0.01,"num_turns":2}\n' ;;
+  --resumen) echo resumen ;;
+  --guardar-transcripcion) exit 0 ;;
+  --pregunta-abierta) exit 1 ;;
+  --presupuesto-corte) exit 0 ;;
+  *) exit 0 ;;
+esac
+FIN
+chmod +x "$DRAFT2/devkit-run"
+
+# Primero, marcado como draft: ni pisa gh pr view.
+DEVKIT_RUN_DIR="$DRAFT2/run" PATH="$DRAFT2/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+DEVKIT_RUN_BIN="$DRAFT2/devkit-run" \
+  bash "$WATCH" --procesar-pr 91 https://github.com/o/r/pull/91 "DEVKIT-91 algo" "" true \
+  >"$DRAFT2/watch.log" 2>&1
+# Ahora `gh pr list` ya no lo trae como draft: la próxima pasada lo toma.
+DEVKIT_RUN_DIR="$DRAFT2/run" PATH="$DRAFT2/bin:$PATH" DEVKIT_WATCH_BOT=bot \
+DEVKIT_RUN_BIN="$DRAFT2/devkit-run" \
+  bash "$WATCH" --procesar-pr 91 https://github.com/o/r/pull/91 "DEVKIT-91 algo" "" false \
+  >>"$DRAFT2/watch.log" 2>&1
+OUT="$DRAFT2/watch.log"
+check_log "draft: al pasar a listo, avisa" \
+  'PR #91 \(DEVKIT-91\) ya no está en draft: el bucle lo toma'
+check_log "draft: listo, sin informe, lanza pr-review" \
+  'PR #91 \(DEVKIT-91\) head d1d1d1d sin informe: lanzando pr-review'
+
 # --- DEVKIT-137: watch.sh obedece el modo -----------------------------------
 # modo_actual() (copia de la de devkit-run.sh): trabajo por defecto, pausa y
 # alto desde MODO_FILE, cualquier otro valor cae a trabajo.

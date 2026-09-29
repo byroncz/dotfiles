@@ -395,6 +395,14 @@ REPO_NAME_WITH_OWNER_CACHE="${DEVKIT_REPO_NAME_WITH_OWNER_CACHE:-$RUN_DIR/repo-n
 MERGE_TTL="${DEVKIT_MERGE_TTL:-30}"
 MERGE_CACHE="${DEVKIT_MERGE_CACHE:-$RUN_DIR/merge.cache}"
 MERGE_LOCK="${DEVKIT_MERGE_LOCK:-$RUN_DIR/merge.lock}"
+# PR en draft (DEVKIT-250): mismo patrón de caché TTL que Bloqueos/Épicas/
+# Merge, pero sobre `gh pr list`, no sobre Notion -es la única fuente de
+# `isDraft`, watch.sh la usa para sacar al PR del ciclo automático y Notion no
+# la guarda-. Un PR draft no debe verse como "en curso" ni como una alarma en
+# `--estado`/`--tablero`: es la señal de "todavía no", no un paso pendiente.
+DRAFT_TTL="${DEVKIT_DRAFT_TTL:-30}"
+DRAFT_CACHE="${DEVKIT_DRAFT_CACHE:-$RUN_DIR/draft.cache}"
+DRAFT_LOCK="${DEVKIT_DRAFT_LOCK:-$RUN_DIR/draft.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -1427,6 +1435,55 @@ esperando_aprobacion() {
     <<<"$activas" 2>/dev/null
 }
 
+# Trae los números de todos los PR abiertos en draft y escribe DRAFT_CACHE
+# (DEVKIT-250); mismo patrón que `_bloqueos_fetch_y_guardar` pero sobre `gh`,
+# no sobre Notion.
+_draft_fetch_y_guardar() {
+  local drafts
+  drafts=$("$GH_BIN" pr list --state open --limit 30 --json number,isDraft \
+    --jq '[.[] | select(.isDraft) | .number]' 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$drafts" >"$DRAFT_CACHE.tmp" && mv -f "$DRAFT_CACHE.tmp" "$DRAFT_CACHE"
+}
+
+# Refresca DRAFT_CACHE en segundo plano, mismo patrón que
+# `refrescar_bloqueos_bg`/`refrescar_epicas_bg`/`refrescar_merge_bg`.
+refrescar_draft_bg() {
+  (
+    mkdir -p "$(dirname "$DRAFT_CACHE")" 2>/dev/null
+    exec 8>"$DRAFT_LOCK"
+    flock -n 8 || exit 0
+    _draft_fetch_y_guardar
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# Igual que `asegurar_bloqueos_cache`/`asegurar_epicas_cache`, para
+# DRAFT_CACHE: la usa `mostrar_tablero` en primer plano, para que la primera
+# vuelta ya distinga un PR draft sin esperar el refresco de fondo.
+asegurar_draft_cache() {
+  if [ -s "$DRAFT_CACHE" ]; then
+    local ts edad
+    IFS=$'\t' read -r ts _ <"$DRAFT_CACHE"
+    edad=$(( $(date +%s) - ts ))
+    [ "$edad" -lt "$DRAFT_TTL" ] && return 0
+  fi
+  mkdir -p "$(dirname "$DRAFT_CACHE")" 2>/dev/null
+  { flock 8; _draft_fetch_y_guardar; } 8>"$DRAFT_LOCK"
+}
+
+# ¿El PR <num> está en draft? (DEVKIT-250) Falso si no hay caché todavía o
+# `gh` no respondió -nunca bloquea la fila por eso, mismo criterio que
+# `bloquea_a`/`epica_de`: el próximo refresco lo corrige solo-. `--estado` la
+# llama por fila sin esperar en línea; `mostrar_tablero` ya aseguró la caché
+# antes de la primera llamada.
+pr_es_draft() {  # pr_es_draft <número de PR>
+  local ts drafts edad
+  [ -s "$DRAFT_CACHE" ] || { refrescar_draft_bg; return 1; }
+  IFS=$'\t' read -r ts drafts <"$DRAFT_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$DRAFT_TTL" ] || refrescar_draft_bg
+  jq -e --argjson n "$1" 'index($n) != null' <<<"$drafts" >/dev/null 2>&1
+}
+
 # Copia de `matar_arbol`/`detener_arbol` de watch.sh (DEVKIT-137/DEVKIT-185):
 # los dos scripts no se importan entre sí, mismo patrón que SKILL_TIMEOUT de
 # arriba. `--worker` nace con `setsid` en su propia sesión (ver más abajo), así
@@ -2124,7 +2181,7 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   fi
   local ln ts id origen prompt logf modelo esfuerzo ronda skill arg clave t0 edad resto fin estado detalle bloqueo modelo_col resto_bloqueo fin_ln
   local duracion_col dur_seg turnos_usados turnos_col presupuesto pr
-  local short_pr decision_ln decision
+  local short_pr decision_ln decision numpr
   # Todos los prompts lanzados alguna vez, no solo los ESTADO_FILAS visibles
   # en la tabla: un `claude -p` lanzado antes de esa cola, y todavía vivo, no
   # debe salir como `sin registro` (DEVKIT-81 H2). Una sola lectura de
@@ -2329,6 +2386,19 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
       else
         turnos_col="-/${presupuesto:--}"
       fi
+    fi
+    # DEVKIT-250: un PR draft no es una alarma ni un paso pendiente del
+    # ciclo -watch.sh ya no lo toca-, así que pisa cualquier ESTADO/DETALLE
+    # calculado arriba (incluido un veredicto CAMBIOS/error que ya no aplica:
+    # el bucle no va a actuar sobre él mientras siga en draft). Si el
+    # lanzamiento sigue realmente "en curso" (un proceso vivo, lanzado antes
+    # de marcarse draft) esa realidad manda y no se toca.
+    if [ "$estado" != "en curso" ] && [ "$pr" != - ]; then
+      numpr=${pr##*/}
+      case "$numpr" in
+        ''|*[!0-9]*) ;;
+        *) pr_es_draft "$numpr" && { estado=borrador; detalle=borrador; } ;;
+      esac
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col" "$duracion_col" "$turnos_col" "$pr"
   done 3< <(if [ -n "$full_lanz" ]; then printf '%s\n' "$full_lanz"; fi | tail -n "$ESTADO_FILAS")
@@ -2695,6 +2765,7 @@ ESTADOS_CON_GLIFO=(
   "en espera"
   "sin registro"
   cambios
+  borrador
 )
 
 # Glifo de ESTADO (DEVKIT-153): primera columna de la tabla, sin título, un
@@ -2910,7 +2981,7 @@ glifo_estado_fila() {  # glifo_estado_fila <estado> <idx> <fijo:0|1> <utf:0|1>
     Mergeado) [ "$utf" = 1 ] && printf '⎇' || printf '<>' ;;
     error|falló|"falló ("*) [ "$utf" = 1 ] && printf '✖' || printf 'x' ;;
     bloqueada|Bloqueada) [ "$utf" = 1 ] && printf '⊘' || printf '!!' ;;
-    "no arrancó"|"no lanzó"|"en espera") [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
+    "no arrancó"|"no lanzó"|"en espera"|borrador|Borrador) [ "$utf" = 1 ] && printf '○' || printf 'o' ;;
     *) [ "$utf" = 1 ] && printf '⚠' || printf '!' ;;
   esac
 }
@@ -2938,7 +3009,7 @@ color_de_estado_fila() {  # color_de_estado_fila <estado>
     Mergeado) printf morado-negrita ;;
     error|falló|"falló ("*|bloqueada) printf rojo ;;
     Bloqueada) printf rojo-negrita ;;
-    "no arrancó"|"no lanzó") printf gris ;;
+    "no arrancó"|"no lanzó"|borrador|Borrador) printf gris ;;
     "en espera") printf ambar ;;
     *) printf ambar ;;
   esac
@@ -2954,9 +3025,14 @@ color_de_estado_fila() {  # color_de_estado_fila <estado>
 # `formatear_fila_tablero` arma "<glifo> <estado>" y solo colorea esos
 # primeros caracteres-, así que "En progreso"/"Revisión automática" en verde
 # y negrita (DEVKIT-186) sí tiñe el girador ahí: no hay forma de separarlo
-# del texto como en `--estado`.
+# del texto como en `--estado`. "Borrador" (DEVKIT-250) no es un Estado de
+# Notion real -Notion no sabe de PRs draft-, sino lo que `mostrar_tablero`
+# pasa en vez del Estado real cuando `pr_es_draft` dice que sí: mismo ○ gris
+# que "no arrancó"/"Lista", nunca el girador de trabajo activo ni la alarma
+# ámbar por defecto, sin importar qué Estado tenga la card en Notion.
 glifo_estado_tablero() {  # glifo_estado_tablero <estado card> <idx> <fijo:0|1> <utf:0|1>
   case "$1" in
+    Borrador) glifo_estado_fila "no arrancó" 0 1 "$4" ;;
     "En progreso"|"Revisión automática") glifo_estado_fila "en curso" "$2" "$3" "$4" ;;
     "Lista para merge") glifo_estado_fila terminó 0 1 "$4" ;;
     Bloqueada) glifo_estado_fila bloqueada 0 1 "$4" ;;
@@ -2967,6 +3043,7 @@ glifo_estado_tablero() {  # glifo_estado_tablero <estado card> <idx> <fijo:0|1> 
 
 color_de_estado_tablero() {  # color_de_estado_tablero <estado card>
   case "$1" in
+    Borrador) printf gris ;;
     "En progreso"|"Revisión automática") printf verde-negrita ;;
     "Lista para merge") printf verde ;;
     Bloqueada) printf rojo ;;
@@ -3688,7 +3765,18 @@ encabezado_tablero() {
 # sobran a la columna de 22.
 formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr> [idx=0] [fijo=1] [color=]
   local clave=$1 estado=$2 tipo=$3 pr=$4 idx=${5:-0} fijo=${6:-1} color_habilitado=${7:-} \
-        frena utf glifo color estado_col icono_len pr_texto prefijo fila
+        frena utf glifo color estado_col icono_len pr_texto prefijo fila numpr
+  # DEVKIT-250: un PR draft pisa el Estado real de Notion -"En progreso" o
+  # "Revisión automática" mientras el humano decide qué hacer con él- porque
+  # ya no es trabajo activo del ciclo: watch.sh no lo va a tocar mientras
+  # siga en draft, y mostrarlo como "en curso" (girando) sería mentir.
+  if [ "$pr" != - ]; then
+    numpr=${pr##*/}
+    case "$numpr" in
+      ''|*[!0-9]*) ;;
+      *) pr_es_draft "$numpr" && estado=Borrador ;;
+    esac
+  fi
   frena=$(bloquea_a "$clave")
   utf8_disponible && utf=1 || utf=0
   glifo=$(glifo_estado_tablero "$estado" "$idx" "$fijo" "$utf")
@@ -3740,6 +3828,7 @@ mostrar_tablero() {  # mostrar_tablero [idx=0] [fijo=1] [color=]
   fi
   asegurar_bloqueos_cache
   asegurar_epicas_cache
+  asegurar_draft_cache
   local clave estado tipo pr
   local -A epica_de_clave
   local -a orden_epicas=()
@@ -9019,6 +9108,54 @@ FIN
   pkill -f "$doble_lento" 2>/dev/null
   wait 2>/dev/null
 
+  # DEVKIT-250: un PR draft no es una alarma ni un paso pendiente del ciclo.
+  # `glifo_estado_fila`/`color_de_estado_fila` reconocen "borrador" con el
+  # mismo ○ gris que "no arrancó", nunca el ⚠ ámbar por defecto; lo mismo su
+  # par de `--tablero` con "Borrador".
+  check "glifo_estado_fila: borrador usa el mismo ○ que 'no arrancó'" \
+    "$(glifo_estado_fila "no arrancó" 0 1 1)" "$(glifo_estado_fila borrador 0 1 1)"
+  check "color_de_estado_fila: borrador es gris, no la alarma ámbar por defecto" gris \
+    "$(color_de_estado_fila borrador)"
+  check "glifo_estado_tablero: Borrador usa el mismo ○ que 'no arrancó'" \
+    "$(glifo_estado_tablero "Lista" 0 1 1)" "$(glifo_estado_tablero Borrador 0 1 1)"
+  check "color_de_estado_tablero: Borrador es gris, no la alarma ámbar por defecto" gris \
+    "$(color_de_estado_tablero Borrador)"
+
+  # `--estado` con un PR draft (DEVKIT-250): un veredicto CAMBIOS ya resuelto
+  # -normalmente ⚠ ámbar, algo que "necesita atención"- deja de mostrarse así
+  # apenas GitHub dice que el PR está en draft: watch.sh no va a actuar sobre
+  # él, así que la fila no debe sugerir lo contrario. La fila de una skill
+  # que sigue realmente en curso (un proceso vivo, lanzada antes de marcarse
+  # draft) no se toca: esa sí es actividad real.
+  local draft_est draft_ahora draft_pslist draft_filas
+  draft_est="$tmp/estado-draft"
+  mkdir -p "$draft_est"
+  draft_ahora=$(date -d '2026-09-16T12:00:00Z' +%s)
+  cat >"$draft_est/watch.log" <<FIN
+2026-09-16T11:00:00Z PR #201 (DEVKIT-201) head e1e1e1e sin informe: lanzando pr-review
+2026-09-16T11:00:00Z pr-review-201-e1e1e1e lanzando (origen=bucle): "/pr-review 201" log=$draft_est/pr-review-201-e1e1e1e.log
+2026-09-16T11:01:00Z pr-review-201-e1e1e1e terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: CAMBIOS
+2026-09-16T11:01:01Z PR #201 (DEVKIT-201) CAMBIOS en e1e1e1e: lanzando task-fix
+2026-09-16T11:05:00Z task-fix-202-f2f2f2f lanzando (origen=bucle): "/task-fix DEVKIT-202" log=$draft_est/task-fix-202-f2f2f2f.log
+FIN
+  draft_pslist="$draft_est/ps"
+  printf '#!/usr/bin/env bash\necho "4343 bash devkit-run.sh --sync /task-fix DEVKIT-202 %s/task-fix-202-f2f2f2f.log"\n' \
+    "$draft_est" >"$draft_pslist"
+  chmod +x "$draft_pslist"
+  # Los dos PR abiertos del fixture, marcados draft: 201 (CAMBIOS, ya
+  # terminado) y 202 (el task-fix de más arriba, todavía "en curso").
+  printf '%s\t%s\n' "$(date +%s)" '[201,202]' >"$draft_est/draft.cache"
+  draft_filas=$(REPO_NAME_WITH_OWNER_CACHE="$draft_est/repo.cache" GH_BIN="$gh_doble_pr" \
+    PS_BIN="$draft_pslist" LOCK="$draft_est/skill.lock" \
+    DRAFT_CACHE="$draft_est/draft.cache" DRAFT_LOCK="$draft_est/draft.lock" \
+    estado_filas "$draft_est/watch.log" "$draft_ahora")
+  check "--estado: PR draft pisa un veredicto CAMBIOS ya resuelto (ESTADO)" borrador \
+    "$(printf '%s\n' "$draft_filas" | awk -F'\t' '$2 == "DEVKIT-201" {print $5; exit}')"
+  check "--estado: PR draft pisa un veredicto CAMBIOS ya resuelto (DETALLE)" borrador \
+    "$(printf '%s\n' "$draft_filas" | awk -F'\t' '$2 == "DEVKIT-201" {print $6; exit}')"
+  check "--estado: PR draft con la skill todavía en curso no se pisa" "en curso" \
+    "$(printf '%s\n' "$draft_filas" | awk -F'\t' '$2 == "DEVKIT-202" {print $5; exit}')"
+
   # --tablero (DEVKIT-82): una sola consulta a notion.sh `activas`, con
   # "bloquea a" (misma caché de DEVKIT-63) y agrupada por Épica de origen
   # cuando hay más de una Épica En progreso (misma caché de DEVKIT-80).
@@ -9143,6 +9280,34 @@ FIN
   check "--tablero sin \"project\" en devkit.toml: sale con error" 1 "$rc_sin_proyecto"
   check "--tablero sin \"project\" en devkit.toml: lo avisa" si \
     "$(printf '%s' "$tablero_err" | grep -q 'no encuentro' && echo si || echo no)"
+
+  # --tablero con un PR draft (DEVKIT-250): reusa el fixture de arriba -
+  # DEVKIT-58 trae el PR #9-, con ese número en DRAFT_CACHE. La fila deja de
+  # mostrar el Estado real de Notion ("Lista para merge", con su ✔ verde) y
+  # muestra "Borrador" en gris, sin el girador de "en curso" ni la alarma
+  # ámbar por defecto; una card sin PR (DEVKIT-57) no se ve afectada.
+  local tablero_draft salida_tablero_draft salida_tablero_draft_color
+  tablero_draft="$tmp/tablero-draft"
+  mkdir -p "$tablero_draft"
+  printf '%s\t%s\n' "$(date +%s)" '[9]' >"$tablero_draft/draft.cache"
+  salida_tablero_draft=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    DRAFT_CACHE="$tablero_draft/draft.cache" DRAFT_LOCK="$tablero_draft/draft.lock" \
+    mostrar_tablero)
+  check "--tablero: PR draft muestra Borrador, no el Estado real de Notion" si \
+    "$(printf '%s\n' "$salida_tablero_draft" | grep 'DEVKIT-58' | grep -q 'Borrador' && echo si || echo no)"
+  check "--tablero: PR draft no lleva el girador ni el ✔ de 'Lista para merge'" no \
+    "$(printf '%s\n' "$salida_tablero_draft" | grep 'DEVKIT-58' | grep -qE '⠿|✔' && echo si || echo no)"
+  check "--tablero: una card sin PR no se ve afectada por la caché de drafts" si \
+    "$(printf '%s\n' "$salida_tablero_draft" | grep 'DEVKIT-57' | grep -qF '⠿' && echo si || echo no)"
+  salida_tablero_draft_color=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    DRAFT_CACHE="$tablero_draft/draft.cache" DRAFT_LOCK="$tablero_draft/draft.lock" \
+    mostrar_tablero 0 1 1)
+  check "--tablero: PR draft en gris (código ANSI 90), no ámbar ni verde" si \
+    "$(printf '%s\n' "$salida_tablero_draft_color" | grep 'DEVKIT-58' | grep -qF $'\033[90m' && echo si || echo no)"
 
   # --cola (DEVKIT-119): un paso al costado, `cola.sh --lista`. Doble que
   # anota sus argumentos, para comprobar que se llama con --lista y que
