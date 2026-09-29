@@ -1194,7 +1194,7 @@ frase_fix_vacio() {  # frase_fix_vacio <log>
 # Acción y head frescos del PR, tras la skill: el informe pudo cambiar mientras
 # corría.
 decision_fresca() {  # decision_fresca <num>
-  gh pr view "$1" --json headRefOid,reviews,comments 2>/dev/null | decide "$BOT" | cut -f1,2
+  gh pr view "$1" --json headRefOid,reviews,comments,mergeable 2>/dev/null | decide "$BOT" | cut -f1,2
 }
 
 # Caso `fix` del bucle: task-fix y, si respondió vacío, la alarma.
