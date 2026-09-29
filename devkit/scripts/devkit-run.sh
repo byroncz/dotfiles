@@ -379,9 +379,9 @@ CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 # la cuota cada 60 s (antes, cada 3 s con sesión persistente) cientos de
 # veces seguidas. `seguir_estado` y `seguir_lanzamiento` dejan de disparar
 # `refrescar_cuota_bg` -sin dejar de mostrar la última lectura buena- pasado
-# este margen desde que arrancó el bucle; una `--estado` suelta (alguien
-# mirando de verdad) siempre
-# refresca si venció CUOTA_TTL, sin este tope.
+# este margen desde que arrancó el bucle; una foto de `--estado` (`--foto`, o
+# sin tty; alguien mirando de verdad) siempre refresca si venció CUOTA_TTL,
+# sin este tope.
 CUOTA_DESATENDIDO="${DEVKIT_CUOTA_DESATENDIDO:-900}"
 # Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
 # caché que Consumo, una sola llamada a Notion por refresco. BLOQUEOS_TTL es
@@ -3137,7 +3137,7 @@ colorear() {  # colorear <color> <texto> <habilitado>
 
 # Glifo sin color de una fila de `estado_filas` (skill/tarea). "en curso" gira
 # en braille, una posición por refresco (<idx>), fijo en ⠿ con <fijo>=1 (una
-# sola foto de `--estado` sin `--seguir`); terminó ✔ -mismo icono para "Lista
+# foto de `--estado`, `--foto` o sin tty); terminó ✔ -mismo icono para "Lista
 # para merge" (DEVKIT-132): el veredicto OK de un pr-review terminado, no un
 # paso distinto-; error -mismo icono para
 # "falló", el texto que trae la línea cruda de watch.log antes de que
@@ -3637,7 +3637,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   local filas skill clave origen edad estado detalle modelo duracion turnos pr
   # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
   # -para el punto de la cabecera, en `seguir_estado`/`seguir_lanzamiento`/
-  # `--estado` sin `--seguir`- se las pasa acá para no leer watch.log/ps dos
+  # una foto de `--estado` (`--foto`, o sin tty)- se las pasa acá para no leer watch.log/ps dos
   # veces por refresco y arriesgar que el punto y la tabla salgan de fotos
   # distintas. `$#` -ge 5, no el valor: una llamada sin filas activas de
   # verdad pasa una cadena vacía a propósito.
@@ -8100,7 +8100,7 @@ FIN
     "$(printf '%s|%s' \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 0 1 0 | cut -d' ' -f1)" \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 0 1 0 | cut -d' ' -f1)")"
-  check "punto: en una sola foto (sin --seguir) no parpadea, siempre lleno" '●|●' \
+  check "punto: en una sola foto (--foto, o sin tty) no parpadea, siempre lleno" '●|●' \
     "$(printf '%s|%s' \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 1 1 0 | cut -d' ' -f1)" \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 1 1 0 | cut -d' ' -f1)")"
@@ -9595,8 +9595,8 @@ FIN
   check "lanzamiento real: --estado lo muestra terminado" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/' | grep -qF 'terminó' && echo si || echo no)"
-  # DEVKIT-106 H4: `--estado` sin `--seguir` (una sola foto) también muestra
-  # la cabecera con el punto fijo, no solo la tabla.
+  # DEVKIT-106 H4: una foto de `--estado` (`--foto`, o sin tty) también
+  # muestra la cabecera con el punto fijo, no solo la tabla.
   check "--estado (foto única) muestra la cabecera con el punto" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^dk --estado  .*[●*]' && echo si || echo no)"
@@ -11103,8 +11103,8 @@ $card_md"
     fi
     tablero_color=''; [ -t 1 ] && tablero_color=1
     # Misma cabecera de punto+modo que la foto única de `--estado` (DEVKIT-136):
-    # sin esto, `--tablero` sin `--seguir` no tenía cabecera propia y el modo
-    # no tenía dónde mostrarse.
+    # sin esto, una foto de `--tablero` (`--foto`, o sin tty) no tenía cabecera
+    # propia y el modo no tenía dónde mostrarse.
     tablero_ahora_una=${DEVKIT_AHORA:-$(date +%s)}
     tablero_filas_una=$(estado_filas "$WATCH_LOG" "$tablero_ahora_una")
     tablero_bucle_una=$(senal_bucle "$WATCH_LOG" "$tablero_ahora_una" "$tablero_color")
