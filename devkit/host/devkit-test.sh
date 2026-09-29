@@ -764,6 +764,39 @@ corre update
 check        "bin/devkit instalado por un proyecto en dev: update con etiqueta no lo baja" no \
              "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
 
+# H9, DEVKIT-258: el camino positivo con devkit.version presente. Instalada
+# 0.1.0 y update a 0.2.0 por el camino de descarga: refresca, y el trap deja
+# devkit.version en la versión destino.
+escenario 0.1.0
+printf '0.1.0\n' > "$TMP/root/bin/devkit.version"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
+corre update
+unset DEVKIT_TEST_TARBALL_HOST_MARCA
+check        "instalada 0.1.0, update a 0.2.0: refresca bin/devkit" si \
+             "$(grep -q 'marca-de-la-release-0.2.0' "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "instalada 0.1.0, update a 0.2.0: devkit.version queda en 0.2.0" 0.2.0 \
+             "$(cat "$TMP/root/bin/devkit.version" 2>/dev/null)"
+
+# H9, DEVKIT-258: el camino de descarga tampoco baja un comando más nuevo.
+# Instalada 1.2.0 y update a 0.2.0, con una etiqueta que sí trae otro
+# host/devkit.sh: bin/devkit y devkit.version no cambian.
+escenario 0.1.0
+printf '1.2.0\n' > "$TMP/root/bin/devkit.version"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
+corre update
+unset DEVKIT_TEST_TARBALL_HOST_MARCA
+check        "instalada 1.2.0, update a 0.2.0 por descarga: no lo actualiza" no \
+             "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+check        "instalada 1.2.0, update a 0.2.0 por descarga: bin/devkit no cambia" si \
+             "$(cmp -s "$DEVKIT" "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "instalada 1.2.0, update a 0.2.0 por descarga: devkit.version sigue en 1.2.0" 1.2.0 \
+             "$(cat "$TMP/root/bin/devkit.version" 2>/dev/null)"
+check        "instalada 1.2.0, update a 0.2.0 por descarga: termina bien" 0 "$ESTADO"
+
 # En dev, el refresco solo sigue al workspace vivo si su rama es main: una
 # rama de card sin mergear no debe instalarse como el comando global.
 escenario dev
