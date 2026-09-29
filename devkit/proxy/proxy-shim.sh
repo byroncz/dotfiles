@@ -108,10 +108,14 @@ enviar() {
 }
 
 if { [ "$method" = "GET" ] || [ "$method" = "HEAD" ]; } && [ "$path_sin_query" = "/" ]; then
-  # La raíz nunca lleva cuerpo ni upgrade: no hace falta seguir leyendo del
-  # navegador, así que esta rama sí puede leer la respuesta en el propio
-  # script (tercer eslabón de la tubería) para agregar la cookie.
-  printf '%s' "$fwd" | socat - "TCP:${UPSTREAM_HOST}:${UPSTREAM_PORT}" | {
+  # Se usa enviar (no un printf suelto) para no cerrar el lado de escritura
+  # hacia dev: un printf que termina hace EOF en el pipe, socat responde con
+  # un half-close hacia dev, y Node (httpAllowHalfOpen=false) puede cortar su
+  # propia respuesta si el handler todavía la está armando (DEVKIT-259, H1).
+  # La raíz nunca lleva cuerpo ni upgrade, así que esta rama sí puede leer la
+  # respuesta en el propio script (tercer eslabón de la tubería) para
+  # agregar la cookie.
+  enviar | socat - "TCP:${UPSTREAM_HOST}:${UPSTREAM_PORT}" | {
     resp=""
     while IFS= read -r line; do
       line="${line%$'\r'}"
