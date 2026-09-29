@@ -71,8 +71,8 @@ while IFS= read -r line; do
       cookie_rest="${line#*:}"
       cookie_rest="${cookie_rest# }"
       while [ -n "$cookie_rest" ]; do
+        cookie_rest="${cookie_rest# }"
         cookie_par="${cookie_rest%%;*}"
-        cookie_par="${cookie_par# }"
         case "$cookie_par" in
           vscode-tkn=*) tkn_cookie="${cookie_par#vscode-tkn=}" ;;
         esac
