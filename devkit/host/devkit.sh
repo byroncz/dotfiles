@@ -303,11 +303,15 @@ resolve_extensions() {
     echo "devkit: aviso: extensions de .devkit/devkit.toml tiene elementos que no calzan con \"ns.ext\" o \"ns.ext@versión\" y se ignoran:" >&2
     printf '%s\n' "$malas_proyecto" | sed 's/^/  /' >&2
   fi
+  # Patrones del case con "(" de apertura: el bash 3.2 de macOS cuenta
+  # paréntesis dentro de $( ) y sin él aborta (DEVKIT-265). Este comentario
+  # va fuera de la sustitución: dentro, un ")" suelto o un apóstrofo también
+  # la romperían en el Mac (H2).
   declarados_proyecto="$(
     printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | grep -v '^$' | grep -E "$patron_extension" | while IFS= read -r item; do
       case "$item" in
-        *@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
-        *)   printf '%s latest\n' "$item" ;;
+        (*@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
+        (*)   printf '%s latest\n' "$item" ;;
       esac
     done
   )"

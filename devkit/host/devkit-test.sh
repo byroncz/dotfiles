@@ -1121,6 +1121,141 @@ check        "update resuelve las extensions del proyecto (sync_toml_env corre a
              "ms.nueva=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
 check        "update con extensions del proyecto: termina bien" 0 "$ESTADO"
 
+# --- case dentro de $( ) sin "(" de apertura (DEVKIT-265) --------------------
+# El bash 3.2 de macOS (/bin/sh del Mac) cuenta paréntesis al leer $( ... ) y
+# el ")" de un patrón sin "(" cierra la sustitución antes de tiempo. Dash, con
+# el que corre esta suite, no falla, así que sin esta comprobación el error solo
+# aparecería en el Mac. Imprime "archivo:línea: línea" por cada patrón sin "(".
+# El detector reconoce el patrón por su posición, no por su forma (H1 de la
+# revisión): es el primer texto tras `case ... in` y tras cada `;;` o `;&`, sea
+# una palabra, un texto con comillas o espacios, o `a | b`, y esté en la línea
+# del `case` o en una posterior. Lleva la profundidad de `$(` y `(` de una
+# línea a otra: una sustitución que abre a mitad de línea o con un comentario
+# al final también cuenta, y el `case` puede ir en la misma línea.
+cat > "$TMP/case_sin_par.awk" <<'AWK'
+BEGIN { depth = 0; st = 0; ncase = 0; hd = "" }
+FNR == 1 { depth = 0; st = 0; ncase = 0; hd = "" }
+# Cuerpo de un heredoc: es texto, no código.
+hd != "" { l = $0; sub(/^\t+/, "", l); if (l == hd) hd = ""; next }
+{
+  linea = $0; n = length(linea); q = ""; i = 1
+  while (i <= n) {
+    c = substr(linea, i, 1); d = substr(linea, i + 1, 1)
+    ant = (i == 1) ? " " : substr(linea, i - 1, 1)
+    resto = substr(linea, i)
+    if (c == "\\") { i += 2; continue }
+    if (q == "\047") { if (c == "\047") q = ""; i++; continue }
+    if (q == "\"") {
+      if (c == "\"") q = ""
+      else if (c == "$" && d == "(") { depth++; qs[depth] = q; q = ""; i++ }
+      i++; continue
+    }
+    # st 2: se espera un patrón (tras `in` o tras `;;`).
+    if (st == 2) {
+      if (c ~ /[[:space:]]/) { i++; continue }
+      if (c == "#") break
+      if (resto ~ /^esac([[:space:];)&|]|$)/) { ncase--; st = 0; i += 4; continue }
+      if (c == "(") { st = 3; pdepth = depth; i++; continue }
+      if (cdepth[ncase] > 0) print FILENAME ":" FNR ": " linea
+      st = 3; pdepth = depth
+    }
+    if (c == "\"" || c == "\047") { q = c; i++; continue }
+    if (c == "$" && d == "(") { depth++; qs[depth] = ""; i += 2; continue }
+    if (c == "(") { depth++; qs[depth] = ""; i++; continue }
+    if (c == ")") {
+      if (st == 3 && depth == pdepth) { st = 0; i++; continue }
+      if (depth > 0) { q = qs[depth]; depth-- }
+      i++; continue
+    }
+    if (st == 3) { i++; continue }
+    if (c == "#" && ant ~ /[[:space:]]/) break
+    if (c == ";" && (d == ";" || d == "&") && ncase > 0) {
+      st = 2; i += 2
+      if (substr(linea, i, 1) == "&") i++
+      continue
+    }
+    if (ant ~ /[[:space:];(&|{]/) {
+      if (st == 0 && resto ~ /^case([[:space:]]|$)/) { ncase++; cdepth[ncase] = depth; st = 1; i += 4; continue }
+      if (st == 0 && ncase > 0 && resto ~ /^esac([[:space:];)&|]|$)/) { ncase--; i += 4; continue }
+      if (st == 1 && resto ~ /^in([[:space:]]|$)/) { st = 2; i += 2; continue }
+    }
+    i++
+  }
+  if (match(linea, /<<-?[[:space:]]*["\047]?[A-Za-z_][A-Za-z_0-9]*/)) {
+    h = substr(linea, RSTART, RLENGTH); sub(/^<<-?[[:space:]]*["\047]?/, "", h); hd = h
+  }
+}
+AWK
+case_sin_parentesis() {  # case_sin_parentesis <archivo>...
+  awk -f "$TMP/case_sin_par.awk" "$@"
+}
+cat > "$TMP/case_malo.sh" <<'FIXTURE'
+x="$(
+  printf '%s\n' a | while IFS= read -r i; do
+    case "$i" in
+      *@*) echo con ;;
+      (*)  echo sin ;;
+    esac
+  done
+)"
+FIXTURE
+# Formas que el detector anterior no veía (H1): cada patrón sin "(" cuenta una.
+cat > "$TMP/case_malo_forma.sh" <<'FIXTURE'
+x="$(
+  printf '%s\n' a | while IFS= read -r i; do
+    case "$i" in
+      *" $(echo x) "*) echo a ;;
+      "a b") echo b ;;
+      a | b) echo c ;;
+      (*) echo d ;;
+    esac
+  done
+)"
+y="$(case "$1" in -*) shift ;; *) break ;; esac)"
+z="$(printf a | while read -r i; do
+  case "$i" in
+    a) echo ;;
+  esac
+done
+)"
+w="$(  # comentario
+  case "$1" in
+    a) echo ;;
+  esac
+)"
+FIXTURE
+cat > "$TMP/case_bueno.sh" <<'FIXTURE'
+x="$(
+  printf '%s\n' a | while IFS= read -r i; do
+    case "$i" in
+      (*@*) echo con ;;
+      (*)   echo sin ;;
+    esac
+  done
+)"
+y="$(case "$1" in (-*) shift ;; (*) break ;; esac)"
+z="$(  # comentario
+  case "$1" in
+    ("a b") echo ;;
+    (a | b) echo ;;
+    (*" $(echo x) "*) echo ;;
+  esac
+)"
+case "$x" in
+  *) echo fuera de $( ) no importa ;;
+esac
+w="$(date)" ; case "$w" in a) echo ${#w} ;; *) echo $# ;; esac
+FIXTURE
+check "case sin \"(\" dentro de \$( ): el detector lo encuentra" 1 \
+      "$(case_sin_parentesis "$TMP/case_malo.sh" | wc -l | tr -d ' ')"
+check "case sin \"(\" con espacios, comillas, misma línea o \$( sin cerrar: el detector los encuentra" 7 \
+      "$(case_sin_parentesis "$TMP/case_malo_forma.sh" | wc -l | tr -d ' ')"
+check "case con \"(\" dentro de \$( ) o fuera de él: el detector calla" 0 \
+      "$(case_sin_parentesis "$TMP/case_bueno.sh" | wc -l | tr -d ' ')"
+sin_par="$(case_sin_parentesis "$HERE/devkit.sh" "$HERE/../../new-project.sh")"
+check "devkit.sh y new-project.sh: ningún case en \$( ) sin \"(\" (bash 3.2)" "" "$sin_par"
+[ -z "$sin_par" ] || printf '%s\n' "$sin_par" | sed 's/^/     /'
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"
