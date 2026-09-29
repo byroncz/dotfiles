@@ -61,7 +61,7 @@ limpiar() {
 }
 trap limpiar EXIT
 
-marcador_fix=$(grep -m1 -oE '<!-- devkit-fix sha=[0-9a-f]+ review=[0-9a-f]+( manual=1)? -->' "$archivo")
+marcador_fix=$(grep -m1 -oE '<!-- devkit-fix sha=[0-9a-f]+ review=[0-9a-f]+( manual=1)?( merge=1)? -->' "$archivo")
 if [ -z "$marcador_fix" ]; then
   err "$archivo no empieza con el marcador <!-- devkit-fix sha=... review=... -->"
   exit 1
@@ -115,6 +115,17 @@ while IFS= read -r id; do
   [[ "$id" =~ ^H[0-9]+$ ]] && solo_c=0
 done <<<"$ids_respuesta"
 
+# `H0` (DEVKIT-262): el id fijo y reservado que task-fix publica tras mezclar
+# origin/main (sección "Mezclar origin/main" de SKILL.md), no un hallazgo de
+# ningún informe. El conflicto contra main es ortogonal al ciclo de revisión
+# -puede llegar a mitad de un CAMBIOS real, antes de que se atiendan sus
+# hallazgos, o con el head del merge ya distinto del que revisó el último
+# informe-, así que una respuesta que trae exactamente `H0` y nada más no
+# tiene nada que comparar contra `ids_validos` ni contra el sha del último
+# informe.
+solo_h0=0
+[ "$ids_respuesta" = "H0" ] && solo_h0=1
+
 # --- Comentario humano genuino posterior al corte, mismo criterio que
 # `$human` en `decide` de watch.sh (DEVKIT-102, H5): una respuesta que solo
 # trae `C<n>` y responde a ese comentario no tiene `devkit-findings` que
@@ -128,10 +139,14 @@ def markers($re; $ts):
 
 (.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
    | sort_by(.at)) as $reviews
-| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)?(?<merge> merge=1)? -->"; "createdAt")) as $fixes
+# La respuesta H0 de una mezcla de main (DEVKIT-262, H1) lleva `merge=1` y no
+# atiende ningún comentario humano: se excluye del corte, mismo criterio que
+# $real_fixes en decide de watch.sh.
+| ([$fixes[] | select(.merge == null)]) as $real_fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
-| (([$fixes[].at, $blocks[].at] | max)
-   // ($reviews | map(.at) | max)
+| (([$real_fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | min)
    // "") as $human_cutoff
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),
@@ -147,7 +162,7 @@ comentario_humano=$(jq -nr --argjson a "$pr_json" --argjson b "$comentarios_json
   "\$a + \$b | $HUMANO")
 
 saltar_validacion=0
-if [ "$solo_c" = 1 ] && { [ "$manual" = 1 ] || [ "$comentario_humano" = si ]; }; then
+if { [ "$solo_c" = 1 ] && { [ "$manual" = 1 ] || [ "$comentario_humano" = si ]; }; } || [ "$solo_h0" = 1 ]; then
   saltar_validacion=1
 fi
 

@@ -13,6 +13,23 @@
 #   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
 #
 # PR marcado draft en GitHub                                -> nada (DEVKIT-250)
+# mergeable=CONFLICTING en GitHub (con main)                -> task-fix "mezcla origin/main..."
+#                                                                (DEVKIT-262, antes que cualquier otra
+#                                                                salvo bloqueado)
+#
+# Un PR en conflicto con main (DEVKIT-262) es un caso del ciclo automático, no
+# un silencio: aprobado y "Lista para merge" en la card, pero GitHub lo
+# mantiene `dirty` y el auto-merge nunca dispara. `procesar_pr` pide
+# `mergeable` junto con el resto del JSON del PR; `decide` lo traduce en la
+# acción `mezclar`, con prioridad sobre cualquier otra salvo un bloqueo ya
+# vigente -no importa en qué punto del ciclo (revisar, fix, documentar) esté
+# el PR, un conflicto contra main hay que resolverlo primero-. `mezclar`
+# lanza `task-fix` con un texto fijo (`MEZCLAR_TEXTO`, más abajo): mezcla
+# `origin/main` con un commit de merge, resuelve conservando ambos lados,
+# corre las pruebas y empuja. `GitHub` tarda un momento en calcular
+# `mergeable` tras un push (`UNKNOWN`): se trata como si no hubiera
+# conflicto y la siguiente vuelta lo vuelve a consultar, cuando GitHub ya
+# haya terminado el cálculo.
 #
 # Un PR draft queda fuera de esta tabla por completo, sin importar qué
 # marcadores traiga: es la señal estándar de "todavía no" y GitHub tampoco lo
@@ -91,7 +108,7 @@
 # Quien lo toca no decide nada, solo adelanta el reloj.
 #
 # Uso de prueba: `bash watch.sh --decide < pr.json` imprime la decisión para
-# el JSON de `gh pr view <N> --json headRefOid,reviews,comments`, y
+# el JSON de `gh pr view <N> --json headRefOid,reviews,comments,mergeable`, y
 # `bash watch.sh --decide-merged < pr.json` la del PR mergeado, para el JSON
 # de `gh pr view <N> --json comments`. Los hooks `--quota-hit`, `--quota-reset`
 # y `--run-skill` prueban el relanzamiento por cuota agotada y por error
@@ -226,6 +243,7 @@ NOTION_BIN="${DEVKIT_NOTION_BIN:-$SCRIPTS_DIR/notion.sh}"
 # Decisión sobre un PR abierto. Entrada: el JSON de gh pr view. Salida: una
 # línea con cinco campos separados por tabulador (acción, head, referencia,
 # extra, informe), nunca vacíos ("-" si no aplica):
+#   mezclar    <head> -                                -              <informe>
 #   revisar    <head> <sha del marcador anterior o el propio head> - <informe>
 #   fix        <head> <sha del marcador CAMBIOS>      -              <informe>
 #   fix-humano <head> <fecha del último comentario>   <texto b64>    <informe>
@@ -233,6 +251,13 @@ NOTION_BIN="${DEVKIT_NOTION_BIN:-$SCRIPTS_DIR/notion.sh}"
 #   bloquear   <head> <ciclos respondidos sin OK>     -              <informe>
 #   bloqueado  <head> <fecha del bloqueo>             -              <informe>
 #   nada       <head> <veredicto vigente>             -              <informe>
+# `mezclar` (DEVKIT-262) sale cuando `mergeable` del PR es `CONFLICTING`, con
+# prioridad sobre cualquier otra acción salvo `bloqueado`: un conflicto contra
+# main bloquea el auto-merge sin importar en qué punto del ciclo esté el PR
+# (revisar, fix, documentar), así que se atiende antes que seguir con lo que
+# `decide` hubiera resuelto de otro modo. `UNKNOWN` -GitHub todavía calculando
+# tras un push reciente- no cuenta como conflicto: se trata igual que
+# `MERGEABLE` y la siguiente vuelta vuelve a preguntar.
 # `informe` es el submittedAt del último devkit-review (o "-" sin ninguno):
 # dos rondas de `fix` o `revisar` sobre el mismo head, una tras otra, traen
 # informes distintos y por lo tanto claves de `launched` distintas (DEVKIT-101:
@@ -295,9 +320,23 @@ def markers($re; $ts):
   [ .[] | . as $x | ($x.body // "" | capture($re)) | . + {at: $x[$ts]} ];
 
 .headRefOid as $head
+# Conflicto contra main (DEVKIT-262): `mergeable` es `CONFLICTING`,
+# `MERGEABLE` o `UNKNOWN` (GitHub todavía calculando, recién tras un push).
+# Solo `CONFLICTING` cuenta como conflicto; `UNKNOWN` se trata como si no lo
+# hubiera y la siguiente vuelta vuelve a preguntar, cuando GitHub ya haya
+# terminado.
+| (.mergeable == "CONFLICTING") as $conflicting
 | (.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
    | sort_by(.at)) as $reviews
-| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)?(?<merge> merge=1)? -->"; "createdAt")) as $fixes
+# La respuesta H0 de una mezcla de main (DEVKIT-262, H1) lleva `merge=1`: no
+# atiende ningún hallazgo ni ningún comentario humano, así que no debe pesar
+# en $human_cutoff, $ciclos ni $resumed -contarla ahí adelantaría el corte
+# sobre un comentario humano todavía sin responder, sumaría un ciclo que
+# nadie resolvió, o reabriría un bloqueo que nadie levantó. Sigue sirviendo
+# para $fix_after/$pending_fix/$fix_responded (atados a `.sha == $head`, que
+# cambia con la mezcla) y para $manual_at (nunca lleva `manual=1`).
+| ([$fixes[] | select(.merge == null)]) as $real_fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
 # Hallazgo descartado por necesitar aprobación humana (DEVKIT-142): task-fix lo
@@ -312,28 +351,33 @@ def markers($re; $ts):
 # head vigente distinto del sha que revisó pr-review, y aun así el hallazgo
 # sigue pendiente.
 | ((.comments // [])
-   | map(select(.author.login == $bot and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))))
+   | map(select(.author.login == $bot
+                and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))
+                and ((.body // "") | test(" merge=1 -->") | not)))
    | sort_by(.createdAt) | last | .body // "") as $head_fix_body
 | ($head_fix_body
    | test("<!-- devkit-fixes -->[\\s\\S]*?\\n\\S+ \\| descartado \\| necesita aprobaci[oó]n humana[\\s\\S]*?<!-- /devkit-fixes -->"; "i")
   ) as $needs_approval
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
-| ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
+| ($block_at != "" and ([$real_fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
 | ($block_at != "" and $last != null and $block_at > $last.at and ($resumed | not)) as $blocked
 | (([$reviews[] | select(.verdict == "OK") | .at] | max) // "") as $ok_at
 | (([$fixes[] | select(.manual != null) | .at] | max) // "") as $manual_at
 | ([$ok_at, $block_at, $manual_at] | max) as $reset_at
 | ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at) | . as $r
-    | select(any($fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
-# Corte para "qué comentario humano ya está atendido": solo un devkit-fix o un
-# devkit-block lo atienden; un devkit-review no (DEVKIT-101). Sin ningún fix ni
-# block todavía, se usa el último devkit-review como corte, igual que antes:
-# así un comentario anterior al primer informe, ya cerrado con OK y
-# documentado, no reabre el ciclo (caso "comentario humano anterior al
-# marcador" de watch-test.sh).
-| (([$fixes[].at, $blocks[].at] | max)
-   // ($reviews | map(.at) | max)
+    | select(any($real_fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
+# Corte para "qué comentario humano ya está atendido": solo un devkit-fix (que
+# no sea la mezcla H0, DEVKIT-262 H1) o un devkit-block lo atienden; un
+# devkit-review no (DEVKIT-101). Sin ninguno todavía, se usa el primer
+# devkit-review como corte -no el último-: así un comentario anterior al
+# primer informe, ya cerrado con OK y documentado, no reabre el ciclo (caso
+# "comentario humano anterior al marcador" de watch-test.sh), pero uno
+# posterior al primer informe sigue pendiente aunque una mezcla de main, sin
+# ningún fix real de por medio, traiga después otro informe sobre un head
+# nuevo.
+| (([$real_fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | min)
    // "") as $human_cutoff
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),
@@ -365,6 +409,8 @@ def markers($re; $ts):
 | if $blocked then
     (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text, $informe]
      else ["bloqueado", $head, $block_at, "-", $informe] end)
+  elif $conflicting then
+    ["mezclar", $head, "-", "-", $informe]
   elif $approval_pending then
     (if ($human | length) > 0 then ["fix-humano", $head, $human_at, $human_text, $informe]
      else ["nada", $head, ($last.verdict // "-"), "-", $informe] end)
@@ -1148,7 +1194,7 @@ frase_fix_vacio() {  # frase_fix_vacio <log>
 # Acción y head frescos del PR, tras la skill: el informe pudo cambiar mientras
 # corría.
 decision_fresca() {  # decision_fresca <num>
-  gh pr view "$1" --json headRefOid,reviews,comments 2>/dev/null | decide "$BOT" | cut -f1,2
+  gh pr view "$1" --json headRefOid,reviews,comments,mergeable 2>/dev/null | decide "$BOT" | cut -f1,2
 }
 
 # Caso `fix` del bucle: task-fix y, si respondió vacío, la alarma.
@@ -1245,6 +1291,27 @@ caso_fix_humano() {  # caso_fix_humano <num> <Clave> <ref> <texto b64>
   # La fecha del comentario en el nombre: un PR puede recibir varios
   # comentarios humanos y cada ejecución conserva su log.
   run_skill "task-fix-$num-humano-${ref//[^0-9A-Za-z]/}" "/task-fix $key $text" "$lkey"
+}
+
+# Texto fijo que decide() de más arriba condiciona (DEVKIT-262): task-fix lo
+# reconoce como argumento y sigue la sección "Mezclar origin/main" de su
+# SKILL.md en vez del flujo normal de hallazgos.
+MEZCLAR_TEXTO='mezcla origin/main en la rama con un commit de merge, resuelve los conflictos conservando ambos lados, corre las pruebas y haz push; nunca --force ni rebase'
+
+# Caso `mezclar` (DEVKIT-262): el PR está en conflicto con main
+# (`mergeable=CONFLICTING`). Misma guarda `avisar_si_lanzada` que el resto,
+# con clave `mezclar:$num:$head`: mientras el head no cambie -un push nuevo,
+# el propio merge que task-fix hace- no se repite. `UNKNOWN` (GitHub todavía
+# calculando el mergeable tras un push) nunca llega acá: `decide` ya lo trata
+# como sin conflicto.
+caso_mezclar() {  # caso_mezclar <num> <Clave> <head>
+  local num=$1 key=$2 head=$3 lkey short
+  short=${head:0:7}
+  lkey="mezclar:$num:$head"
+  avisar_si_lanzada "$num" "$key" mezclar "$lkey" && return
+  mark "$lkey"
+  log "PR #$num ($key) en conflicto con main sobre $short: lanzando task-fix a mezclar"
+  run_skill "task-fix-$num-mezclar-$short" "/task-fix $key $MEZCLAR_TEXTO" "$lkey"
 }
 
 # Arrastre de hijas de Backlog a Lista (DEVKIT-121): una Épica movida a
@@ -1495,7 +1562,8 @@ procesar_pr() {  # procesar_pr <num> <url> <title> [draft de gh pr list: true|fa
     # (DEVKIT-250) cubre el caso en que un humano marca el PR como draft a
     # mitad de una cadena ya en curso (`run_skill` tarda minutos): el chequeo
     # de `draft_lista`, arriba, solo vio el estado al empezar esta llamada.
-    pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body,isDraft 2>/dev/null)
+    # `mergeable` (DEVKIT-262) es lo que decide() usa para la acción `mezclar`.
+    pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body,isDraft,mergeable 2>/dev/null)
     if [ "$(jq -r '.isDraft // false' <<<"$pr_full" 2>/dev/null)" = true ]; then
       atender_draft "$num" "$key"
       return 0
@@ -1505,6 +1573,9 @@ procesar_pr() {  # procesar_pr <num> <url> <title> [draft de gh pr list: true|fa
     short=${head:0:7}
     cur="$action|$head|$ref|$informe"
     case "$action" in
+      mezclar)
+        caso_mezclar "$num" "$key" "$head"
+        ;;
       revisar)
         # La clave incluye $ref y $informe (DEVKIT-101): ver el comentario
         # junto a caso_revisar.
@@ -1694,6 +1765,11 @@ pasada() {
 #                           la guarda de `launched` con el informe incluido
 #                           (DEVKIT-101): si la clave ya está lanzada, avisa
 #                           una sola vez y sale; si no, marca y lanza
+#   --caso-mezclar <num> <Clave> <head>
+#                           el caso `mezclar` (DEVKIT-262): misma guarda que
+#                           `--caso-fix`/`--caso-revisar`, con clave
+#                           `mezclar:<num>:<head>` -no repite task-fix sobre
+#                           el mismo head en conflicto
 #   --procesar-pr <num> <url> <título> [código] [draft de gh pr list: true|false]
 #                           la cadena de reacción inmediata completa
 #                           (DEVKIT-108): decide, actúa y vuelve a decidir
@@ -1825,6 +1901,11 @@ case "${1:-}" in
   --caso-fix-humano)
     BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
     caso_fix_humano "${2:-}" "${3:-}" "${4:-}" "${5:-}"
+    exit 0
+    ;;
+  --caso-mezclar)
+    BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
+    caso_mezclar "${2:-}" "${3:-}" "${4:-}"
     exit 0
     ;;
   --procesar-pr)

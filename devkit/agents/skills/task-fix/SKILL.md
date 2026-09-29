@@ -30,6 +30,13 @@ trabajo de `pr-review`.
 2. Lee el PR: `gh pr view <N> --json state,url,headRefName,headRefOid,reviews,comments`.
    Si `state` no es `OPEN`, responde "PR no abierto" y termina.
 3. Decide qué atender, en este orden:
+   - **Texto de mezcla de main (DEVKIT-262)**: si lo recibido como argumento
+     es exactamente el texto fijo que lanza el bucle cuando GitHub marca el
+     PR `mergeable=CONFLICTING` -"mezcla origin/main en la rama con un
+     commit de merge, resuelve los conflictos conservando ambos lados, corre
+     las pruebas y haz push; nunca --force ni rebase"-, no es un hallazgo
+     `C<n>`: sigue la sección "Mezclar origin/main", más abajo, en vez del
+     resto de este paso 3 y de los pasos 4 a 12.
    - **Texto recibido como argumento**: es un hallazgo único con id `C<n>`,
      donde `n` es uno más que el último `C` que hayas respondido en ese PR.
      Si ese texto nombra otro PR -una URL `github.com/.../pull/<M>` con `M`
@@ -188,6 +195,73 @@ trabajo de `pr-review`.
     `settings.json`. Si falla, no pasa nada y no se reintenta: el bucle llega
     igual en el siguiente intervalo.
 12. Responde con una línea: PR, hallazgos atendidos y descartados, head nuevo.
+
+## Mezclar origin/main (DEVKIT-262)
+
+`watch.sh` te lanza con el texto fijo del paso 3 como argumento cuando
+GitHub marca el PR `mergeable=CONFLICTING`: aprobado y "Lista para merge" en
+la card, pero con conflictos contra `main` que el auto-merge no puede
+resolver. Los pasos 1 y 2 (Clave, no número de PR; leer el PR) ya corrieron
+igual; sigue esta sección entera en vez del resto del paso 3 y de los pasos
+4 a 12.
+
+1. Prepara la rama de la card, igual que el paso 4: si ya estás sobre
+   `headRefName` con el árbol limpio, trabaja aquí; si no, un worktree
+   aparte (`git fetch origin <headRefName>`, `git worktree add
+   /tmp/devkit-fix-<N> <headRefName>`, `git pull --ff-only origin
+   <headRefName>`).
+2. `git fetch origin main` y `git merge origin/main` -un commit de merge,
+   nunca `--rebase` ni `--force`: la regla de nunca reescribir la rama de la
+   card manda incluso acá, y el squash del auto-merge lo aplana al cerrar.
+3. Resuelve cada conflicto conservando ambos lados: combina los cambios de
+   las dos ramas, no elijas uno y descartes el otro, salvo que sean
+   exactamente el mismo cambio. Un archivo que genera un script del devkit
+   (`README.md` con `gen-readme.sh`, `devkit/vscode/cheatsheet/cheatsheet.html`
+   con `gen-cheatsheet.sh`) se resuelve regenerándolo con su script, no a
+   mano.
+4. Si algún conflicto no se puede resolver conservando ambos lados -cambios
+   incompatibles en la misma línea, una decisión de diseño que no te
+   corresponde-, no lo fuerces: `git merge --abort`, limpia la copia de
+   trabajo si la creaste (paso 10) y bloquea la card:
+
+   ```sh
+   "${DEVKIT_SCRIPTS_DIR:-/opt/devkit/scripts}/task-block.sh" <Clave> "Qué intenté: mezclar origin/main, conflicto en <archivo> que no puedo resolver conservando ambos lados: <qué decisión falta>. Qué necesito: que decidas <la resolución> y la apliques tú, o me digas qué lado priorizar."
+   ```
+
+   Termina ahí, sin publicar ningún `devkit-fix`.
+5. Verificación local, igual que el paso 6: `ruff check .` y `ruff format
+   --check .` si hay Python, `uv run pytest` si hay pruebas, `bash -n` sobre
+   cada script de shell tocado. Si algo falla, corrígelo dentro del commit
+   de merge.
+6. `git push origin <headRefName>`. Nunca `--force`.
+7. Escribe la respuesta en `.devkit/fix-<N>.md`, con `review=` igual al
+   `headRefOid` que leíste en el paso 2 -el head en conflicto, no el nuevo
+   tras el merge-. El marcador lleva `merge=1` (DEVKIT-262, H1 de la
+   revisión del PR 151): así `decide` en `watch.sh` y `fix-publish.sh` la
+   excluyen de `human_cutoff`, de la guarda de tres ciclos y de
+   `head_fix_body` -esta respuesta no atiende ningún hallazgo real ni ningún
+   comentario humano, y contarla ahí adelantaría el corte de un comentario
+   humano sin responder, sumaría un ciclo que nadie resolvió, o taparía una
+   espera de aprobación pendiente sobre el head anterior-:
+
+   ```
+   <!-- devkit-fix sha=<head nuevo> review=<head del paso 2> merge=1 -->
+   <!-- devkit-fixes -->
+   H0 | atendido | <sha corto del commit de merge>
+   <!-- /devkit-fixes -->
+   ```
+
+   `H0` es el id fijo de esta acción, reservado y distinto de cualquier
+   `H<n>` de un informe real. Publícala con `fix-publish.sh`, igual que el
+   paso 8: reconoce `H0` como válido siempre, sin compararlo contra los
+   hallazgos del informe vigente -el conflicto puede llegar a mitad de un
+   ciclo `CAMBIOS` real, con hallazgos que todavía no atendiste-. El head
+   nuevo queda distinto del que revisó el último informe, así que el ciclo
+   sigue con `revisar`: `decide` en `watch.sh` ya lo hace solo, sin caso
+   especial para esto.
+8. `Estado` de la card = `Revisión automática`, igual que el paso 9.
+9. Limpia la copia de trabajo si la creaste, toca `/run/devkit/poke` y
+   responde con una línea, igual que los pasos 10 a 12.
 
 ## Un dominio bloqueado
 
