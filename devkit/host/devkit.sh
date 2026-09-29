@@ -305,9 +305,10 @@ resolve_extensions() {
   fi
   declarados_proyecto="$(
     printf '%s\n' "$proyecto_raw" | tr ' ' '\n' | grep -v '^$' | grep -E "$patron_extension" | while IFS= read -r item; do
+      # Patrones con "(" de apertura: el bash 3.2 de macOS cuenta paréntesis dentro de $( ) y sin él aborta (DEVKIT-265).
       case "$item" in
-        *@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
-        *)   printf '%s latest\n' "$item" ;;
+        (*@*) printf '%s %s\n' "${item%@*}" "${item#*@}" ;;
+        (*)   printf '%s latest\n' "$item" ;;
       esac
     done
   )"

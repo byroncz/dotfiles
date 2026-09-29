@@ -1121,6 +1121,57 @@ check        "update resuelve las extensions del proyecto (sync_toml_env corre a
              "ms.nueva=1.0.0 Anthropic.claude-code=2.1.270" "$(env_ext)"
 check        "update con extensions del proyecto: termina bien" 0 "$ESTADO"
 
+# --- case dentro de $( ) sin "(" de apertura (DEVKIT-265) --------------------
+# El bash 3.2 de macOS (/bin/sh del Mac) cuenta paréntesis al leer $( ... ) y
+# el ")" de un patrón sin "(" cierra la sustitución antes de tiempo. Dash, con
+# el que corre esta suite, no falla, así que sin esta comprobación el error solo
+# aparecería en el Mac. Imprime "archivo:línea: patrón" por cada patrón sin "(".
+# Una sustitución multilínea abre con "$(" al final de la línea y cierra con una
+# línea que empieza en ")": es la forma que usan devkit.sh y new-project.sh.
+case_sin_parentesis() {  # case_sin_parentesis <archivo>...
+  awk '
+    FNR == 1 { prof = 0; enCase = 0 }
+    /^[[:space:]]*#/ { next }
+    prof > 0 && /(^|[[:space:];])case[[:space:]].*[[:space:]]in([[:space:]]|$)/ { enCase = 1; next }
+    prof > 0 && enCase && /(^|[[:space:];])esac([[:space:];)]|$)/ { enCase = 0 }
+    prof > 0 && enCase && /^[[:space:]]*[^[:space:]()#;][^[:space:]()]*[[:space:]]*\)/ {
+      print FILENAME ":" FNR ": " $0
+    }
+    /\$\([[:space:]]*$/ { prof++ }
+    prof > 0 && /^[[:space:]]*\)/ { prof--; if (prof == 0) enCase = 0 }
+  ' "$@"
+}
+cat > "$TMP/case_malo.sh" <<'FIXTURE'
+x="$(
+  printf '%s\n' a | while IFS= read -r i; do
+    case "$i" in
+      *@*) echo con ;;
+      (*)  echo sin ;;
+    esac
+  done
+)"
+FIXTURE
+cat > "$TMP/case_bueno.sh" <<'FIXTURE'
+x="$(
+  printf '%s\n' a | while IFS= read -r i; do
+    case "$i" in
+      (*@*) echo con ;;
+      (*)   echo sin ;;
+    esac
+  done
+)"
+case "$x" in
+  *) echo fuera de $( ) no importa ;;
+esac
+FIXTURE
+check "case sin \"(\" dentro de \$( ): el detector lo encuentra" 1 \
+      "$(case_sin_parentesis "$TMP/case_malo.sh" | wc -l | tr -d ' ')"
+check "case con \"(\" dentro de \$( ) o fuera de él: el detector calla" 0 \
+      "$(case_sin_parentesis "$TMP/case_bueno.sh" | wc -l | tr -d ' ')"
+sin_par="$(case_sin_parentesis "$HERE/devkit.sh" "$HERE/../../new-project.sh")"
+check "devkit.sh y new-project.sh: ningún case en \$( ) sin \"(\" (bash 3.2)" "" "$sin_par"
+[ -z "$sin_par" ] || printf '%s\n' "$sin_par" | sed 's/^/     /'
+
 # --- devkit code -------------------------------------------------------------
 escenario dev; corre code 0 secreto123
 check        "code con token termina bien" 0 "$ESTADO"
