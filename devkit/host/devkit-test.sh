@@ -1028,11 +1028,10 @@ body="cuerpo-$path"
 len=${#body}
 printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "$len" "$body"
 FIN
-  cat > "$sw/dev_digest.sh" <<FIN
-#!/bin/sh
-presentado=\$(cat)
-[ "\$presentado" = "\$(cat '$sw/token')" ] && sha256sum '$sw/token' | cut -c1-64
-FIN
+  # dev:$DIGEST_PORT no se dobla: corre el mismo script que lanza
+  # entrypoint.sh, para que un error en él haga fallar la suite (DEVKIT-259,
+  # H8).
+  DIGEST="$HERE/../scripts/vscode-secret-digest.sh"
   cat > "$sw/dev_ws.sh" <<'FIN'
 #!/bin/bash
 read -r reqline
@@ -1040,11 +1039,11 @@ while IFS= read -r l; do l="${l%$'\r'}"; [ -z "$l" ] && break; done
 printf 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
 while IFS= read -r -t 5 frame; do printf 'ECHO:%s\n' "$frame"; done
 FIN
-  chmod +x "$sw/dev_http.sh" "$sw/dev_digest.sh" "$sw/dev_ws.sh"
+  chmod +x "$sw/dev_http.sh" "$sw/dev_ws.sh"
 
   shim_pids=()
   socat TCP-LISTEN:$dev_port,fork,reuseaddr "EXEC:$sw/dev_http.sh" >"$sw/dev_http.log" 2>&1 & shim_pids+=("$!")
-  socat TCP-LISTEN:$digest_port,fork,reuseaddr "EXEC:$sw/dev_digest.sh" >"$sw/dev_digest.log" 2>&1 & shim_pids+=("$!")
+  socat TCP-LISTEN:$digest_port,fork,reuseaddr "EXEC:$DIGEST $sw/token" >"$sw/dev_digest.log" 2>&1 & shim_pids+=("$!")
   socat TCP-LISTEN:$ws_port,fork,reuseaddr "EXEC:$sw/dev_ws.sh" >"$sw/dev_ws.log" 2>&1 & shim_pids+=("$!")
   sleep 0.3
   env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$dev_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \

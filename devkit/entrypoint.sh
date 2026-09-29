@@ -317,12 +317,13 @@ if [ -s "$VSCODE_TOKEN" ]; then
   # puerto -solo en la red `internal`, nunca publicado al host- recalcula y
   # sirve el dígesto en cada conexión: se deriva, no se guarda en ningún lado.
   # El shim reenvía la cookie vscode-tkn (sesión de openvscode-server) como
-  # cuerpo de la conexión; esta rama solo entrega el dígesto si coincide con
-  # el token real, para que el endpoint no filtre el secreto a quien no
-  # tenga ya una sesión válida en el editor (DEVKIT-259, H4). La comparación
-  # vive acá: el proxy nunca ve el token, solo lo relee de la petición.
+  # cuerpo de la conexión; vscode-secret-digest.sh solo entrega el dígesto si
+  # coincide con el token real, para que el endpoint no filtre el secreto a
+  # quien no tenga ya una sesión válida en el editor (DEVKIT-259, H4). La
+  # comparación vive acá: el proxy ve el token de paso en la petición, pero
+  # nunca lo guarda.
   nohup socat TCP-LISTEN:3002,fork,reuseaddr,bind=0.0.0.0 \
-    SYSTEM:"presentado=\$(cat); if [ \"\$presentado\" = \"\$(cat '$VSCODE_TOKEN')\" ]; then sha256sum '$VSCODE_TOKEN' | cut -c1-64; fi" >/dev/null 2>&1 &
+    EXEC:"$SCRIPTS_DIR/vscode-secret-digest.sh $VSCODE_TOKEN" >/dev/null 2>&1 &
   log "editor VS Code activo en el puerto 3000"
 else
   warn "falta el secreto vscode-token en Bitwarden: el editor VS Code no arranca"
