@@ -21,7 +21,8 @@
 #                               guarda de agentes en curso y mismo aviso que recreate
 #   devkit update <proyecto>    subir a la versión de template que pide .devkit/devkit.toml;
 #                               mismo aviso que recreate si el toml vivo del contenedor
-#                               difiere del de origin/<rama> antes de recrear
+#                               difiere del de origin/<rama> antes de recrear. También
+#                               deja el propio comando devkit del host en esa versión.
 #   devkit logs <proyecto>      ver el arranque y los bucles
 #   devkit net-open <proyecto>  red abierta en esta sesión (solo depuración)
 #   devkit proxy <proyecto> [--ref <rama>]
@@ -48,7 +49,7 @@ for arg in "$@"; do
 done
 set -- $resto
 cmd="${1:-}"; proj="${2:-}"
-usage() { sed -n '2,33p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
+usage() { sed -n '2,34p' "$0"; exit 1; }  # el bloque de comentario de la cabecera
 [ -n "$cmd" ] || usage
 if [ "$cmd" = "ls" ]; then ls -1 "$ROOT" 2>/dev/null | grep -v -e '^bin$' -e '^bws-token$' -e '^cache$'; exit 0; fi
 [ -n "$proj" ] || usage
@@ -193,7 +194,6 @@ sync_dev_template() {
   if docker cp "devkit-$proj:/workspace/devkit/." "$dir/template.tmp" >/dev/null; then
     rm -rf "$dir/template"; mv "$dir/template.tmp" "$dir/template"
     echo "devkit: modo dev: contexto de build actualizado desde el workspace"
-    warn_host_stale
   else
     rm -rf "$dir/template.tmp"
     echo "devkit: aviso: no se pudo copiar devkit/ del workspace; se construye con la copia de $dir/template" >&2
@@ -454,17 +454,19 @@ EOF_DECLARADOS
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTENSIONS=%s\n' "$resuelto"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
 }
-# Lo que new-project.sh instaló en el Mac desde el template (el compose.yaml del
-# proyecto y el propio comando devkit) no lo refresca nadie. Reemplazarlo aquí
-# no es seguro: el script se sobrescribiría a sí mismo mientras corre. Se avisa
-# y se deja la decisión al humano.
+# El compose.yaml del proyecto solo lo escribe new-project.sh: reemplazarlo
+# aquí no es seguro (compose.yaml no declarado en devkit.toml, cambios locales
+# del humano, etc.), así que se avisa y se deja la decisión al humano. El
+# comando devkit en cambio sí lo refresca `devkit update` (ver el caso
+# `update`, más abajo): el aviso, cuando corre fuera de un update que ya lo
+# dejó al día, dice ese remedio real en vez de mandar a reinstalar.
 warn_host_stale() {
   if [ -f "$dir/template/compose.yaml" ] && ! cmp -s "$dir/template/compose.yaml" "$dir/compose.yaml"; then
     echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con new-project.sh --ref <rama>" >&2
   fi
   if [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
      && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
-    echo "devkit: aviso: el comando devkit difiere del template; reinstala con new-project.sh --ref <rama>" >&2
+    echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
   fi
 }
 compose() { docker compose --project-directory "$dir" "$@"; }
@@ -629,14 +631,14 @@ proxy_cmd() {  # proxy_cmd <rama-en-origin | "">
   echo "devkit: dominios aplicados al proxy: ${union:-(ninguno)}"
 }
 case "$cmd" in
-  up)       mostrar_fuente_toml --efectivo; sync_tz_env; sync_dev_template; resolve_extensions && compose up -d --build ;;
+  up)       mostrar_fuente_toml --efectivo; sync_tz_env; sync_dev_template; warn_host_stale; resolve_extensions && compose up -d --build ;;
   shell)    shell ;;
   code)     code ;;
   awake)    awake ;;
   stop)     compose stop ;;
   down)     confirm && compose down ;;
-  recreate) guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose up -d --build --force-recreate ;;
-  rebuild)  guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
+  recreate) guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && warn_host_stale && resolve_extensions && compose up -d --build --force-recreate ;;
+  rebuild)  guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && warn_host_stale && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
     toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
@@ -657,14 +659,19 @@ case "$cmd" in
     # $dir/compose.yaml es del Mac: solo new-project.sh lo escribe, `update`
     # trae devkit/ pero nunca lo toca. Si quedó de antes de DEVKIT-67, no
     # declara el ARG EXTENSIONS y la imagen se reconstruye sin extensiones,
-    # sin aviso (`warn_host_stale` solo corre desde `sync_dev_template`, que
-    # `update` no llama). Se detiene en vez de construir un editor incompleto.
+    # sin aviso: warn_host_stale compara el compose.yaml completo contra el
+    # template, no si declara este ARG en particular. Se detiene en vez de
+    # construir un editor incompleto.
     grep -q 'EXTENSIONS:' "$dir/compose.yaml" 2>/dev/null \
       || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh $proj --version $target' antes de actualizar" >&2; exit 1; }
     # El aviso y la confirmación van después de los chequeos de arriba (H2,
     # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
-    # pedía aceptar una pérdida y después salía sin recrear nada.
+    # pedía aceptar una pérdida y después salía sin recrear nada. warn_host_stale
+    # avisa con el template actual (antes de bajar el destino): si el comando
+    # devkit ya venía desincronizado de una release anterior, se ve aquí; este
+    # mismo `update` lo deja al día más abajo.
     mostrar_fuente_toml
+    warn_host_stale
     if [ "$FUENTE_DIFIERE" = 1 ]; then
       confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
         || { echo "devkit: cancelado" >&2; exit 1; }
@@ -678,6 +685,15 @@ case "$cmd" in
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
     sync_toml_env && resolve_extensions && sync_tz_env && compose up -d --build --force-recreate
+    # bin/devkit es este mismo script en ejecución: sobrescribirlo directo se
+    # arriesga a interrumpirse a sí mismo a mitad de la lectura. `cp` a un
+    # archivo aparte y renombrarlo encima al salir es seguro (rename es
+    # atómico y el intérprete ya leyó el script en memoria); por eso se
+    # difiere a un trap EXIT en vez de hacerlo en línea.
+    if [ -f "$dir/template/host/devkit.sh" ] && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
+      cp "$dir/template/host/devkit.sh" "$ROOT/bin/devkit.new"; chmod +x "$ROOT/bin/devkit.new"
+      trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "devkit: comando devkit actualizado a $target"; rm -rf "$tmp"' EXIT
+    fi
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;

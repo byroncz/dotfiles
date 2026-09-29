@@ -19,6 +19,11 @@ fail=0
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 export DEVKIT_TEST_LOG="$TMP/docker.log"; : > "$DEVKIT_TEST_LOG"
+# DEVKIT-258: el doble de curl arma el tarball de `update` con devkit/host/devkit.sh
+# igual a $DEVKIT, para que el escenario por defecto (bin/devkit al día) no dispare
+# el refresco. No se exporta $DEVKIT tal cual (podría chocar con algo del entorno
+# real); un nombre propio evita esa ambigüedad.
+export DEVKIT_TEST_HOST_SCRIPT="$DEVKIT"
 
 # --- Doble de curl -----------------------------------------------------------
 # Solo responde la API de Open VSX que usa resolve_extensions, con
@@ -94,9 +99,14 @@ case "$url" in
   # (Dockerfile y vscode/extensions.toml) y lo imprime a stdout.
   https://github.com/*/archive/refs/tags/*.tar.gz)
     work="$(mktemp -d)"
-    mkdir -p "$work/repo/devkit/vscode"
+    mkdir -p "$work/repo/devkit/vscode" "$work/repo/devkit/host"
     printf 'ARG OPENVSCODE_VERSION=1.109.5\n' > "$work/repo/devkit/Dockerfile"
     printf '"Anthropic.claude-code" = "latest"\n' > "$work/repo/devkit/vscode/extensions.toml"
+    # DEVKIT-258: devkit/host/devkit.sh de la etiqueta destino, igual al devkit.sh
+    # bajo prueba salvo que un caso agregue una marca (DEVKIT_TEST_TARBALL_HOST_MARCA)
+    # para simular una release que sí lo cambió.
+    cp "$DEVKIT_TEST_HOST_SCRIPT" "$work/repo/devkit/host/devkit.sh"
+    [ -n "${DEVKIT_TEST_TARBALL_HOST_MARCA:-}" ] && printf '%s\n' "$DEVKIT_TEST_TARBALL_HOST_MARCA" >> "$work/repo/devkit/host/devkit.sh"
     tar -C "$work" -czf - repo
     rm -rf "$work" ;;
   *) [ -n "$out" ] && : > "$out" ;;
@@ -584,6 +594,63 @@ check_salida "comando devkit desincronizado" "el comando devkit difiere del temp
 escenario dev; corre recreate
 check        "con todo al día no se avisa de nada" no \
              "$(grep -q 'difiere del template' "$OUT" && echo si || echo no)"
+
+# DEVKIT-258: antes de esta card, `up` nunca llamaba a warn_host_stale (solo
+# corría dentro de sync_dev_template, en modo dev) y en un proyecto con
+# etiqueta nadie se enteraba de un bin/devkit viejo hasta reinstalar a mano.
+# Ahora corre también ahí, y en cualquier modo, con el remedio real.
+escenario dev; echo '# línea de más' >> "$TMP/root/bin/devkit"; corre up
+check_salida "comando devkit desincronizado: up también avisa" "el comando devkit difiere del template"
+check_salida "comando devkit desincronizado: el remedio es 'devkit update', no reinstalar" \
+             "el comando devkit difiere del template; 'devkit update p' lo refresca"
+
+escenario 0.1.0; echo '# línea de más' >> "$TMP/root/bin/devkit"; corre up
+check_salida "comando devkit desincronizado con etiqueta: up también avisa" "el comando devkit difiere del template"
+
+# --- devkit update refresca bin/devkit (DEVKIT-258) --------------------------
+# Antes, `update` bajaba el template pero nunca tocaba bin/devkit: el host
+# quedaba en la versión del primer `new-project.sh` para siempre. Ahora, si
+# el host/devkit.sh de la etiqueta que acaba de bajar difiere del bin/devkit
+# instalado, lo copia a bin/devkit.new y lo renombra encima al terminar.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
+corre update
+unset DEVKIT_TEST_TARBALL_HOST_MARCA
+check        "bin/devkit viejo: update lo deja igual al host/devkit.sh que acaba de bajar" si \
+             "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "bin/devkit viejo: le llega la marca de la release nueva" si \
+             "$(grep -q 'marca-de-la-release-0.2.0' "$TMP/root/bin/devkit" && echo si || echo no)"
+check_salida "bin/devkit viejo: avisa a qué versión quedó" "devkit: comando devkit actualizado a 0\.2\.0"
+check        "bin/devkit viejo: no deja bin/devkit.new suelto" no \
+             "$([ -e "$TMP/root/bin/devkit.new" ] && echo si || echo no)"
+check        "bin/devkit viejo: queda ejecutable" si \
+             "$([ -x "$TMP/root/bin/devkit" ] && echo si || echo no)"
+check        "bin/devkit viejo: update termina bien" 0 "$ESTADO"
+
+# Si bin/devkit ya viene desincronizado de antes (una release anterior a esta
+# card, que nunca lo refrescó), el aviso previo a actualizar debe dar el
+# remedio real y el propio update debe igual dejarlo al día al terminar.
+escenario 0.1.0
+echo '# quedó de una release vieja, antes de DEVKIT-258' >> "$TMP/root/bin/devkit"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check_salida "bin/devkit ya venía viejo: el aviso antes de actualizar da el remedio real" \
+             "el comando devkit difiere del template; 'devkit update p' lo refresca"
+check        "bin/devkit ya venía viejo: igual queda al día tras actualizar" si \
+             "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
+check_salida "bin/devkit ya venía viejo: confirma el refresco" "devkit: comando devkit actualizado a 0\.2\.0"
+
+# bin/devkit ya al día: update no dice nada de "actualizado" ni lo toca.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "bin/devkit ya al día: update no dice que lo actualizó" no \
+             "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+check        "bin/devkit ya al día: update termina bien" 0 "$ESTADO"
 
 # --- Resolución de extensiones del editor ------------------------------------
 # resolve_extensions: "latest" se resuelve contra Open VSX y queda en .env y
