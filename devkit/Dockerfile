@@ -171,11 +171,14 @@ RUN set -eux; \
       echo "$lista" | grep -qi "^${entry_regex}$" \
         || { echo "extensión declarada $id no quedó instalada en la versión $version" >&2; exit 1; }; \
     done; \
+    integradas="$(jq -r '"\(.publisher).\(.name)"' \
+      /opt/openvscode-server/extensions/*/package.json 2>/dev/null)"; \
     for pkg in "$HOME/.openvscode-server/extensions"/*/package.json; do \
       [ -f "$pkg" ] || continue; \
       for dep in $(jq -r '(.extensionDependencies // [])[]' "$pkg" 2>/dev/null); do \
         dep_regex="$(printf '%s' "$dep" | sed 's/\./\\./g')"; \
-        echo "$lista" | grep -qi "^${dep_regex}@" \
+        { echo "$lista" | grep -qi "^${dep_regex}@"; } \
+          || { echo "$integradas" | grep -qix "$dep"; } \
           || { echo "dependencia $dep de $(basename "$(dirname "$pkg")") no quedó instalada" >&2; exit 1; }; \
       done; \
     done
