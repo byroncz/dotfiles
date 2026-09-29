@@ -19,10 +19,10 @@
 <text x="60" y="368" class="c">devkit awake &lt;proyecto&gt;</text>
 <text x="60" y="386" class="d">Solo macOS: evita que el host se suspenda mientras el con…</text>
 <text x="620" y="150" class="g">Agentes</text>
-<text x="620" y="184" class="c">dk --estado [--seguir]</text>
-<text x="620" y="202" class="d">Muestra todos los agentes del contenedor y se refresca ca…</text>
-<text x="620" y="230" class="c">dk --tablero [--seguir]</text>
-<text x="620" y="248" class="d">Muestra las cards activas del proyecto en una tabla y se …</text>
+<text x="620" y="184" class="c">dk --estado [--foto]</text>
+<text x="620" y="202" class="d">En una terminal se refresca cada 3 s hasta Ctrl-C (--segu…</text>
+<text x="620" y="230" class="c">dk --tablero [--foto]</text>
+<text x="620" y="248" class="d">En una terminal se refresca cada 30 s hasta Ctrl-C (--seg…</text>
 <text x="620" y="276" class="c">dk &lt;skill&gt; &lt;Clave&gt;</text>
 <text x="620" y="294" class="d">Lanza una skill en segundo plano y se queda mostrando su …</text>
 <text x="620" y="322" class="c">dk pr-review &lt;N&gt;</text>

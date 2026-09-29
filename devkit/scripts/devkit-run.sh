@@ -27,7 +27,7 @@
 #     lanzamiento (`terminado [...]: modelo=... costo=...`).
 #
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
-#   devkit-run --estado [--seguir] [--todo]
+#   devkit-run --estado [--foto] [--todo]
 #     Tabla de los últimos lanzamientos: skill (task-start en negrita, abre
 #     una card; el resto la continúa, DEVKIT-134), card, "#<número>" del PR de
 #     esa fila (DEVKIT-134, DEVKIT-156: el owner/repo real de `gh repo view`,
@@ -53,12 +53,17 @@
 #     costo y los turnos de hoy y de la semana, estimados desde
 #     `.devkit/costos.log` (los mismos que calcula `--costos`), con la
 #     explicación de por qué no hay cifra oficial solo una vez, no en cada
-#     refresco. `--seguir` refresca todo cada 3 s hasta Ctrl-C, con `bucle: ...`
-#     en la cabecera:
+#     refresco. En una tty, `--estado` a secas entra en seguimiento por
+#     defecto (DEVKIT-256): refresca todo cada 3 s hasta Ctrl-C, con
+#     `bucle: ...` en la cabecera. `--seguir` sigue aceptado como sinónimo
+#     explícito del mismo seguimiento. `--foto` fuerza una sola foto (lo que
+#     antes hacía `--estado` a secas); sin tty (pipe, `$(...)`, redirección)
+#     siempre es foto, con o sin bandera. La cabecera de seguimiento trae
+#     `bucle: ...`:
 #     `vivo` (tick reciente), `esperando <skill>-<n>` (una skill de origen
 #     bucle en curso explica la falta de tick, sin alarma), `SIN SEÑAL` (ni lo
 #     uno ni lo otro) o `MUERTO` (watch.sh no está en `ps`).
-#   devkit-run --tablero [--seguir]
+#   devkit-run --tablero [--foto]
 #     Cards activas del proyecto (Lista, En progreso, Revisión automática,
 #     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
 #     Tipo, PR ("#<número>" con el mismo hipervínculo OSC 8 en una TTY, o en
@@ -66,12 +71,14 @@
 #     que `--estado`, DEVKIT-156/DEVKIT-229) y "bloquea a" (columna de
 #     DEVKIT-63), agrupadas
 #     por Épica de origen cuando hay más de una Épica En progreso (DEVKIT-80).
-#     Una sola consulta a Notion por refresco (DEVKIT-82). `--seguir` la
-#     refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+#     Una sola consulta a Notion por refresco (DEVKIT-82). Mismo cambio que
+#     `--estado` (DEVKIT-256): sigue por defecto en una tty, cada 30 s, no 3,
+#     para no gastar el límite de peticiones de Notion; `--seguir` sigue
+#     aceptado como sinónimo y `--foto` fuerza la foto única.
 #   devkit-run --cola
 #     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
 #     origen o "(sin Épica)") y título, en el mismo orden que decide "la
-#     siguiente card" (`cola.sh`). No acepta `--seguir`.
+#     siguiente card" (`cola.sh`). No acepta `--foto` ni `--seguir`.
 #   devkit-run --agentes-vivos
 #     PID, Clave y paso de cada `--worker`/`--sync` en curso en este
 #     contenedor (DEVKIT-138), o "sin agentes vivos". La misma detección por
@@ -310,9 +317,10 @@ ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 # oficial legible, o 5 la primera vez de una sesión en modo headless (con el
 # aviso de una sola línea de "sin cuota oficial...", H4 de pr-review en el
 # PR#142); menos si falla o no hay lectura todavía, pero contar de menos
-# desborda y de más solo achica un poco la tabla. `--estado` sin `--seguir` no
-# imprime las primeras tres, pero reservarlas de más solo achica un poco la
-# tabla, nunca la desborda -al revés de no reservar nada.
+# desborda y de más solo achica un poco la tabla. Una foto de `--estado`
+# (`--foto`, o sin tty) no imprime las primeras tres, pero reservarlas de más
+# solo achica un poco la tabla, nunca la desborda -al revés de no reservar
+# nada.
 RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-10}"
 # Intervalo del bucle de watch.sh, para juzgar si su último tick "consultando
 # GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
@@ -371,9 +379,9 @@ CUOTA_LOCK="${DEVKIT_CUOTA_LOCK:-$RUN_DIR/cuota.lock}"
 # la cuota cada 60 s (antes, cada 3 s con sesión persistente) cientos de
 # veces seguidas. `seguir_estado` y `seguir_lanzamiento` dejan de disparar
 # `refrescar_cuota_bg` -sin dejar de mostrar la última lectura buena- pasado
-# este margen desde que arrancó el bucle; una `--estado` suelta (alguien
-# mirando de verdad) siempre
-# refresca si venció CUOTA_TTL, sin este tope.
+# este margen desde que arrancó el bucle; una foto de `--estado` (`--foto`, o
+# sin tty; alguien mirando de verdad) siempre refresca si venció CUOTA_TTL,
+# sin este tope.
 CUOTA_DESATENDIDO="${DEVKIT_CUOTA_DESATENDIDO:-900}"
 # Columna "bloquea a" de `--estado` (ampliación de DEVKIT-63): mismo patrón de
 # caché que Consumo, una sola llamada a Notion por refresco. BLOQUEOS_TTL es
@@ -1345,8 +1353,8 @@ mostrar_consumo_local() {
 # todavía. Así `--estado` nunca queda atado a esa lectura (H1 de pr-review).
 # <permitir_refresco> en 0 (DEVKIT-78, lo pasan `seguir_estado` y
 # `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché igual pero
-# no dispara un refresco nuevo: por defecto en 1, así que una `--estado`
-# suelta -sin `--seguir`- no cambia de comportamiento.
+# no dispara un refresco nuevo: por defecto en 1, así que una foto de
+# `--estado` (`--foto`, o sin tty) no cambia de comportamiento.
 mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
   local permitir_refresco=${1:-1}
   local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad ttl_efectivo
@@ -1370,9 +1378,9 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
       # RUN_DIR y sobrevive a la sesión: `watch.sh` solo lo crea con
       # `mkdir -p`, nunca lo limpia, así que antes el aviso salía una sola vez
       # por vida del contenedor y un `--estado --seguir` posterior ya no lo
-      # mostraba nunca. Una `--estado` suelta -sin `--seguir`- no exporta la
-      # variable, así que siempre lo muestra: no hay sesión que recuerde nada
-      # de una vuelta a la otra.
+      # mostraba nunca. Una foto de `--estado` (`--foto`, o sin tty) no
+      # exporta la variable, así que siempre lo muestra: no hay sesión que
+      # recuerde nada de una vuelta a la otra.
       printf '\nConsumo (estimado desde los lanzamientos, no la cuota del plan)\n'
       if [ -z "${DEVKIT_CONSUMO_AVISO:-}" ] || [ ! -e "$DEVKIT_CONSUMO_AVISO" ]; then
         printf '  sin cuota oficial en headless (`claude -p "/usage"` no la trae)\n'
@@ -2294,9 +2302,11 @@ hace() {  # hace <segundos>
 #               con rc=3 antes de cualquier `claude -p` real -"nada que
 #               revisar" no es un error-; el detalle es el motivo, la única
 #               línea de su log (DEVKIT-107)
-#   sin registro  un `claude -p` vivo en `ps` sin ninguna línea "lanzando" que
-#               lo explique (regla sin excepción de DEVKIT-81); ver
-#               `filas_sin_registro`
+#   sin registro  el ejecutable real de $CLAUDE_BIN, vivo en `ps` con `-p`,
+#               sin ninguna línea "lanzando" que lo explique (regla sin
+#               excepción de DEVKIT-81); un binario distinto -los dobles de
+#               `--test`/`watch-test.sh`, por ejemplo- no cuenta (DEVKIT-253).
+#               El detalle trae el ejecutable y el pid; ver `filas_sin_registro`
 # Lee `ps` de PS_BIN y la hora de <ahora>, para probarlo con datos fijos.
 estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   local wlog=$1 ahora=$2 procesos candado=libre
@@ -2556,6 +2566,22 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
   filas_sin_registro "$procesos" "${prompts_vistos[@]}"
 }
 
+# Ruta canónica de un ejecutable, para comparar el mismo binario aunque
+# llegue por nombres distintos (DEVKIT-253): un nombre suelto se busca en
+# $PATH con `command -v`, igual que haría el propio shell al lanzarlo; una
+# ruta ya armada -absoluta o relativa, `./doble` incluido- se resuelve tal
+# cual. `readlink -f` destapa symlinks (por ejemplo el `claude` de PATH
+# apuntando a la versión real bajo ~/.local/share/claude). Vacío si no existe
+# o no se puede resolver: ese resultado nunca compara igual a nada.
+resolver_ejecutable() {  # resolver_ejecutable <nombre o ruta>
+  local t=$1 real
+  case "$t" in
+    */*) real=$(readlink -f "$t" 2>/dev/null) ;;
+    *) real=$(command -v "$t" 2>/dev/null) && real=$(readlink -f "$real" 2>/dev/null) ;;
+  esac
+  printf '%s' "$real"
+}
+
 # Filas `sin registro` (DEVKIT-81, regla sin excepción): un `claude -p` vivo
 # en `ps` cuyo prompt no aparece en ninguna línea "lanzando" reciente. Cubre
 # un lanzamiento que devkit-run no vio -un bug, algo lanzado a mano por fuera
@@ -2570,14 +2596,33 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
   local -a activos=("$@")
   local -a activos_id=()
   local pid resto prompt prompt_id encontrado a
+  # DEVKIT-253: comparar contra el ejecutable real de $CLAUDE_BIN, no contra
+  # el texto "claude" -cualquier binario cuyo nombre o ruta lo contenga
+  # colaba, incluidos los dobles de `--test`/`watch-test.sh` (`claude-doble`,
+  # `claude-lento`, en /tmp) mientras un agente que trabaja sobre el propio
+  # devkit corre las pruebas.
+  local bin_real
+  bin_real=$(resolver_ejecutable "$CLAUDE_BIN")
   for a in "${activos[@]}"; do
     activos_id+=("$(identidad_prompt "$a")")
   done
   while read -r pid resto; do
     [ -n "$pid" ] || continue
-    case "$resto" in *claude*" -p "*) ;; *) continue ;; esac
+    case "$resto" in *" -p "*) ;; *) continue ;; esac
+    local sin_prefijo=$resto ejecutable ejecutable_real
+    # `timeout N cmd...` (la sonda de modelo y la lectura de cuota) bifurca:
+    # el envoltorio queda en su propia fila de `ps` con el número de segundos
+    # todavía delante del ejecutable. `env VAR=val cmd` no bifurca -`env`
+    # reemplaza su propia imagen con `execve`, así que nunca deja rastro en
+    # `ps`-, pero se descarta igual por si alguna vez deja de ser así.
+    [[ $sin_prefijo =~ ^timeout\ +[0-9]+\ +(.*)$ ]] && sin_prefijo=${BASH_REMATCH[1]}
+    [[ $sin_prefijo =~ ^env\ +(.*)$ ]] && sin_prefijo=${BASH_REMATCH[1]}
+    ejecutable=${sin_prefijo%% *}
+    [ -n "$ejecutable" ] || continue
+    ejecutable_real=$(resolver_ejecutable "$ejecutable")
+    [ -n "$bin_real" ] && [ "$ejecutable_real" = "$bin_real" ] || continue
     case "$resto" in
-      *claude*" -p --model "*)
+      *" -p --model "*)
         # DEVKIT-247: el prompt viaja por stdin, no por argv, así que `ps` ya
         # no trae texto del que sacar una identidad que comparar contra
         # `activos_id`. `skill.lock` nunca deja correr más de un `claude -p`
@@ -2588,7 +2633,7 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
         # un `claude -p` corrido por fuera de devkit-run.sh/watch.sh.
         [ "${#activos[@]}" -gt 0 ] && continue
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" \
-          "claude -p vivo (pid $pid) sin línea lanzando (prompt por stdin)" - - - -
+          "$ejecutable -p vivo (pid $pid) sin línea lanzando (prompt por stdin)" - - - -
         continue
         ;;
     esac
@@ -2620,7 +2665,7 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
       [ "$prompt_id" = "$a" ] && { encontrado=1; break; }
     done
     [ "$encontrado" = 1 ] && continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "claude -p vivo (pid $pid) sin línea lanzando: $(prompt_en_linea "$prompt")" - - - -
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' - - - - "sin registro" "$ejecutable -p vivo (pid $pid) sin línea lanzando: $(prompt_en_linea "$prompt")" - - - -
   done <<<"$procesos"
 }
 
@@ -3129,7 +3174,7 @@ colorear() {  # colorear <color> <texto> <habilitado>
 
 # Glifo sin color de una fila de `estado_filas` (skill/tarea). "en curso" gira
 # en braille, una posición por refresco (<idx>), fijo en ⠿ con <fijo>=1 (una
-# sola foto de `--estado` sin `--seguir`); terminó ✔ -mismo icono para "Lista
+# foto de `--estado`, `--foto` o sin tty); terminó ✔ -mismo icono para "Lista
 # para merge" (DEVKIT-132): el veredicto OK de un pr-review terminado, no un
 # paso distinto-; error -mismo icono para
 # "falló", el texto que trae la línea cruda de watch.log antes de que
@@ -3440,7 +3485,7 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     # `terminal_ide`): ahí "#<número>" queda en texto plano, para que lo
     # tome la extensión devkit.devkit-links en vez de un enlace que el
     # navegador no sabe abrir.
-    { [ "$pr_texto" = - ] || terminal_ide; } || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
+    { [ "$pr_texto" = - ] || terminal_ide; } || fila=$(enlazar_rango "$fila" "$off_pr" "${#pr_texto}" "$pr")
     # SKILL en negrita para task-start (DEVKIT-134): distingue de un vistazo
     # la fila que abre una card de la que la continúa.
     [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
@@ -3629,7 +3674,7 @@ mostrar_estado() {  # mostrar_estado [permitir_refresco_cuota=1] [idx=0] [fijo=1
   local filas skill clave origen edad estado detalle modelo duracion turnos pr
   # <filas> (DEVKIT-106 H5): quien ya llamó a `estado_filas` esta misma vuelta
   # -para el punto de la cabecera, en `seguir_estado`/`seguir_lanzamiento`/
-  # `--estado` sin `--seguir`- se las pasa acá para no leer watch.log/ps dos
+  # una foto de `--estado` (`--foto`, o sin tty)- se las pasa acá para no leer watch.log/ps dos
   # veces por refresco y arriesgar que el punto y la tabla salgan de fotos
   # distintas. `$#` -ge 5, no el valor: una llamada sin filas activas de
   # verdad pasa una cadena vacía a propósito.
@@ -4019,7 +4064,7 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
   prefijo="$(rellenar "$clave" 12)$estado_col$(rellenar "$tipo" 10)"
   fila="$prefijo$(rellenar "$pr_texto" "$ANCHO_PR")${frena#bloquea a: }"
   if [ "$color_habilitado" = 1 ] && [ "$pr_texto" != - ] && ! terminal_ide; then
-    fila=$(enlazar_rango "$fila" "${#prefijo}" "$ANCHO_PR" "$pr")
+    fila=$(enlazar_rango "$fila" "${#prefijo}" "${#pr_texto}" "$pr")
   fi
   printf '%s\n' "$fila"
 }
@@ -5416,6 +5461,64 @@ FIN
     bash "$HERE/review-publish.sh" 9303 "$rpub_dir/informe-nuevo.md" >"$rpub_dir/salida.out" 2>"$rpub_dir/salida.err"
   check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
     "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
+
+  # --- review-publish.sh de verdad: normaliza filas de tabla con barra en
+  # devkit-findings (DEVKIT-261) -----------------------------------------------
+  # pr-review a veces escribe un hallazgo como fila de tabla completa
+  # (`| H8 | media | ... |`) en vez de la fila sin barra que pide la
+  # plantilla. fix-publish.sh y task-document.sh extraen el id asumiendo que
+  # la línea empieza con `H<n>`, así que una fila con barra inicial se
+  # perdía y, con el informe en CAMBIOS, la guarda de DEVKIT-102 abortaba una
+  # respuesta que sí atendía el hallazgo (PR 145, DEVKIT-258). Un bloque
+  # mixto -H1 sin barra, H2 con barra inicial y final, H3 solo con barra
+  # inicial- prueba que los tres quedan normalizados en el cuerpo publicado.
+  local rpub_norm_dir
+  rpub_norm_dir=$(mktemp -d "$tmp/rpub-norm.XXXXXX")
+  cat >"$rpub_norm_dir/informe.md" <<'FIN'
+<!-- devkit-review sha=abc261 verdict=CAMBIOS -->
+Informe de prueba con un bloque mixto de hallazgos.
+
+<!-- devkit-findings -->
+H1 | alta | a.sh:1 | falla algo | arreglarlo
+| H2 | media | b.sh:2 | falla otra cosa | arreglarla |
+| H3 | baja | c.sh:3 | un detalle | ajustarlo
+<!-- /devkit-findings -->
+FIN
+  cat >"$rpub_norm_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$1 $2" >>"$(dirname "$0")/llamadas"
+case "$1 $2" in
+  "pr view") printf '' ;;
+  "pr review")
+    shift 2
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --body-file ]; then
+        cat "$2" >"$(dirname "$0")/cuerpo-publicado"
+        shift
+      fi
+      shift
+    done
+    ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub_norm_dir/gh-doble"
+  DEVKIT_WS="$rpub_norm_dir" DEVKIT_GH_BIN="$rpub_norm_dir/gh-doble" \
+    bash "$HERE/review-publish.sh" 9308 "$rpub_norm_dir/informe.md" >"$rpub_norm_dir/salida.out" 2>"$rpub_norm_dir/salida.err"
+  check "review-publish.sh de verdad: normaliza H1 sin barra (queda igual)" 1 \
+    "$(grep -c '^H1 | alta | a\.sh:1 | falla algo | arreglarlo$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: normaliza H2 con barra inicial y final" 1 \
+    "$(grep -c '^H2 | media | b\.sh:2 | falla otra cosa | arreglarla$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: normaliza H3 con barra inicial" 1 \
+    "$(grep -c '^H3 | baja | c\.sh:3 | un detalle | ajustarlo$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: ninguna fila de devkit-findings conserva la barra inicial" 0 \
+    "$(sed -n '/<!-- devkit-findings -->/,/<!-- \/devkit-findings -->/p' "$rpub_norm_dir/cuerpo-publicado" | grep -c '^|')"
+  # Mismo patrón `grep -oE '^H[0-9]+'` que fix-publish.sh:159 usa para leer los
+  # ids válidos de un informe CAMBIOS: los tres deben reconocerse.
+  check "review-publish.sh de verdad: bloque mixto, se reconocen los tres ids (H1 sin barra, H2 y H3 con barra)" \
+    "H1 H2 H3" \
+    "$(sed -n '/<!-- devkit-findings -->/,/<!-- \/devkit-findings -->/p' "$rpub_norm_dir/cuerpo-publicado" \
+       | grep -oE '^H[0-9]+' | tr '\n' ' ' | sed -E 's/ +$//')"
 
   # --- review-publish.sh de verdad: `-` lee el informe por stdin, sin que la
   # skill tenga que escribirlo antes (DEVKIT-125, revisión del PR 92, H2) ----
@@ -7274,7 +7377,7 @@ FIN
   check "uso: explica --seguir del lanzamiento" si \
     "$(printf '%s\n' "$uso_out" | grep -qF 'lanza y se queda mostrando el avance de ESTE lanzamiento' && echo si || echo no)"
   check "uso: explica --seguir del monitor" si \
-    "$(printf '%s\n' "$uso_out" | grep -qF 'no lanza nada: refresca el monitor' && echo si || echo no)"
+    "$(printf '%s\n' "$uso_out" | grep -qF 'no lanza nada: es sinónimo del seguimiento por defecto' && echo si || echo no)"
 
   # .devkit/roles.toml anula la tabla del template (DEVKIT-53, H3): se prioriza
   # sobre la de ../agents y la del template fallback.
@@ -7937,6 +8040,17 @@ FIN
     "$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 1 \
         | { [[ "$(cat)" == *$'\033]8;;'* ]] && echo si || echo no; })"
 
+  # DEVKIT-252: el hipervínculo envuelve solo "#<número>", no el relleno
+  # hasta ANCHO_PR -si no, la terminal subraya los espacios de relleno como
+  # si fueran parte del enlace. "#123" (3 dígitos) deja relleno de sobra
+  # dentro de ANCHO_PR (7) para que el caso sea representativo.
+  local pr_url_252 fila_con_pr_252_tty
+  pr_url_252="https://github.com/o/r/pull/123"
+  fila_con_pr_252_tty=$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_252" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
+  check "columna PR con TTY: el cierre OSC 8 llega justo después de #123, sin relleno adentro" si \
+    "$([[ "$fila_con_pr_252_tty" == *"#123"$'\033]8;;\033\\'* ]] && echo si || echo no)"
+  unset pr_url_252 fila_con_pr_252_tty
+
   # DEVKIT-229: en la terminal integrada (TERM_PROGRAM=vscode) la columna PR
   # no lleva el hipervínculo OSC 8 aunque haya TTY (color_habilitado=1) -el
   # navegador no sabe abrir openvscode-server://-, sino "#<número>" en texto
@@ -8081,7 +8195,7 @@ FIN
     "$(printf '%s|%s' \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 0 1 0 | cut -d' ' -f1)" \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 0 1 0 | cut -d' ' -f1)")"
-  check "punto: en una sola foto (sin --seguir) no parpadea, siempre lleno" '●|●' \
+  check "punto: en una sola foto (--foto, o sin tty) no parpadea, siempre lleno" '●|●' \
     "$(printf '%s|%s' \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 0 1 1 0 | cut -d' ' -f1)" \
         "$(punto_estado "$filas_punto_en_curso" 'bucle: vivo' 1 1 1 0 | cut -d' ' -f1)")"
@@ -8106,6 +8220,11 @@ FIN
   check "formatear_fila_tablero: En progreso pinta el girador en verde y negrita" si \
     "$(formatear_fila_tablero DEVKIT-1 "En progreso" feature - 0 1 1 \
         | grep -qF $'\033[1;32m' && echo si || echo no)"
+  # DEVKIT-252: mismo patrón que en `formatear_fila` -el hipervínculo envuelve
+  # solo "#<número>", no el relleno hasta ANCHO_PR.
+  check "formatear_fila_tablero con TTY: el cierre OSC 8 llega justo después de #123, sin relleno adentro" si \
+    "$(TERM_PROGRAM= formatear_fila_tablero DEVKIT-1 "En progreso" feature "https://github.com/o/r/pull/123" 0 1 1 \
+        | { [[ "$(cat)" == *"#123"$'\033]8;;\033\\'* ]] && echo si || echo no; })"
 
   # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
@@ -8265,23 +8384,57 @@ FIN
   cat >"$pslist_reg" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-501 claude -p ok --model modelo-x --output-format json
-502 claude -p /usage --output-format json
-503 claude -p /pr-review 99 --model opus --effort high --output-format json
+501 $doble -p ok --model modelo-x --output-format json
+502 $doble -p /usage --output-format json
+503 $doble -p /pr-review 99 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_reg"
   local filas_reg
-  filas_reg=$(PS_BIN="$pslist_reg" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
+  filas_reg=$(PS_BIN="$pslist_reg" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
   check "sin registro: un claude -p sin línea lanzando aparece, uno solo" 1 \
     "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
   check "sin registro: el detalle trae el pid y el prompt" \
-    "claude -p vivo (pid 503) sin línea lanzando: /pr-review 99" \
+    "$doble -p vivo (pid 503) sin línea lanzando: /pr-review 99" \
     "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro" {print $6}')"
   check "sin registro: la sonda de modelo (-p ok) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 501')"
   check "sin registro: la lectura de cuota (-p /usage) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 502')"
+
+  # DEVKIT-253: comparar el ejecutable resuelto contra $CLAUDE_BIN, no el
+  # texto "claude": un doble de `--test`/`watch-test.sh` (`claude-doble`,
+  # `claude-lento`, vivos unos segundos en /tmp mientras un agente que
+  # trabaja sobre el propio devkit corre las pruebas) recibe `-p <prompt>`
+  # igual que el binario real, pero no debe colar como si lo fuera.
+  local pslist_doble_ajeno
+  pslist_doble_ajeno="$tmp/ps-doble-ajeno"
+  cat >"$pslist_doble_ajeno" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+504 /tmp/x/claude-doble -p /task-fix DEVKIT-9 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_doble_ajeno"
+  check "sin registro: un doble de las pruebas (ejecutable distinto de CLAUDE_BIN) no produce fila" 0 \
+    "$(PS_BIN="$pslist_doble_ajeno" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+  local pslist_bin_real
+  pslist_bin_real="$tmp/ps-bin-real"
+  cat >"$pslist_bin_real" <<FIN
+#!/usr/bin/env bash
+cat <<TABLA
+505 $doble -p /task-fix DEVKIT-9 --model opus --effort high --output-format json
+TABLA
+FIN
+  chmod +x "$pslist_bin_real"
+  check "sin registro: el mismo ps, con el binario real (CLAUDE_BIN), sí produce fila" 1 \
+    "$(PS_BIN="$pslist_bin_real" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
+  check "sin registro: el detalle de un ejecutable real incluye la ruta y el pid" \
+    "$doble -p vivo (pid 505) sin línea lanzando: /task-fix DEVKIT-9" \
+    "$(PS_BIN="$pslist_bin_real" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora" \
+        | awk -F'\t' '$5 == "sin registro" {print $6}')"
 
   # H9 de pr-review en el PR #135: el `claude -p --model ...` sin prompt en
   # argv (DEVKIT-247, el `case` de arriba en `filas_sin_registro`) sigue la
@@ -8294,18 +8447,18 @@ FIN
   cat >"$pslist_stdin" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-601 claude -p --model opus --effort high --output-format json
+601 $doble -p --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_stdin"
   log_stdin_sin="$tmp/sin-activos-watch.log"
   : >"$log_stdin_sin"
   local filas_stdin_sin
-  filas_stdin_sin=$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
+  filas_stdin_sin=$(PS_BIN="$pslist_stdin" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
   check "sin registro (DEVKIT-247, prompt por stdin): sin lanzamientos activos, aparece" 1 \
     "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
   check "sin registro (DEVKIT-247, prompt por stdin): el detalle nombra el pid, sin prompt" \
-    "claude -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
+    "$doble -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
     "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro" {print $6}')"
 
   log_stdin_activo="$tmp/con-activo-watch.log"
@@ -8313,7 +8466,7 @@ FIN
   printf '%s task-fix-stdin lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-247" log=%s/task-fix-stdin.log\n' \
     "$(date -u -d "@$ahora" +%FT%TZ)" "$est" >"$log_stdin_activo"
   check "sin registro (DEVKIT-247, prompt por stdin): con un lanzamiento activo, no duplica la fila" 0 \
-    "$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
+    "$(PS_BIN="$pslist_stdin" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: un prompt de más de 120 caracteres queda cortado en la
@@ -8330,12 +8483,12 @@ FIN
   cat >"$pslist_largo" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-701 claude -p $prompt_largo --model opus --effort high --output-format json
+701 $doble -p $prompt_largo --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_largo"
   check "sin registro: un prompt de más de 120 caracteres no cae en sin registro" 0 \
-    "$(PS_BIN="$pslist_largo" LOCK="$est/skill.lock" estado_filas "$log_largo" "$ahora" \
+    "$(PS_BIN="$pslist_largo" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_largo" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: comillas en el prompt (un comentario humano puede traerlas)
@@ -8353,12 +8506,12 @@ FIN
   cat >"$pslist_comillas" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-702 claude -p $prompt_comillas --model opus --effort high --output-format json
+702 $doble -p $prompt_comillas --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_comillas"
   check "sin registro: un prompt con comillas normaliza igual que la línea lanzando" 0 \
-    "$(PS_BIN="$pslist_comillas" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
+    "$(PS_BIN="$pslist_comillas" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H10: un comentario humano que trae " --" (por ejemplo "no uses
@@ -8378,12 +8531,12 @@ FIN
   cat >"$pslist_guiones" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-703 claude -p $prompt_guiones --model opus --effort high --output-format json
+703 $doble -p $prompt_guiones --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_guiones"
   check "sin registro: un comentario humano con -- no se corta ahí" 0 \
-    "$(PS_BIN="$pslist_guiones" LOCK="$est/skill.lock" estado_filas "$log_guiones" "$ahora" \
+    "$(PS_BIN="$pslist_guiones" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_guiones" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: un lanzamiento fuera de la cola visible (ESTADO_FILAS, 20
@@ -8404,12 +8557,12 @@ FIN
   cat >"$pslist_cola" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-801 claude -p /task-fix DEVKIT-77 --model opus --effort high --output-format json
+801 $doble -p /task-fix DEVKIT-77 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_cola"
   check "sin registro: un lanzamiento fuera de la cola visible sigue contando como activo" 0 \
-    "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
+    "$(PS_BIN="$pslist_cola" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-97 (ampliación del 17:11 sobre DEVKIT-94): desde DEVKIT-90,
@@ -8435,12 +8588,12 @@ FIN
 #!/usr/bin/env bash
 cat <<TABLA
 701 bash devkit-run.sh --worker /task-start DEVKIT-94 $est/task-start-94.log opus high 40
-801 claude -p $prompt_card --model opus --effort high --output-format json
+801 $doble -p $prompt_card --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_card"
   local filas_card
-  filas_card=$(PS_BIN="$pslist_card" LOCK="$est/skill.lock" estado_filas "$log_card" "$ahora")
+  filas_card=$(PS_BIN="$pslist_card" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_card" "$ahora")
   check "task-start con la card completa en ps: una sola fila, sin sin registro" "1|0" \
     "$(printf '%s\n' "$filas_card" | awk -F'\t' '$2 == "DEVKIT-94" {c++} $5 == "sin registro" {s++} END{print (c+0)"|"(s+0)}')"
   check "task-start con la card completa en ps: la fila queda en curso" "en curso" \
@@ -8460,12 +8613,12 @@ FIN
   cat >"$pslist_repetido" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-901 claude -p /pr-review 58 --model opus --effort high --output-format json
+901 $doble -p /pr-review 58 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_repetido"
   check "sin registro: un lanzamiento ya terminado no cubre un claude -p vivo que repite su prompt" 1 \
-    "$(PS_BIN="$pslist_repetido" LOCK="$est/skill.lock" estado_filas "$log_repetido" "$ahora" \
+    "$(PS_BIN="$pslist_repetido" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_repetido" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H6: `lanzamientos()` filtra primero con `grep -nF` antes del
@@ -8745,12 +8898,12 @@ FIN
 #!/usr/bin/env bash
 cat <<TABLA
 701 bash devkit-run.sh --worker /task-fix DEVKIT-155 $logf_origen opus high 40
-702 claude -p /task-fix DEVKIT-155 --model opus --effort high --output-format json
+702 $doble -p /task-fix DEVKIT-155 --model opus --effort high --output-format json
 TABLA
 FIN
     chmod +x "$pslist_origen"
     check "origen $origen_prueba: en curso con su origen, sin sin registro" "en curso|$origen_prueba|0" \
-      "$(PS_BIN="$pslist_origen" LOCK="$est/skill.lock" estado_filas "$log_origen" "$ahora" \
+      "$(PS_BIN="$pslist_origen" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_origen" "$ahora" \
           | awk -F'\t' -v c=DEVKIT-155 'BEGIN{estado="";origen="";sr=0} $2==c{estado=$5;origen=$3} $5=="sin registro"{sr++} END{print estado"|"origen"|"sr}')"
   done
 
@@ -9026,12 +9179,12 @@ FIN
   cat >"$pslist_grupo" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-601 claude -p /pr-review 999 --model opus --effort high --output-format json
+601 $doble -p /pr-review 999 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_grupo"
   local filas_grupo
-  filas_grupo=$(PS_BIN="$pslist_grupo" LOCK="$grupo_dir/skill.lock" DEVKIT_AHORA="$grupo_ahora" \
+  filas_grupo=$(PS_BIN="$pslist_grupo" CLAUDE_BIN="$doble" LOCK="$grupo_dir/skill.lock" DEVKIT_AHORA="$grupo_ahora" \
       estado_filas "$grupo_dir/watch.log" "$grupo_ahora")
   check "agrupar_por_card: A1 B1 A2 B2 (cronológico) pasa a A1 A2 B1 B2 (agrupado por CARD)" \
     "DEVKIT-900
@@ -9571,11 +9724,102 @@ FIN
   check "lanzamiento real: --estado lo muestra terminado" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | awk '/DEVKIT-7/' | grep -qF 'terminó' && echo si || echo no)"
-  # DEVKIT-106 H4: `--estado` sin `--seguir` (una sola foto) también muestra
-  # la cabecera con el punto fijo, no solo la tabla.
+  # DEVKIT-106 H4: una foto de `--estado` (`--foto`, o sin tty) también
+  # muestra la cabecera con el punto fijo, no solo la tabla.
   check "--estado (foto única) muestra la cabecera con el punto" si \
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^dk --estado  .*[●*]' && echo si || echo no)"
+
+  # DEVKIT-256: en una tty, `--estado`/`--tablero` a secas entran en
+  # seguimiento por defecto; `--foto` fuerza la foto única (lo que hacían
+  # antes sin bandera) y sin tty siempre es foto -para `--estado` ya cubierto
+  # arriba, la llamada de más arriba corre dentro de un pipe; `--tablero` y
+  # `--estado --seguir` sin tty se cubren más abajo. `script`
+  # (util-linux, ya en la imagen base) le da una tty real al subproceso para
+  # que `[ -t 1 ]` la vea como tal; `timeout` lo corta a 5 s -generoso frente a
+  # lo que tarda armar el primer cuadro (H4, pr-review PR#150: en una máquina
+  # lenta, 1.5 s podía cortar antes de que `mostrar_estado`/`mostrar_tablero`
+  # terminaran, sin que hubiera un error real)-, y los casos que entran en
+  # seguimiento suben DEVKIT_ESTADO_INTERVALO/DEVKIT_TABLERO_INTERVALO bien
+  # por encima de esos 5 s para que no salga un segundo cuadro dentro de la
+  # ventana. `seguir_estado`/`seguir_tablero` no salen solas, solo con la
+  # señal que manda `timeout`. La cabecera de seguimiento lleva
+  # "(cada Ns; Ctrl-C para salir)"; la de la foto no.
+  local dk256_tmp dk256_run dk256_out
+  dk256_tmp=$(mktemp -d)
+  dk256_run="$dk256_tmp/run"
+  mkdir -p "$dk256_run"
+  : >"$dk256_run/watch.log"
+  # H1 (pr-review PR#150): sin esto, el RUN_DIR nuevo no trae `cuota.cache` y
+  # `mostrar_consumo` dispara `refrescar_cuota_bg` con el `claude` real (sin
+  # `DEVKIT_CLAUDE_BIN`) en cada llamada a `--estado`. Sembrar la caché en
+  # `headless` evita cualquier refresco, igual que hace `leer_cuota` de
+  # verdad en modo headless (DEVKIT-255).
+  printf '%s\theadless\n' "$(date +%s)" >"$dk256_run/cuota.cache"
+
+  dk256_out="$dk256_tmp/estado-seguir.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado sin bandera entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/estado-seguir-sinonimo.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --seguir" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --seguir (sinónimo) también sigue" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/estado-foto.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --foto imprime una sola vez" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  # H2 (pr-review PR#150): que falte "Ctrl-C para salir" no basta -si el
+  # comando revienta y deja el archivo vacío, el check de arriba pasa igual-.
+  # Se comprueba también que trae la cabecera propia de la foto.
+  check "DEVKIT-256: tty simulada, --estado --foto trae la cabecera" si \
+    "$(grep -qE '^dk --estado  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  dk256_out="$dk256_tmp/estado-todo-tty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --todo" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --todo también entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/tablero-seguir.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_TABLERO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --tablero" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --tablero sin bandera entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/tablero-foto.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --tablero --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --tablero --foto imprime una sola vez" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: tty simulada, --tablero --foto trae la cabecera" si \
+    "$(grep -qE '^dk --tablero  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  # H2 (pr-review PR#150): sin tty, --tablero y --estado --seguir también
+  # deben quedar en una sola foto -antes solo estaba cubierto --estado a
+  # secas, línea arriba-. Sin `script` de por medio: el pipe ya hace que
+  # `[ -t 1 ]` sea falso.
+  dk256_out="$dk256_tmp/tablero-sintty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    bash "$HERE/devkit-run.sh" --tablero >"$dk256_out" 2>&1 </dev/null
+  check "DEVKIT-256: --tablero sin tty es una sola foto (sin Ctrl-C)" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: --tablero sin tty trae la cabecera de foto" si \
+    "$(grep -qE '^dk --tablero  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  dk256_out="$dk256_tmp/estado-seguir-sintty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    bash "$HERE/devkit-run.sh" --estado --seguir >"$dk256_out" 2>&1 </dev/null
+  check "DEVKIT-256: --estado --seguir sin tty es una sola foto (sin Ctrl-C)" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: --estado --seguir sin tty trae la cabecera de foto" si \
+    "$(grep -qE '^dk --estado  .*[●*]' "$dk256_out" && echo si || echo no)"
+  rm -rf "$dk256_tmp"
 
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
   # queda mostrando --estado hasta que termina; la última línea es el
@@ -10951,9 +11195,17 @@ $card_md"
     ;;
   --estado)
     # --todo (DEVKIT-97) desactiva el recorte de la tabla al alto de la
-    # terminal, en cualquier posición junto a --seguir.
+    # terminal, en cualquier posición junto a --seguir/--foto.
     case " ${2:-} ${3:-} " in *" --todo "*) export DEVKIT_ESTADO_TODO=1 ;; esac
-    if [ "${2:-}" = --seguir ] || [ "${3:-}" = --seguir ]; then seguir_estado; fi
+    # DEVKIT-256: en una tty, `--estado` a secas (o con --seguir, que sigue
+    # aceptado como sinónimo sin aviso) entra en seguimiento por defecto;
+    # `--foto` fuerza la foto única de siempre. Sin tty (pipe, `$(...)`,
+    # redirección) `[ -t 1 ]` es falso y esta rama ni se evalúa: siempre foto,
+    # con o sin bandera -ninguna llamada dentro de un `$(...)` puede quedarse
+    # esperando un Ctrl-C que nunca llega.
+    if [ -t 1 ]; then
+      case " ${2:-} ${3:-} " in *" --foto "*) : ;; *) seguir_estado ;; esac
+    fi
     # COLUMNS/LINES de verdad, tomados con tty real (DEVKIT-97 H1): mismo
     # motivo que en seguir_estado, para que un `--estado` interactivo (sin
     # `--seguir`) también recorte al tamaño real en vez del respaldo ancho.
@@ -10978,11 +11230,15 @@ $card_md"
     exit 0
     ;;
   --tablero)
-    if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
+    # DEVKIT-256: mismo cambio de default que --estado -ver su comentario-,
+    # con --seguir como sinónimo aceptado y --foto para la foto única.
+    if [ -t 1 ]; then
+      case " ${2:-} " in *" --foto "*) : ;; *) seguir_tablero ;; esac
+    fi
     tablero_color=''; [ -t 1 ] && tablero_color=1
     # Misma cabecera de punto+modo que la foto única de `--estado` (DEVKIT-136):
-    # sin esto, `--tablero` sin `--seguir` no tenía cabecera propia y el modo
-    # no tenía dónde mostrarse.
+    # sin esto, una foto de `--tablero` (`--foto`, o sin tty) no tenía cabecera
+    # propia y el modo no tenía dónde mostrarse.
     tablero_ahora_una=${DEVKIT_AHORA:-$(date +%s)}
     tablero_filas_una=$(estado_filas "$WATCH_LOG" "$tablero_ahora_una")
     tablero_bucle_una=$(senal_bucle "$WATCH_LOG" "$tablero_ahora_una" "$tablero_color")
@@ -11075,8 +11331,8 @@ falta_valor() {  # falta_valor <valor>
 uso() {
   echo "uso: dk [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
   echo "       --seguir aquí lanza y se queda mostrando el avance de ESTE lanzamiento hasta que termine." >&2
-  echo "     dk --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
-  echo "       --seguir aquí no lanza nada: refresca el monitor (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C." >&2
+  echo "     dk --estado [--foto] [--todo] | --tablero [--foto] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
+  echo "       En una tty ambos siguen por defecto (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C; --foto imprime una sola vez. --seguir aquí no lanza nada: es sinónimo del seguimiento por defecto." >&2
   echo "     dk --pausa | --alto | --reanudar" >&2
 }
 

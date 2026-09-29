@@ -83,6 +83,27 @@ if [ -z "$marcador" ]; then
 fi
 verdict=$(printf '%s' "$marcador" | sed -nE 's/.*verdict=([A-Z]+).*/\1/p')
 
+# --- Normaliza filas de tabla en devkit-findings (DEVKIT-261) ---------------
+# La rúbrica pide una fila por hallazgo sin barra inicial (`H8 | media | ...`),
+# pero a veces el agente la escribe como fila de tabla completa
+# (`| H8 | media | ... |`). fix-publish.sh y task-document.sh extraen el id
+# de cada línea asumiendo que empieza con `H<n>`, así que una fila con barra
+# inicial se pierde: si el informe es CAMBIOS, la guarda de DEVKIT-102 aborta
+# una respuesta de task-fix que sí atendía ese hallazgo (PR 145, DEVKIT-258).
+# Se normaliza acá, antes de publicar, para que el cuerpo que queda en GitHub
+# -de donde leen fix-publish.sh, task-document.sh y cualquier otro
+# consumidor- tenga siempre el mismo formato, sin importar cuál usó el
+# agente.
+awk '
+  /<!-- devkit-findings -->/ { activo = 1 }
+  activo && /^[[:space:]]*\|/ {
+    sub(/^[[:space:]]*\|[[:space:]]*/, "")
+    sub(/[[:space:]]*\|[[:space:]]*$/, "")
+  }
+  /<!-- \/devkit-findings -->/ { activo = 0 }
+  { print }
+' "$archivo" > "$archivo.norm" && mv "$archivo.norm" "$archivo"
+
 # --- Publica la review --------------------------------------------------------
 # Idempotente: si un paso de más abajo (gh pr view, Notion) falla y la skill
 # manda repetir este script (paso 4 de `pr-review`), no publica el mismo
