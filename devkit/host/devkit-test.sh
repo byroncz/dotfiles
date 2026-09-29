@@ -1024,6 +1024,13 @@ else
 read -r reqline
 path="${reqline#* }"; path="${path%% *}"
 while IFS= read -r l; do l="${l%$'\r'}"; [ -z "$l" ] && break; done
+# La raíz imita a Node con httpAllowHalfOpen=false (DEVKIT-259, H1 y H9): si
+# el shim cierra su lado de escritura (EOF) antes de la respuesta, no
+# responde. Solo si la espera se agota (código >128) sigue y responde.
+if [ "$path" = / ]; then
+  read -r -t 1.5 _
+  [ $? -gt 128 ] || exit 0
+fi
 body="cuerpo-$path"
 len=${#body}
 printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "$len" "$body"
