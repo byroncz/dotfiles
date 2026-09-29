@@ -283,17 +283,12 @@ fi
 # simplemente no arranca.
 VSCODE_TOKEN="$RUN_DIR/vscode-token"
 if [ -s "$VSCODE_TOKEN" ]; then
-  # El volumen editor-<proyecto> solo hereda los permisos de la imagen en el
-  # primer montaje: un proyecto que ya haya recreado antes de este chmod se
-  # queda con el modo viejo para siempre si no se repite en cada arranque.
+  # Sin volumen editor (DEVKIT-259 lo retiró): este directorio nace en cada
+  # contenedor con los permisos que ya fija el Dockerfile, así que el chmod
+  # es defensivo, no correctivo. Por la misma razón, los logs de
+  # openvscode-server tampoco se acumulan entre arranques y no hace falta
+  # recortarlos.
   chmod 700 "$HOME/.openvscode-server/data"
-  # openvscode-server crea un directorio de logs nuevo en cada arranque del
-  # servidor y nunca los borra; con el volumen persistente se acumulan sin
-  # límite. Se conservan los últimos 5. El `|| true` no es cosmético: en el
-  # primer arranque de un volumen nuevo todavía no existe `data/logs`, el glob
-  # no expande, `ls` sale con 2 y, con `set -euo pipefail`, esa tubería mataría
-  # el entrypoint antes de levantar el editor y de escribir el marcador ready.
-  ls -1dt "$HOME"/.openvscode-server/data/logs/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf || true
   # vscode.log nace en 600 antes de arrancar el servidor: openvscode-server
   # imprime "Web UI available at ...?tkn=<token>" al levantar, y ese grep -v
   # lo saca del log para que un tail no filtre el token (ver DEVKIT-51).
@@ -315,6 +310,20 @@ if [ -s "$VSCODE_TOKEN" ]; then
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
   nohup socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:3000 >/dev/null 2>&1 &
+  # Almacén persistente de secretos del workbench web (DEVKIT-259): el shim
+  # del proxy necesita el SHA-256 del token para responder POST
+  # /devkit/secret-key, pero el token vive solo en este contenedor (tmpfs
+  # $RUN_DIR, nunca en un volumen). En vez de compartir un volumen nuevo, este
+  # puerto -solo en la red `internal`, nunca publicado al host- recalcula y
+  # sirve el dígesto en cada conexión: se deriva, no se guarda en ningún lado.
+  # El shim reenvía la cookie vscode-tkn (sesión de openvscode-server) como
+  # cuerpo de la conexión; vscode-secret-digest.sh solo entrega el dígesto si
+  # coincide con el token real, para que el endpoint no filtre el secreto a
+  # quien no tenga ya una sesión válida en el editor (DEVKIT-259, H4). La
+  # comparación vive acá: el proxy ve el token de paso en la petición, pero
+  # nunca lo guarda.
+  nohup socat TCP-LISTEN:3002,fork,reuseaddr,bind=0.0.0.0 \
+    EXEC:"$SCRIPTS_DIR/vscode-secret-digest.sh $VSCODE_TOKEN" >/dev/null 2>&1 &
   log "editor VS Code activo en el puerto 3000"
 else
   warn "falta el secreto vscode-token en Bitwarden: el editor VS Code no arranca"

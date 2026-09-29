@@ -33,20 +33,20 @@ Cada proyecto recibe su propio par de puertos de host (editor y retorno
 OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 ~/.devkit/<proyecto>/.env`.
 
-Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
-estado del editor VS Code del lado del servidor (estado de las extensiones,
-perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
-sí: esas vienen en la imagen. La vista de Extensiones no tiene tienda en
-vivo: el build baja las extensiones con la red del host, pero el proxy en
-vivo del contenedor solo deja pasar lo que está en `allowlist.base` más
-`domains` de `.devkit/devkit.toml`, así que buscar ahí solo muestra el aviso
-nativo de que no hay galería configurada, sin botón "Instalar". Para sumar
-una, declárala en `extensions` de `.devkit/devkit.toml` (se suma a las del
-template, por ejemplo `extensions = ["ms-python.python"]`) y corre
-`devkit rebuild <proyecto>`, el camino que documenta la chuleta para sumar
-una extensión. `devkit down` no borra el volumen, igual que al resto de los
-volúmenes con nombre; para reiniciarlo desde cero hace falta
-`docker volume rm editor-<proyecto>`.
+El editor VS Code no guarda su sesión (la de GitHub Pull Requests, entre
+otras) del lado del servidor: no hay volumen para eso. El shim del proxy le
+agrega al editor la clave que necesita para cifrar su almacén de secretos en
+el navegador, así que la sesión sobrevive a `devkit recreate` mientras uses
+el mismo navegador y el mismo puerto de host; cambiar cualquiera de los dos
+la pierde. Tampoco guarda las extensiones: esas vienen en la imagen. La
+vista de Extensiones no tiene tienda en vivo: el build baja las extensiones
+con la red del host, pero el proxy en vivo del contenedor solo deja pasar lo
+que está en `allowlist.base` más `domains` de `.devkit/devkit.toml`, así que
+buscar ahí solo muestra el aviso nativo de que no hay galería configurada,
+sin botón "Instalar". Para sumar una, declárala en `extensions` de
+`.devkit/devkit.toml` (se suma a las del template, por ejemplo `extensions =
+["ms-python.python"]`) y corre `devkit rebuild <proyecto>`, el camino que
+documenta la chuleta para sumar una extensión.
 
 ## Stack
 

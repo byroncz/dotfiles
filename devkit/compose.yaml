@@ -49,16 +49,6 @@ services:
       - claude:/home/dev/.claude
       - history:/commandhistory
       - proxy-log:/var/log/devkit-proxy:ro
-      # Datos del editor VS Code (openvscode-server) del lado del servidor:
-      # estado de extensiones, perfiles en caché y logs. La intención
-      # (DEVKIT-158) es que aquí sobreviva también la sesión OAuth de GitHub
-      # Pull Requests (DEVKIT-68), pero eso no está confirmado: en este
-      # contenedor, tras usar la extensión, no existe `data/User/globalStorage`
-      # y sus logs dicen "Got 0 sessions", lo que sugiere que el workbench web
-      # guarda esa sesión del lado del navegador, no aquí. Pendiente la prueba
-      # de extremo a extremo del humano. No incluye extensions/, que ya viene
-      # en la imagen.
-      - editor:/home/dev/.openvscode-server/data
     networks:
       - internal
     depends_on:
@@ -86,9 +76,12 @@ services:
       - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:45454"
       # Editor VS Code (openvscode-server), gateado por token de conexión:
       # Mac localhost:${DEVKIT_VSCODE_PORT} -> proxy:3001 -> dev:3001 ->
-      # 127.0.0.1:3000 dentro de dev, donde escucha el servidor. Mismo patrón
-      # que el OAuth de arriba. `devkit code <proyecto>` arma la URL con el
-      # token.
+      # 127.0.0.1:3000 dentro de dev, donde escucha el servidor. A diferencia
+      # del OAuth de arriba, el salto proxy:3001 -> dev:3001 no es socat puro:
+      # lo hace proxy-shim.sh, que agrega la cookie del almacén de secretos y
+      # responde POST /devkit/secret-key con el dígesto que pide a dev:3002.
+      # Ese puerto existe solo en la red `internal`, nunca se publica al host
+      # (DEVKIT-259). `devkit code <proyecto>` arma la URL con el token.
       - "127.0.0.1:${DEVKIT_VSCODE_PORT:-3000}:3001"
     networks:
       - internal
@@ -106,8 +99,6 @@ volumes:
     name: history-${DEVKIT_PROJECT}
   proxy-log:
     name: proxylog-${DEVKIT_PROJECT}
-  editor:
-    name: editor-${DEVKIT_PROJECT}
 
 secrets:
   bws_token:
