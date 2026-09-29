@@ -43,9 +43,9 @@ vivo del contenedor solo deja pasar lo que está en `allowlist.base` más
 nativo de que no hay galería configurada, sin botón "Instalar". Para sumar
 una, declárala en `extensions` de `.devkit/devkit.toml` (se suma a las del
 template, por ejemplo `extensions = ["ms-python.python"]`) y corre
-`devkit rebuild <proyecto>`: `devkit recreate` no reconstruye esa capa.
-`devkit down` no borra el volumen, igual que
-al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
+`devkit rebuild <proyecto>`, el camino que documenta la chuleta para sumar
+una extensión. `devkit down` no borra el volumen, igual que al resto de los
+volúmenes con nombre; para reiniciarlo desde cero hace falta
 `docker volume rm editor-<proyecto>`.
 
 ## Stack
