@@ -1030,7 +1030,8 @@ printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nCon
 FIN
   cat > "$sw/dev_digest.sh" <<FIN
 #!/bin/sh
-sha256sum '$sw/token' | cut -c1-64
+presentado=\$(cat)
+[ "\$presentado" = "\$(cat '$sw/token')" ] && sha256sum '$sw/token' | cut -c1-64
 FIN
   cat > "$sw/dev_ws.sh" <<'FIN'
 #!/bin/bash
@@ -1064,9 +1065,21 @@ FIN
     printf 'ok   %-58s\n' "shim: un asset no agrega la cookie"
   fi
 
-  "$REAL_CURL" -s --max-time 4 -X POST "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key1.bin"
+  "$REAL_CURL" -s --max-time 4 -X POST -H "Cookie: vscode-tkn=token-de-prueba-devkit-259" \
+    "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key1.bin"
   check "shim: la clave mide 32 bytes" "32" "$(wc -c < "$sw/key1.bin")"
   check "shim: la clave es el SHA-256 del token" "$digest_esperado" "$(od -An -tx1 "$sw/key1.bin" | tr -d ' \n')"
+
+  # H4, DEVKIT-259: sin la cookie de sesión, o con una que no coincide con el
+  # token de conexión, dev nunca entrega el dígesto y el shim responde 403.
+  "$REAL_CURL" -s --max-time 4 -X POST "http://127.0.0.1:$shim_port/devkit/secret-key" \
+    -D "$sw/key_sin_cookie.hdr" -o "$sw/key_sin_cookie.bin"
+  check_hdr "$sw/key_sin_cookie.hdr" "^HTTP/1\.1 403 Forbidden" "shim: sin cookie de sesión, 403"
+  check "shim: sin cookie de sesión, cuerpo vacío" "0" "$(wc -c < "$sw/key_sin_cookie.bin")"
+
+  "$REAL_CURL" -s --max-time 4 -X POST -H "Cookie: vscode-tkn=otro-token" \
+    "http://127.0.0.1:$shim_port/devkit/secret-key" -D "$sw/key_mal.hdr" -o "$sw/key_mal.bin"
+  check_hdr "$sw/key_mal.hdr" "^HTTP/1\.1 403 Forbidden" "shim: cookie de sesión que no coincide, 403"
 
   # Recreate del proxy (sin volumen propio): otro shim, mismo token en dev,
   # misma clave. Prueba que se deriva de nuevo y no se cachea (DEVKIT-259).
@@ -1075,7 +1088,8 @@ FIN
   env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$dev_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \
     socat TCP-LISTEN:$shim_port,fork,reuseaddr "EXEC:$SHIM" >"$sw/shim2.log" 2>&1 & shim_pids[3]="$!"
   sleep 0.3
-  "$REAL_CURL" -s --max-time 4 -X POST "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key2.bin"
+  "$REAL_CURL" -s --max-time 4 -X POST -H "Cookie: vscode-tkn=token-de-prueba-devkit-259" \
+    "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key2.bin"
   check "shim: recreate deriva la misma clave" "$digest_esperado" "$(od -An -tx1 "$sw/key2.bin" | tr -d ' \n')"
 
   # WebSocket: sube, y lo que el navegador mande después del upgrade llega a

@@ -12,10 +12,14 @@
 # crudo ya es transparente para WebSocket, no hace falta interpretarlo.
 #
 #   GET|HEAD /  (con o sin ?tkn=): se agrega Set-Cookie a la respuesta.
-#   POST /devkit/secret-key: no llega a dev. Responde 32 bytes = SHA-256 del
-#     token de conexión, consultado en dev:$DIGEST_PORT en cada llamada
-#     (DEVKIT-259, ver entrypoint.sh de dev): no se guarda ninguna copia acá,
-#     se deriva de nuevo cada vez, así que sobrevive a un proxy recién
+#   POST /devkit/secret-key: no llega a dev. Reenvía la cookie vscode-tkn
+#     (la de sesión de openvscode-server, verificada con curl contra 1.109.5)
+#     a dev:$DIGEST_PORT, que solo responde el dígesto si coincide con el
+#     token de conexión; sin cookie o si no coincide, 403 (DEVKIT-259, H4:
+#     la comparación queda en dev, este script nunca guarda el token, solo
+#     lo relee de la petición y lo reenvía).
+#   Éxito: 32 bytes = SHA-256 del token, consultado en dev:$DIGEST_PORT en
+#     cada llamada: no se cachea, así que sobrevive a un proxy recién
 #     recreado sin volumen propio.
 #
 # Cada request que no sea el especial de arriba se fuerza a "Connection:
@@ -52,6 +56,7 @@ path_sin_query="${path%%\?*}"
 headers=()
 content_length=""
 es_upgrade=0
+tkn_cookie=""
 while IFS= read -r line; do
   line="${line%$'\r'}"
   [ -z "$line" ] && break
@@ -60,6 +65,21 @@ while IFS= read -r line; do
   case "$low" in
     content-length:*) content_length="$(printf '%s' "${line#*:}" | tr -dc '0-9')" ;;
     upgrade:*) es_upgrade=1 ;;
+    cookie:*)
+      # vscode-tkn: cookie de sesión de openvscode-server (verificada con
+      # curl contra 1.109.5), entre las demás separadas por "; ".
+      cookie_rest="${line#*:}"
+      cookie_rest="${cookie_rest# }"
+      while [ -n "$cookie_rest" ]; do
+        cookie_par="${cookie_rest%%;*}"
+        cookie_par="${cookie_par# }"
+        case "$cookie_par" in
+          vscode-tkn=*) tkn_cookie="${cookie_par#vscode-tkn=}" ;;
+        esac
+        [ "$cookie_rest" = "$cookie_par" ] && break
+        cookie_rest="${cookie_rest#*;}"
+      done
+      ;;
   esac
 done
 
@@ -68,12 +88,12 @@ if [ "$method" = "POST" ] && [ "$path_sin_query" = "/devkit/secret-key" ]; then
   if [ -n "$content_length" ] && [ "$content_length" -gt 0 ] 2>/dev/null; then
     dd bs=1 count="$content_length" >/dev/null 2>&1
   fi
-  hex="$(printf '' | timeout 3 socat -t 2 - "TCP:${UPSTREAM_HOST}:${DIGEST_PORT}" 2>/dev/null | tr -dc '0-9a-fA-F')"
+  hex="$(printf '%s' "$tkn_cookie" | timeout 3 socat -t 2 - "TCP:${UPSTREAM_HOST}:${DIGEST_PORT}" 2>/dev/null | tr -dc '0-9a-fA-F')"
   if [ "${#hex}" = 64 ]; then
     printf 'HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 32\r\nConnection: close\r\n\r\n'
     hex_to_bin "$hex"
   else
-    printf 'HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'
+    printf 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'
   fi
   exit 0
 fi
