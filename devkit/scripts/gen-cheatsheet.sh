@@ -42,8 +42,8 @@ devkit shell <proyecto>
 devkit recreate <proyecto>
 devkit rebuild <proyecto>
 devkit awake <proyecto>"
-BLOQUES[agentes]="dk --estado [--seguir]
-dk --tablero [--seguir]
+BLOQUES[agentes]="dk --estado [--foto]
+dk --tablero [--foto]
 dk <skill> <Clave>
 dk pr-review <N>
 dk task-fix <N>"

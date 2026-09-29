@@ -27,7 +27,7 @@
 #     lanzamiento (`terminado [...]: modelo=... costo=...`).
 #
 # Qué hace cada agente, sin lanzar otro agente (DEVKIT-57):
-#   devkit-run --estado [--seguir] [--todo]
+#   devkit-run --estado [--foto] [--todo]
 #     Tabla de los últimos lanzamientos: skill (task-start en negrita, abre
 #     una card; el resto la continúa, DEVKIT-134), card, "#<número>" del PR de
 #     esa fila (DEVKIT-134, DEVKIT-156: el owner/repo real de `gh repo view`,
@@ -53,12 +53,17 @@
 #     costo y los turnos de hoy y de la semana, estimados desde
 #     `.devkit/costos.log` (los mismos que calcula `--costos`), con la
 #     explicación de por qué no hay cifra oficial solo una vez, no en cada
-#     refresco. `--seguir` refresca todo cada 3 s hasta Ctrl-C, con `bucle: ...`
-#     en la cabecera:
+#     refresco. En una tty, `--estado` a secas entra en seguimiento por
+#     defecto (DEVKIT-256): refresca todo cada 3 s hasta Ctrl-C, con
+#     `bucle: ...` en la cabecera. `--seguir` sigue aceptado como sinónimo
+#     explícito del mismo seguimiento. `--foto` fuerza una sola foto (lo que
+#     antes hacía `--estado` a secas); sin tty (pipe, `$(...)`, redirección)
+#     siempre es foto, con o sin bandera. La cabecera de seguimiento trae
+#     `bucle: ...`:
 #     `vivo` (tick reciente), `esperando <skill>-<n>` (una skill de origen
 #     bucle en curso explica la falta de tick, sin alarma), `SIN SEÑAL` (ni lo
 #     uno ni lo otro) o `MUERTO` (watch.sh no está en `ps`).
-#   devkit-run --tablero [--seguir]
+#   devkit-run --tablero [--foto]
 #     Cards activas del proyecto (Lista, En progreso, Revisión automática,
 #     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
 #     Tipo, PR ("#<número>" con el mismo hipervínculo OSC 8 en una TTY, o en
@@ -66,12 +71,14 @@
 #     que `--estado`, DEVKIT-156/DEVKIT-229) y "bloquea a" (columna de
 #     DEVKIT-63), agrupadas
 #     por Épica de origen cuando hay más de una Épica En progreso (DEVKIT-80).
-#     Una sola consulta a Notion por refresco (DEVKIT-82). `--seguir` la
-#     refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
+#     Una sola consulta a Notion por refresco (DEVKIT-82). Mismo cambio que
+#     `--estado` (DEVKIT-256): sigue por defecto en una tty, cada 30 s, no 3,
+#     para no gastar el límite de peticiones de Notion; `--seguir` sigue
+#     aceptado como sinónimo y `--foto` fuerza la foto única.
 #   devkit-run --cola
 #     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
 #     origen o "(sin Épica)") y título, en el mismo orden que decide "la
-#     siguiente card" (`cola.sh`). No acepta `--seguir`.
+#     siguiente card" (`cola.sh`). No acepta `--foto` ni `--seguir`.
 #   devkit-run --agentes-vivos
 #     PID, Clave y paso de cada `--worker`/`--sync` en curso en este
 #     contenedor (DEVKIT-138), o "sin agentes vivos". La misma detección por
@@ -310,9 +317,10 @@ ESTADO_INTERVALO="${DEVKIT_ESTADO_INTERVALO:-3}"
 # oficial legible, o 5 la primera vez de una sesión en modo headless (con el
 # aviso de una sola línea de "sin cuota oficial...", H4 de pr-review en el
 # PR#142); menos si falla o no hay lectura todavía, pero contar de menos
-# desborda y de más solo achica un poco la tabla. `--estado` sin `--seguir` no
-# imprime las primeras tres, pero reservarlas de más solo achica un poco la
-# tabla, nunca la desborda -al revés de no reservar nada.
+# desborda y de más solo achica un poco la tabla. Una foto de `--estado`
+# (`--foto`, o sin tty) no imprime las primeras tres, pero reservarlas de más
+# solo achica un poco la tabla, nunca la desborda -al revés de no reservar
+# nada.
 RESERVA_LINEAS_TABLA="${DEVKIT_RESERVA_LINEAS_TABLA:-10}"
 # Intervalo del bucle de watch.sh, para juzgar si su último tick "consultando
 # GitHub" está viejo (DEVKIT-81, señal de vida de `--estado --seguir`). Mismo
@@ -1345,8 +1353,8 @@ mostrar_consumo_local() {
 # todavía. Así `--estado` nunca queda atado a esa lectura (H1 de pr-review).
 # <permitir_refresco> en 0 (DEVKIT-78, lo pasan `seguir_estado` y
 # `seguir_lanzamiento` pasado CUOTA_DESATENDIDO) muestra la caché igual pero
-# no dispara un refresco nuevo: por defecto en 1, así que una `--estado`
-# suelta -sin `--seguir`- no cambia de comportamiento.
+# no dispara un refresco nuevo: por defecto en 1, así que una foto de
+# `--estado` (`--foto`, o sin tty) no cambia de comportamiento.
 mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
   local permitir_refresco=${1:-1}
   local ts estado sesion_pct sesion_reset semana_pct semana_reset ts_ok edad ttl_efectivo
@@ -1370,9 +1378,9 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
       # RUN_DIR y sobrevive a la sesión: `watch.sh` solo lo crea con
       # `mkdir -p`, nunca lo limpia, así que antes el aviso salía una sola vez
       # por vida del contenedor y un `--estado --seguir` posterior ya no lo
-      # mostraba nunca. Una `--estado` suelta -sin `--seguir`- no exporta la
-      # variable, así que siempre lo muestra: no hay sesión que recuerde nada
-      # de una vuelta a la otra.
+      # mostraba nunca. Una foto de `--estado` (`--foto`, o sin tty) no
+      # exporta la variable, así que siempre lo muestra: no hay sesión que
+      # recuerde nada de una vuelta a la otra.
       printf '\nConsumo (estimado desde los lanzamientos, no la cuota del plan)\n'
       if [ -z "${DEVKIT_CONSUMO_AVISO:-}" ] || [ ! -e "$DEVKIT_CONSUMO_AVISO" ]; then
         printf '  sin cuota oficial en headless (`claude -p "/usage"` no la trae)\n'
@@ -7274,7 +7282,7 @@ FIN
   check "uso: explica --seguir del lanzamiento" si \
     "$(printf '%s\n' "$uso_out" | grep -qF 'lanza y se queda mostrando el avance de ESTE lanzamiento' && echo si || echo no)"
   check "uso: explica --seguir del monitor" si \
-    "$(printf '%s\n' "$uso_out" | grep -qF 'no lanza nada: refresca el monitor' && echo si || echo no)"
+    "$(printf '%s\n' "$uso_out" | grep -qF 'no lanza nada: es sinónimo del seguimiento por defecto' && echo si || echo no)"
 
   # .devkit/roles.toml anula la tabla del template (DEVKIT-53, H3): se prioriza
   # sobre la de ../agents y la del template fallback.
@@ -9593,6 +9601,52 @@ FIN
     "$(DEVKIT_CLAUDE_BIN="$doble" DEVKIT_RUN_DIR="$tmp/run" DEVKIT_WS="$tmp" \
         bash "$HERE/devkit-run.sh" --estado | head -1 | grep -qE '^dk --estado  .*[●*]' && echo si || echo no)"
 
+  # DEVKIT-256: en una tty, `--estado`/`--tablero` a secas entran en
+  # seguimiento por defecto; `--foto` fuerza la foto única (lo que hacían
+  # antes sin bandera) y sin tty siempre es foto (ya cubierto arriba, sin
+  # cambios: la llamada de más arriba corre dentro de un pipe). `script`
+  # (util-linux, ya en la imagen base) le da una tty real al subproceso para
+  # que `[ -t 1 ]` la vea como tal; `timeout` lo corta a 1.5 s -antes del
+  # primer refresco real a los 3/30 s- porque `seguir_estado`/`seguir_tablero`
+  # no salen solas, solo con la señal que manda `timeout`. La cabecera de
+  # seguimiento lleva "(cada Ns; Ctrl-C para salir)"; la de la foto no.
+  local dk256_tmp dk256_run dk256_out
+  dk256_tmp=$(mktemp -d)
+  dk256_run="$dk256_tmp/run"
+  mkdir -p "$dk256_run"
+  : >"$dk256_run/watch.log"
+
+  dk256_out="$dk256_tmp/estado-seguir.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado sin bandera entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/estado-seguir-sinonimo.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --seguir" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --seguir (sinónimo) también sigue" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/estado-foto.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --foto imprime una sola vez" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/tablero-seguir.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --tablero" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --tablero sin bandera entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+
+  dk256_out="$dk256_tmp/tablero-foto.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --tablero --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --tablero --foto imprime una sola vez" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  rm -rf "$dk256_tmp"
+
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
   # queda mostrando --estado hasta que termina; la última línea es el
   # resumen de watch.log de ese lanzamiento. DEVKIT_ESTADO_INTERVALO baja a
@@ -10967,9 +11021,17 @@ $card_md"
     ;;
   --estado)
     # --todo (DEVKIT-97) desactiva el recorte de la tabla al alto de la
-    # terminal, en cualquier posición junto a --seguir.
+    # terminal, en cualquier posición junto a --seguir/--foto.
     case " ${2:-} ${3:-} " in *" --todo "*) export DEVKIT_ESTADO_TODO=1 ;; esac
-    if [ "${2:-}" = --seguir ] || [ "${3:-}" = --seguir ]; then seguir_estado; fi
+    # DEVKIT-256: en una tty, `--estado` a secas (o con --seguir, que sigue
+    # aceptado como sinónimo sin aviso) entra en seguimiento por defecto;
+    # `--foto` fuerza la foto única de siempre. Sin tty (pipe, `$(...)`,
+    # redirección) `[ -t 1 ]` es falso y esta rama ni se evalúa: siempre foto,
+    # con o sin bandera -ninguna llamada dentro de un `$(...)` puede quedarse
+    # esperando un Ctrl-C que nunca llega.
+    if [ -t 1 ]; then
+      case " ${2:-} ${3:-} " in *" --foto "*) : ;; *) seguir_estado ;; esac
+    fi
     # COLUMNS/LINES de verdad, tomados con tty real (DEVKIT-97 H1): mismo
     # motivo que en seguir_estado, para que un `--estado` interactivo (sin
     # `--seguir`) también recorte al tamaño real en vez del respaldo ancho.
@@ -10994,7 +11056,11 @@ $card_md"
     exit 0
     ;;
   --tablero)
-    if [ "${2:-}" = --seguir ]; then seguir_tablero; fi
+    # DEVKIT-256: mismo cambio de default que --estado -ver su comentario-,
+    # con --seguir como sinónimo aceptado y --foto para la foto única.
+    if [ -t 1 ]; then
+      case " ${2:-} " in *" --foto "*) : ;; *) seguir_tablero ;; esac
+    fi
     tablero_color=''; [ -t 1 ] && tablero_color=1
     # Misma cabecera de punto+modo que la foto única de `--estado` (DEVKIT-136):
     # sin esto, `--tablero` sin `--seguir` no tenía cabecera propia y el modo
@@ -11091,8 +11157,8 @@ falta_valor() {  # falta_valor <valor>
 uso() {
   echo "uso: dk [--modelo <alias>] [--esfuerzo <low|medium|high|xhigh|max>] [--forzar] [--seguir] <skill> <Clave> [texto extra...]" >&2
   echo "       --seguir aquí lanza y se queda mostrando el avance de ESTE lanzamiento hasta que termine." >&2
-  echo "     dk --estado [--seguir] [--todo] | --tablero [--seguir] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
-  echo "       --seguir aquí no lanza nada: refresca el monitor (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C." >&2
+  echo "     dk --estado [--foto] [--todo] | --tablero [--foto] | --cola | --agentes-vivos | --costos [<Clave>] | --test" >&2
+  echo "       En una tty ambos siguen por defecto (--estado cada 3 s, --tablero cada 30 s) hasta Ctrl-C; --foto imprime una sola vez. --seguir aquí no lanza nada: es sinónimo del seguimiento por defecto." >&2
   echo "     dk --pausa | --alto | --reanudar" >&2
 }
 
