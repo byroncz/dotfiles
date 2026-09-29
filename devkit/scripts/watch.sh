@@ -328,7 +328,15 @@ def markers($re; $ts):
 | (.mergeable == "CONFLICTING") as $conflicting
 | (.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
    | sort_by(.at)) as $reviews
-| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)?(?<merge> merge=1)? -->"; "createdAt")) as $fixes
+# La respuesta H0 de una mezcla de main (DEVKIT-262, H1) lleva `merge=1`: no
+# atiende ningún hallazgo ni ningún comentario humano, así que no debe pesar
+# en $human_cutoff, $ciclos ni $resumed -contarla ahí adelantaría el corte
+# sobre un comentario humano todavía sin responder, sumaría un ciclo que
+# nadie resolvió, o reabriría un bloqueo que nadie levantó. Sigue sirviendo
+# para $fix_after/$pending_fix/$fix_responded (atados a `.sha == $head`, que
+# cambia con la mezcla) y para $manual_at (nunca lleva `manual=1`).
+| ([$fixes[] | select(.merge == null)]) as $real_fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
 | (.comments | markers("<!-- devkit-doc sha=(?<sha>[0-9a-f]+) -->"; "createdAt")) as $docs
 # Hallazgo descartado por necesitar aprobación humana (DEVKIT-142): task-fix lo
@@ -343,28 +351,33 @@ def markers($re; $ts):
 # head vigente distinto del sha que revisó pr-review, y aun así el hallazgo
 # sigue pendiente.
 | ((.comments // [])
-   | map(select(.author.login == $bot and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))))
+   | map(select(.author.login == $bot
+                and ((.body // "") | test("<!-- devkit-fix sha=" + $head + " "))
+                and ((.body // "") | test(" merge=1 -->") | not)))
    | sort_by(.createdAt) | last | .body // "") as $head_fix_body
 | ($head_fix_body
    | test("<!-- devkit-fixes -->[\\s\\S]*?\\n\\S+ \\| descartado \\| necesita aprobaci[oó]n humana[\\s\\S]*?<!-- /devkit-fixes -->"; "i")
   ) as $needs_approval
 | ($reviews | last) as $last
 | (($blocks | last | .at) // "") as $block_at
-| ($block_at != "" and ([$fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
+| ($block_at != "" and ([$real_fixes[] | select(.at > $block_at)] | length) > 0) as $resumed
 | ($block_at != "" and $last != null and $block_at > $last.at and ($resumed | not)) as $blocked
 | (([$reviews[] | select(.verdict == "OK") | .at] | max) // "") as $ok_at
 | (([$fixes[] | select(.manual != null) | .at] | max) // "") as $manual_at
 | ([$ok_at, $block_at, $manual_at] | max) as $reset_at
 | ([$reviews[] | select(.verdict == "CAMBIOS" and .at > $reset_at) | . as $r
-    | select(any($fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
-# Corte para "qué comentario humano ya está atendido": solo un devkit-fix o un
-# devkit-block lo atienden; un devkit-review no (DEVKIT-101). Sin ningún fix ni
-# block todavía, se usa el último devkit-review como corte, igual que antes:
-# así un comentario anterior al primer informe, ya cerrado con OK y
-# documentado, no reabre el ciclo (caso "comentario humano anterior al
-# marcador" de watch-test.sh).
-| (([$fixes[].at, $blocks[].at] | max)
-   // ($reviews | map(.at) | max)
+    | select(any($real_fixes[]; .review == $r.sha and .at > $r.at))] | length) as $ciclos
+# Corte para "qué comentario humano ya está atendido": solo un devkit-fix (que
+# no sea la mezcla H0, DEVKIT-262 H1) o un devkit-block lo atienden; un
+# devkit-review no (DEVKIT-101). Sin ninguno todavía, se usa el primer
+# devkit-review como corte -no el último-: así un comentario anterior al
+# primer informe, ya cerrado con OK y documentado, no reabre el ciclo (caso
+# "comentario humano anterior al marcador" de watch-test.sh), pero uno
+# posterior al primer informe sigue pendiente aunque una mezcla de main, sin
+# ningún fix real de por medio, traiga después otro informe sobre un head
+# nuevo.
+| (([$real_fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | min)
    // "") as $human_cutoff
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),

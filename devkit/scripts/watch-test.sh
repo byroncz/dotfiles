@@ -44,6 +44,12 @@ comment() { printf '{"author":{"login":"%s"},"createdAt":"%s","body":"%s"}' "$1"
 rev() { review humano COMMENTED "$1" "<!-- devkit-review sha=$2 verdict=$3 -->"; }
 fix() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 -->"; }
 fixm() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 manual=1 -->"; }
+# devkit-fix H0 de una mezcla de origin/main (DEVKIT-262, sección "Mezclar
+# origin/main" de task-fix/SKILL.md): lleva `merge=1` porque no atiende
+# ningún hallazgo real ni ningún comentario humano (H1 de la revisión del
+# PR 151), así que `decide` debe excluirlo de human_cutoff, ciclos y
+# head_fix_body.
+fix_merge() { comment "$BOT" "$1" "<!-- devkit-fix sha=$2 review=$3 merge=1 -->\n<!-- devkit-fixes -->\nH0 | atendido | $4\n<!-- /devkit-fixes -->"; }
 # devkit-fix con un hallazgo descartado por necesitar aprobación humana
 # (DEVKIT-142): el cuerpo completo, marcador y bloque de hallazgos, como lo
 # publica task-fix (SKILL.md, paso 8), no solo el marcador.
@@ -285,6 +291,34 @@ check_mergeable "UNKNOWN se trata como sin conflicto: sigue el flujo normal" fix
 check_mergeable "MERGEABLE no dispara mezclar" revisar a1 MERGEABLE --
 check_mergeable "bloqueado manda sobre CONFLICTING" bloqueado d4 CONFLICTING \
   "$(rev T05 c3 CAMBIOS)" -- "$(fix T06 d4 c3)" "$(block T07 d4)"
+
+# --- La respuesta H0 de la mezcla no pesa como un devkit-fix real
+# (DEVKIT-262, H1 de la revisión del PR 151) ---------------------------------
+# H0 cambia el head (el commit de merge), pero no atiende ningún hallazgo del
+# informe vigente ni ningún comentario humano: contarla en human_cutoff,
+# ciclos o head_fix_body adelantaría el corte de un comentario humano sin
+# responder, sumaría un ciclo que nadie resolvió, o taparía una espera de
+# aprobación pendiente. En los tres casos, tras la mezcla y sin una revisión
+# nueva sobre el head nuevo, el ciclo sigue con `revisar` (SKILL.md, sección
+# "Mezclar origin/main"): no hace falta ningún caso especial para eso.
+check_mergeable "DEVKIT-262 H1: tras mezclar con OK previo y sin revisión nueva, revisa" revisar b2 MERGEABLE \
+  "$(rev T01 a1 OK)" -- "$(fix_merge T02 b2 a1 m1)"
+check_mergeable "DEVKIT-262 H1: tras mezclar con CAMBIOS previo y sin revisión nueva, revisa" revisar b2 MERGEABLE \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_merge T02 b2 a1 m1)"
+check_mergeable "DEVKIT-262 H1: H0 no borra la espera de aprobación pendiente" revisar b2 MERGEABLE \
+  "$(rev T01 a1 CAMBIOS)" -- "$(fix_na T02 a1 a1 H3)" "$(fix_merge T03 b2 a1 m1)"
+# El comentario humano T02 es anterior a H0 (T03): sin excluir H0 de
+# human_cutoff, el corte avanza hasta T03 y el comentario se pierde apenas
+# llega la revisión siguiente (T04) sobre el head nuevo.
+check_mergeable "DEVKIT-262 H1: comentario humano previo a la mezcla sigue dando fix-humano" fix-humano b2 MERGEABLE \
+  "$(rev T01 a1 OK)" "$(rev T04 b2 OK)" -- \
+  "$(comment humano T02 'urgente: revisa esto')" "$(fix_merge T03 b2 a1 m1)"
+# Tres mezclas seguidas, cada una sobre un CAMBIOS real sin atender: sin
+# excluir H0 de ciclos, la guarda de tres ciclos (DEVKIT-56) bloquearía la
+# card aunque ningún hallazgo real se haya corregido nunca.
+check_mergeable "DEVKIT-262 H1: H0 no suma al conteo de la guarda de tres ciclos" fix d4 MERGEABLE \
+  "$(rev T01 a1 CAMBIOS)" "$(rev T03 b2 CAMBIOS)" "$(rev T05 c3 CAMBIOS)" "$(rev T07 d4 CAMBIOS)" -- \
+  "$(fix_merge T02 b2 a1 m1)" "$(fix_merge T04 c3 b2 m2)" "$(fix_merge T06 d4 c3 m3)"
 
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
