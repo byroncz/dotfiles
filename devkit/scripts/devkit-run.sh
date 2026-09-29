@@ -1360,8 +1360,8 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
       # refresco de `--seguir`. "Una sola vez" es por sesión de `--seguir`,
       # no por arranque del monitor (H2 de pr-review en el PR#142):
       # `DEVKIT_CONSUMO_AVISO`, que exportan `seguir_estado`/`seguir_lanzamiento`
-      # con un archivo propio de esa sesión (`mktemp`, borrado en su trap de
-      # salida), es la marca -no `$CUOTA_CACHE.headless-aviso`, que vive en
+      # con una ruta propia de esa sesión (una ruta sin crear dentro de un
+      # `mktemp -d`, borrado en su trap de salida), es la marca -no `$CUOTA_CACHE.headless-aviso`, que vive en
       # RUN_DIR y sobrevive a la sesión: `watch.sh` solo lo crea con
       # `mkdir -p`, nunca lo limpia, así que antes el aviso salía una sola vez
       # por vida del contenedor y un `--estado --seguir` posterior ya no lo
