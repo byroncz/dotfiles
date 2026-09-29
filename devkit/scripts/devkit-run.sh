@@ -2658,38 +2658,36 @@ ancho_de() {  # ancho_de <valor>...
   printf '%s' "$((max + 1))"
 }
 
-# SKILL: cualquier skill real que `devkit-run <skill> <arg>` pueda lanzar deja
-# línea "lanzando" en watch.log (autoprueba de /task-submit, línea ~6852);
-# task-close y task-block son bash, DEVKIT-55, y no aparecen aquí. Se leen los
-# directorios de skills instalados -$WS/.claude/skills, el símlink al
-# template (AGENTS.md)-, con $HERE/../agents/skills como alternativa en modo
-# dev (este mismo repo, antes de reinstalar la imagen); si ninguno de los dos
-# tiene skills, cae al listado fijo de siempre (DEVKIT-131 H1: una lista a
-# mano de cinco se quedó corta contra las 11 reales -template-propagate, la
-# más larga, desbordaba ANCHO_SKILL-). LANZÓ: quién pidió el lanzamiento
-# -"humano" es el respaldo de origen_de sin ancestro reconocido, "bucle" lo
-# pone run_skill de watch.sh, "task-close" lo exporta task-close.sh
-# (DEVKIT_ORIGEN) y también es el origen fijo que costos_filas asigna al
-# cierre bash del PR- o cualquiera de esas mismas skills como ancestro
-# (origen_de: un `claude -p /epic-plan` lanzando `task-start`, por ejemplo,
-# deja origen=epic-plan).
+# SKILL: las cinco skills que de verdad lanza el bucle en segundo plano
+# -dejan línea "lanzando" en watch.log (autoprueba de /task-submit, línea
+# ~6852)-; task-close y task-block son bash, DEVKIT-55, y no aparecen aquí.
+# Lista fija, no el directorio de skills instaladas (DEVKIT-251, revierte
+# DEVKIT-131 H1): ese directorio también trae project-init, project-status,
+# task-create, task-submit, template-propagate y template-update -skills
+# reales pero que un humano corre a mano desde `claude`, nunca por
+# `devkit-run`/el bucle-, y la más larga de esas (template-propagate, 18)
+# desbordaba ANCHO_SKILL contra un valor que la columna nunca necesitaba
+# mostrar. Un lanzamiento manual de cualquier otra skill sigue funcionando
+# igual; su nombre solo se recorta con "…" en `formatear_fila` en vez de
+# ensanchar la columna para todas las filas. LANZÓ: quién pidió el
+# lanzamiento -"humano" es el respaldo de origen_de sin ancestro reconocido,
+# "bucle" lo pone run_skill de watch.sh, "task-close" lo exporta
+# task-close.sh (DEVKIT_ORIGEN) y también es el origen fijo que costos_filas
+# asigna al cierre bash del PR- o "epic-plan" como ancestro (origen_de: un
+# `claude -p /epic-plan` lanzando `task-start` desde su propia herramienta
+# Bash deja origen=epic-plan; es la única skill de esta lista que lanza otra
+# skill así, DEVKIT-251).
 skills_lanzables() {
-  local base dir encontrados=()
-  for base in "$WS/.claude/skills" "$HERE/../agents/skills"; do
-    encontrados=()
-    for dir in "$base"/*/; do
-      [ -f "${dir}SKILL.md" ] || continue
-      encontrados+=("$(basename "$dir")")
-    done
-    if [ "${#encontrados[@]}" -gt 0 ]; then
-      printf '%s\n' "${encontrados[@]}" | sort
-      return 0
-    fi
-  done
   printf '%s\n' task-start pr-review task-fix task-document epic-plan
 }
 mapfile -t SKILLS_CON_LANZAMIENTO < <(skills_lanzables)
-ORIGENES_LANZAMIENTO=(humano bucle task-close "${SKILLS_CON_LANZAMIENTO[@]}")
+# Lista fija de los cuatro orígenes reales (DEVKIT-251, ver el comentario de
+# SKILL arriba): humano/bucle/task-close los escriben literal `--worker` y
+# `run_skill`/`DEVKIT_ORIGEN`, y "epic-plan" es el único caso de
+# `origen_de` con un ancestro -las otras cuatro skills de
+# SKILLS_CON_LANZAMIENTO nunca lanzan otra por Bash, así que no repetir esa
+# lista acá: antes le sumaba a LANZÓ el mismo exceso que a SKILL.
+ORIGENES_LANZAMIENTO=(humano bucle task-close epic-plan)
 
 # ESTADO: cada estado que arma estado_filas (comentario de esa función,
 # arriba: en curso, terminó, error, bloqueada, no arrancó, no lanzó, y "sin
@@ -2741,16 +2739,40 @@ ANCHO_ICONO=$(ancho_de "${GLIFOS_ESTADO[@]}")
 # `revision.rondas` -alias:esfuerzo por elemento, DEVKIT-61-, porque esos dos
 # también son alias reales de roles.toml y `frontera` no los repite (DEVKIT-131
 # H3: MODELO solo tomaba los de `frontera` y un alias más largo en `.rondas`
-# desbordaba la columna sin que nada lo notara). El resto en su forma más larga
-# real -"/medium r9": "medium" es el esfuerzo más largo que acepta `--esfuerzo`
-# (línea de uso, arriba) y una ronda de un dígito es la que se ve en la
-# práctica-.
+# desbordaba la columna sin que nada lo notara). El esfuerzo usa el más largo
+# que de verdad aparece en roles.toml -el de cada rol (`revision.effort`/
+# `implementacion.effort`), el de cada anulación por skill (`<skill>.effort`,
+# solo sobre las skills reales de SKILLS_CON_LANZAMIENTO) y el de cada
+# elemento de `rondas` (`<alias>:<esfuerzo>`)-, no "medium" fijo (DEVKIT-251:
+# "medium" es el esfuerzo más largo que acepta `--esfuerzo`, pero ningún rol
+# de roles.toml lo declara; le sumaba tres columnas de más a MODELO que la
+# tabla nunca mostraba). Sin ningún esfuerzo declarado (roles.toml vacío, caso
+# que hoy no ocurre) cae a "high" de respaldo. Una ronda de un dígito es la
+# que se ve en la práctica. Un `--esfuerzo` manual más largo que este cálculo
+# se recorta con "…" en `formatear_fila`, igual que SKILL.
+esfuerzos_de_roles() {
+  role_field revision effort
+  role_field implementacion effort
+  local _skill_esfuerzo
+  for _skill_esfuerzo in "${SKILLS_CON_LANZAMIENTO[@]}"; do
+    role_field "$_skill_esfuerzo" effort
+  done
+  { toml_lista implementacion.rondas; toml_lista revision.rondas; } | sed -E 's/^[^:]*://'
+}
+mapfile -t ESFUERZOS_ROLES < <(esfuerzos_de_roles | grep -v '^$')
+ESFUERZO_MAS_LARGO=""
+for _esfuerzo_rol in "${ESFUERZOS_ROLES[@]}"; do
+  [ "${#_esfuerzo_rol}" -gt "${#ESFUERZO_MAS_LARGO}" ] && ESFUERZO_MAS_LARGO=$_esfuerzo_rol
+done
+[ -n "$ESFUERZO_MAS_LARGO" ] || ESFUERZO_MAS_LARGO=high
+unset _esfuerzo_rol
+
 mapfile -t ALIAS_FRONTERA < <(frontera_list)
 [ "${#ALIAS_FRONTERA[@]}" -gt 0 ] || ALIAS_FRONTERA=(fable opus sonnet)
 mapfile -t ALIAS_RONDAS < <({ toml_lista implementacion.rondas; toml_lista revision.rondas; } | sed -E 's/:.*$//')
 MODELOS_CON_ESFUERZO=()
 for _alias_frontera in "${ALIAS_FRONTERA[@]}" "${ALIAS_RONDAS[@]}"; do
-  MODELOS_CON_ESFUERZO+=("$_alias_frontera/medium r9")
+  MODELOS_CON_ESFUERZO+=("$_alias_frontera/$ESFUERZO_MAS_LARGO r9")
 done
 unset _alias_frontera
 
@@ -3174,9 +3196,14 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
   off_estado=$((off_pr + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO))
   off_turnos=$((off_estado + ANCHO_ESTADO + ANCHO_MODELO))
   off_detalle=$((off_turnos + ANCHO_TURNOS))
-  fila="$(rellenar "$glifo" "$ANCHO_ICONO")$(rellenar "$skill" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr_texto" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
+  # SKILL y MODELO se recortan a su ancho antes de rellenar (DEVKIT-251): ambos
+  # anchos salen de valores reales (las cinco skills del bucle, el esfuerzo más
+  # largo de roles.toml) y ya no del máximo que la CLI podría producir, así que
+  # una skill lanzada a mano o un `--esfuerzo` manual más largo que ese máximo
+  # se recorta con "…" en vez de correr el resto de la fila.
+  fila="$(rellenar "$glifo" "$ANCHO_ICONO")$(rellenar "$(recortar "$skill" "$((ANCHO_SKILL - 1))")" "$ANCHO_SKILL")$(rellenar "$clave" "$ANCHO_CARD")$(rellenar "$pr_texto" "$ANCHO_PR")$(rellenar "$origen" "$ANCHO_LANZO")"
   fila+="$(rellenar "$edad" "$ANCHO_HACE")$(rellenar "$duracion" "$ANCHO_DURO")$(rellenar "$estado_texto" "$ANCHO_ESTADO")"
-  fila+="$(rellenar "$modelo" "$ANCHO_MODELO")$(rellenar "$turnos" "$ANCHO_TURNOS")$detalle"
+  fila+="$(rellenar "$(recortar "$modelo" "$((ANCHO_MODELO - 1))")" "$ANCHO_MODELO")$(rellenar "$turnos" "$ANCHO_TURNOS")$detalle"
   [ "${#fila}" -le "$ancho" ] || fila=$(recortar "$fila" "$ancho")
   if [ "$color_habilitado" = 1 ]; then
     [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
@@ -7485,11 +7512,12 @@ FIN
     "$(rellenar fable/max "$ANCHO_MODELO")" "${fila_estado_131:$off_modelo_131:$ANCHO_MODELO}"
   unset off_hace_131 fila_lanzo_131 off_modelo_131 fila_estado_131
 
-  # DEVKIT-131 H1: SKILL salía de una lista fija de cinco nombres, y
-  # template-propagate (18) ya no entraba en ANCHO_SKILL=14. El skill más
-  # largo se toma de SKILLS_CON_LANZAMIENTO, la misma lista que arma
-  # ANCHO_SKILL -si crece con un nombre más largo, este caso lo sigue sin
-  # tocarlo a mano.
+  # DEVKIT-131 H1/DEVKIT-251: el skill más largo se toma de
+  # SKILLS_CON_LANZAMIENTO, la misma lista fija de cinco que arma ANCHO_SKILL
+  # -si esa lista cambia, este caso la sigue sin tocarlo a mano-, no del
+  # directorio de skills instaladas (DEVKIT-251 revirtió esa lectura: traía
+  # skills que un humano corre a mano, como template-propagate, y nunca
+  # aparecen en esta columna).
   skill_mas_largo_131=""
   for _skill_131 in "${SKILLS_CON_LANZAMIENTO[@]}"; do
     [ "${#_skill_131}" -gt "${#skill_mas_largo_131}" ] && skill_mas_largo_131=$_skill_131
@@ -7500,6 +7528,37 @@ FIN
   check "SKILL=<skill más largo>: el ancho fijo total no cambia" "$ANCHO_COLUMNAS_FIJAS" \
     "$((${#fila_skill_131} - 1))"
   unset _skill_131 skill_mas_largo_131 fila_skill_131
+
+  # DEVKIT-251: SKILL y LANZÓ leyendo el directorio entero de skills, y MODELO
+  # con "medium" fijo, sumaban 118 columnas antes de DETALLE en una terminal
+  # de 120 -DETALLE quedaba en 2, sin espacio para el motivo de bloqueo, el
+  # resultado o el aviso de lentitud. Este caso no fija un número exacto
+  # -crecería con cualquier rol nuevo en roles.toml o alias más largo en
+  # `frontera`- pero sí un techo: 104 deja a DETALLE al menos el mismo margen
+  # que dejaba la suma propuesta en DEVKIT-251 (103) más un dígito de sobra.
+  check "ANCHO_COLUMNAS_FIJAS no vuelve a comerse DETALLE (DEVKIT-251): la suma no supera 104" si \
+    "$([ "$ANCHO_COLUMNAS_FIJAS" -le 104 ] && echo si || echo no)"
+
+  # DEVKIT-251: SKILL truncado con "…" cuando alguien lanza a mano una skill
+  # fuera de SKILLS_CON_LANZAMIENTO (project-status, aquí) en vez de correr el
+  # resto de la fila -antes, esa skill ensanchaba la columna para siempre.
+  fila_skill_251=$(COLUMNS=200 formatear_fila project-status DEVKIT-13 - humano 1m 1m terminó sonnet/high -/40 - 0 1 0)
+  check "SKILL fuera de la lista fija se recorta con … sin desbordar" si \
+    "$([ "${#fila_skill_251}" -eq "$((ANCHO_COLUMNAS_FIJAS + 1))" ] \
+        && [[ "${fila_skill_251:$ANCHO_ICONO:$ANCHO_SKILL}" == *"…"* ]] && echo si || echo no)"
+  unset fila_skill_251
+
+  # DEVKIT-251: MODELO truncado con "…" cuando el valor real (un --esfuerzo
+  # manual más largo que ESFUERZO_MAS_LARGO, por ejemplo) no entra en
+  # ANCHO_MODELO, en vez de correr TURNOS y DETALLE. Un valor claramente más
+  # largo que cualquier "<alias>/<esfuerzo> r<ronda>" real, no un caso límite
+  # atado al "high" de hoy: sigue probando lo mismo si roles.toml cambia.
+  off_modelo_251=$((ANCHO_ICONO + ANCHO_SKILL + ANCHO_CARD + ANCHO_PR + ANCHO_LANZO + ANCHO_HACE + ANCHO_DURO + ANCHO_ESTADO))
+  fila_modelo_251=$(COLUMNS=200 formatear_fila task-start DEVKIT-13 - humano 1m 1m terminó "sonnet/esfuerzo-manual-mas-largo-que-cualquier-real r9" -/40 - 0 1 0)
+  check "MODELO con un --esfuerzo manual más largo se recorta con … sin desbordar" si \
+    "$([ "${#fila_modelo_251}" -eq "$((ANCHO_COLUMNAS_FIJAS + 1))" ] \
+        && [[ "${fila_modelo_251:$off_modelo_251:$ANCHO_MODELO}" == *"…"* ]] && echo si || echo no)"
+  unset off_modelo_251 fila_modelo_251
 
   # DEVKIT-134: columna PR (el enlace completo entre CARD y LANZÓ) y SKILL en
   # negrita para task-start. `pr_de_lanzamiento` primero: el número de PR de
