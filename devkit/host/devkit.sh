@@ -487,16 +487,24 @@ puede_actualizar_host_devkit() {  # puede_actualizar_host_devkit <candidato>
 # dejó al día, dice ese remedio real en vez de mandar a reinstalar. Dentro del
 # propio `update` ese remedio no tiene sentido (ya está corriendo), así que
 # `update` llama con --sin-aviso-devkit para quedarse solo con el de
-# compose.yaml (H5, DEVKIT-258).
+# compose.yaml (H5, DEVKIT-258). El remedio de compose.yaml depende del modo:
+# --ref solo en dev; con etiqueta, reinstalar con --ref pasaría el proyecto a
+# modo dev (H8, DEVKIT-258). La versión va en una variable propia, no en
+# `current`, que `update` usa por su cuenta.
 warn_host_stale() {  # warn_host_stale [--sin-aviso-devkit]
+  version_env="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" 2>/dev/null | head -1)"
   if [ -f "$dir/template/compose.yaml" ] && ! cmp -s "$dir/template/compose.yaml" "$dir/compose.yaml"; then
-    echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con new-project.sh --ref <rama>" >&2
+    case "$version_env" in
+      dev) remedio="new-project.sh $proj --ref <rama>" ;;
+      "")  remedio="new-project.sh $proj --version <versión>" ;;
+      *)   remedio="new-project.sh $proj --version $version_env" ;;
+    esac
+    echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con $remedio" >&2
   fi
   [ "${1:-}" = --sin-aviso-devkit ] && return 0
-  current="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" 2>/dev/null | head -1)"
-  if [ -n "$current" ] && [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
+  if [ -n "$version_env" ] && [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
      && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit" \
-     && puede_actualizar_host_devkit "$current"; then
+     && puede_actualizar_host_devkit "$version_env"; then
     echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
   fi
 }
@@ -737,12 +745,8 @@ case "$cmd" in
       || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh $proj --version $target' antes de actualizar" >&2; exit 1; }
     # El aviso y la confirmación van después de los chequeos de arriba (H2,
     # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
-    # pedía aceptar una pérdida y después salía sin recrear nada. Solo el
-    # aviso de compose.yaml aplica aquí: el del comando devkit se omite
-    # (--sin-aviso-devkit) porque este mismo `update` lo deja al día más
-    # abajo, pase lo que pase después (H5, DEVKIT-258).
+    # pedía aceptar una pérdida y después salía sin recrear nada.
     mostrar_fuente_toml
-    warn_host_stale --sin-aviso-devkit
     if [ "$FUENTE_DIFIERE" = 1 ]; then
       confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
         || { echo "devkit: cancelado" >&2; exit 1; }
@@ -755,6 +759,13 @@ case "$cmd" in
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
+    # Recién aquí, con el template y DEVKIT_VERSION de la etiqueta destino:
+    # antes de bajarla, compose.yaml se comparaba contra el template viejo y
+    # un cambio de la etiqueta nueva no se avisaba (H8, DEVKIT-258). Solo el
+    # aviso de compose.yaml aplica aquí: el del comando devkit se omite
+    # (--sin-aviso-devkit) porque este mismo `update` lo deja al día justo
+    # abajo, pase lo que pase después (H5, DEVKIT-258).
+    warn_host_stale --sin-aviso-devkit
     # Registrado antes de compose up (H1, DEVKIT-258): si compose falla, con
     # set -eu el script sale ahí mismo, y el trap EXIT ya armado por
     # refresh_host_devkit sigue corriendo el refresco de bin/devkit y la

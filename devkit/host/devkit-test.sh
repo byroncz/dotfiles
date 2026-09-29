@@ -107,6 +107,10 @@ case "$url" in
     # para simular una release que sí lo cambió.
     cp "$DEVKIT_TEST_HOST_SCRIPT" "$work/repo/devkit/host/devkit.sh"
     [ -n "${DEVKIT_TEST_TARBALL_HOST_MARCA:-}" ] && printf '%s\n' "$DEVKIT_TEST_TARBALL_HOST_MARCA" >> "$work/repo/devkit/host/devkit.sh"
+    # H8, DEVKIT-258: compose.yaml de la etiqueta destino, solo si el caso lo
+    # declara (DEVKIT_TEST_TARBALL_COMPOSE), para comparar contra el template
+    # recién bajado y no contra el viejo.
+    [ -n "${DEVKIT_TEST_TARBALL_COMPOSE:-}" ] && printf '%s\n' "$DEVKIT_TEST_TARBALL_COMPOSE" > "$work/repo/devkit/compose.yaml"
     tar -C "$work" -czf - repo
     rm -rf "$work" ;;
   *) [ -n "$out" ] && : > "$out" ;;
@@ -626,6 +630,26 @@ check_salida "update con compose.yaml al día no se detiene por EXTENSIONS" "act
 # --- Avisos de los archivos del Mac -----------------------------------------
 escenario dev; echo 'name: otro' > "$TMP/root/p/compose.yaml"; corre recreate
 check_salida "compose.yaml del Mac desincronizado" "compose.yaml difiere del template"
+check_salida "compose.yaml desincronizado en dev: el remedio es --ref" "reinstala con new-project\.sh p --ref <rama>"
+
+# H8, DEVKIT-258: desde esta card el aviso también corre con etiqueta; ahí
+# reinstalar con --ref pasaría el proyecto a modo dev.
+escenario 0.1.0; echo 'name: otro' > "$TMP/root/p/compose.yaml"; corre up
+check_salida "compose.yaml desincronizado con etiqueta: el remedio es --version" "reinstala con new-project\.sh p --version 0\.1\.0"
+check        "compose.yaml desincronizado con etiqueta: no manda a --ref" no \
+             "$(grep -q 'new-project.sh p --ref' "$OUT" && echo si || echo no)"
+
+# H8, DEVKIT-258: en update, compose.yaml se compara contra el template de la
+# etiqueta destino, no contra el que había antes de bajarla.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+cp "$TMP/root/p/compose.yaml" "$TMP/root/p/template/compose.yaml"
+export DEVKIT_TEST_TARBALL_COMPOSE="name: devkit-p-0.2.0"
+corre update
+unset DEVKIT_TEST_TARBALL_COMPOSE
+check_salida "update: avisa de un compose.yaml que cambió en la etiqueta destino" \
+             "compose.yaml difiere del template; reinstala con new-project\.sh p --version 0\.2\.0"
 
 escenario dev; echo '# línea de más' >> "$TMP/root/bin/devkit"; corre recreate
 check_salida "comando devkit desincronizado" "el comando devkit difiere del template"
