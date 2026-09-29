@@ -36,10 +36,12 @@ OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
 estado del editor VS Code del lado del servidor (estado de las extensiones,
 perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
-sí: esas vienen en la imagen. La vista de Extensiones no tiene tienda en vivo,
-porque el editor solo alcanza Open VSX al construir la imagen, no en el
-proxy en vivo del contenedor: buscar ahí solo muestra el aviso nativo de que
-no hay galería configurada, sin botón "Instalar". Para sumar una, declárala
+sí: esas vienen en la imagen. La vista de Extensiones no tiene tienda en
+vivo: el build baja las extensiones con la red del host, pero el proxy en
+vivo del contenedor solo deja pasar lo que está en `allowlist.base` más
+`domains` de `.devkit/devkit.toml`, así que buscar ahí solo muestra el aviso
+nativo de que no hay galería configurada, sin botón "Instalar". Para sumar
+una, declárala
 en `extensions`
 de `.devkit/devkit.toml` (se suma a las del template, por ejemplo `extensions
 = ["GitHub.vscode-github-actions", "ms-python.python@2026.2.0"]`) y corre

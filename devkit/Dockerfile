@@ -182,12 +182,12 @@ RUN set -eux; \
 
 # --- Editor sin tienda de extensiones (DEVKIT-260) --------------------------
 # product.json trae de fábrica extensionsGallery apuntando a Open VSX
-# (https://open-vsx.org/vscode/gallery), pero ese dominio solo está permitido
-# para el build de la imagen (`domains` de .devkit/devkit.toml), no para el
-# proxy en vivo del contenedor: buscar una extensión desde la vista de
-# Extensiones y pulsar "Instalar" no descarga nada ni avisa del error. Se
-# quita la clave para que VS Code muestre en su lugar el aviso nativo de que
-# no hay galería configurada.
+# (https://open-vsx.org/vscode/gallery); el build sí lo alcanza porque baja
+# con la red del host, pero el proxy en vivo del contenedor solo deja pasar
+# lo que está en `allowlist.base` más `domains` de .devkit/devkit.toml: buscar
+# una extensión desde la vista de Extensiones y pulsar "Instalar" no descarga
+# nada ni avisa del error. Se quita la clave para que VS Code muestre en su
+# lugar el aviso nativo de que no hay galería configurada.
 # Va después de instalar EXTENSIONS (arriba), no antes: con la galería ya
 # apagada, `--install-extension` no resuelve extensionDependencies ni
 # extensionPack (getAllDepsAndPackExtensions devuelve [] si la galería está
