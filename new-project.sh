@@ -109,11 +109,34 @@ src="$(find "$tmp" -maxdepth 2 -type d -name devkit | head -1)"
 [ -d "$src" ] || { echo "el tarball no contiene devkit/" >&2; exit 1; }
 rm -rf "$dir/template"; cp -R "$src" "$dir/template"
 cp "$dir/template/compose.yaml" "$dir/compose.yaml"
-cp "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; chmod +x "$ROOT/bin/devkit"
-# devkit.sh compara contra esto antes de refrescar bin/devkit, para que un
-# proyecto en una versión vieja no baje de versión el comando de uno más
-# nuevo en el mismo Mac (H6, DEVKIT-258).
-echo "$( [ -n "$ref" ] && echo dev || echo "$version" )" > "$ROOT/bin/devkit.version"
+# bin/devkit es un solo comando para todos los proyectos del Mac: se aplica
+# la misma regla que puede_actualizar_host_devkit en devkit.sh (H6 y H7,
+# DEVKIT-258), para que instalar un proyecto con una versión vieja no baje el
+# comando que dejó uno más nuevo. Se reemplaza si falta el comando o su
+# versión instalada ($ROOT/bin/devkit.version), con --ref main ("dev" sigue
+# el main de este repo, siempre el más nuevo), o con --version mayor o igual
+# a la instalada según sort -V (igual reinstala la misma etiqueta, sin
+# cambio). Una rama de card (--ref distinto de main) es código sin mergear:
+# no reemplaza un comando con versión conocida, y si lo instala por faltar
+# uno, no escribe devkit.version, así el primer `devkit update` con etiqueta
+# lo reemplaza.
+instalada="$(cat "$ROOT/bin/devkit.version" 2>/dev/null || true)"
+if [ ! -f "$ROOT/bin/devkit" ] || [ -z "$instalada" ] || [ "$ref" = main ] \
+   || { [ -z "$ref" ] && [ "$instalada" != dev ] \
+        && [ "$(printf '%s\n%s\n' "$version" "$instalada" | sort -V | tail -1)" = "$version" ]; }; then
+  cp "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; chmod +x "$ROOT/bin/devkit"
+  if [ "$ref" = main ]; then
+    echo dev > "$ROOT/bin/devkit.version"
+  elif [ -z "$ref" ]; then
+    echo "$version" > "$ROOT/bin/devkit.version"
+  else
+    rm -f "$ROOT/bin/devkit.version"
+  fi
+elif [ "$instalada" = dev ]; then
+  echo "devkit: el comando $ROOT/bin/devkit se queda en dev: lo mantiene un proyecto en modo dev, solo lo reemplaza --ref main"
+else
+  echo "devkit: el comando $ROOT/bin/devkit se queda en $instalada: solo lo reemplaza una versión mayor o --ref main"
+fi
 if [ ! -f "$dir/devkit.env" ]; then
   sed "s/^DEVKIT_PROJECT=.*/DEVKIT_PROJECT=$proj/" "$dir/template/devkit.env.example" > "$dir/devkit.env"
   # Con --ref el template es el propio workspace (modo dev) y el repo se
