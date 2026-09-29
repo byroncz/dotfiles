@@ -9238,28 +9238,33 @@ FIN
   check "caché 'headless', --estado suelto sin DEVKIT_CONSUMO_AVISO: siempre explica" 1 \
     "$(printf '%s\n' "$salida_headless_sin_seguir" | grep -c 'sin cuota oficial en headless')"
 
-  # H7 de pr-review en el PR#142 (DEVKIT-255): la marca de sesión hay que
-  # armarla igual que `seguir_estado`/`seguir_lanzamiento` -un directorio con
-  # `mktemp -d` y la marca adentro, sin crearla todavía-, no con `mktemp` a
-  # secas (eso ya deja el archivo creado y el aviso no sale nunca). Reproduce
-  # el bug real: antes de la corrección, esta prueba fallaba en ambos casos.
-  local aviso_sesion_real_dir
-  aviso_sesion_real_dir=$(mktemp -d)
-  local salida_headless_sesion_real_1
-  salida_headless_sesion_real_1=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
-    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
-    DEVKIT_CONSUMO_AVISO="$aviso_sesion_real_dir/aviso" \
-    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
-  check "caché 'headless', marca de sesión como mktemp -d: explica en el primer mostrar_estado" 1 \
-    "$(printf '%s\n' "$salida_headless_sesion_real_1" | grep -c 'sin cuota oficial en headless')"
-  local salida_headless_sesion_real_2
-  salida_headless_sesion_real_2=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
-    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
-    DEVKIT_CONSUMO_AVISO="$aviso_sesion_real_dir/aviso" \
-    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
-  check "caché 'headless', marca de sesión como mktemp -d: no repite en el segundo mostrar_estado" 0 \
-    "$(printf '%s\n' "$salida_headless_sesion_real_2" | grep -c 'sin cuota oficial en headless')"
-  rm -rf "$aviso_sesion_real_dir"
+  # H7/H9 de pr-review en el PR#142 (DEVKIT-255): la marca de sesión la arma
+  # la función real, no la prueba. `seguir_lanzamiento` con un PID ya muerto y
+  # MARGEN_LANZAMIENTO_MUERTO=1 dibuja dos frames (mismo patrón que H3 de
+  # DEVKIT-82, más abajo) y sale; sin DEVKIT_CONSUMO_AVISO heredado, la marca
+  # es la que exporta ella misma. La explicación tiene que salir exactamente
+  # una vez: con `mktemp` a secas (marca ya creada) saldría cero veces, y sin
+  # marca de sesión, una vez por frame. Sin DEVKIT_AHORA, que congelaría el
+  # reloj y el margen de PID muerto no se cumpliría nunca.
+  local seguir_headless seguir_headless_pid seguir_headless_salida
+  seguir_headless="$tmp/seguir-headless"
+  mkdir -p "$seguir_headless"
+  printf '%s\theadless\n' "$(date +%s)" >"$seguir_headless/cuota.cache"
+  : >"$seguir_headless/watch.log"
+  (: ) & seguir_headless_pid=$!
+  wait "$seguir_headless_pid" 2>/dev/null
+  seguir_headless_salida=$(unset DEVKIT_CONSUMO_AVISO DEVKIT_AHORA
+    CLAUDE_BIN="$doble" PS_BIN="$pslist_vacio" CUOTA_TTL=9999 \
+    CUOTA_CACHE="$seguir_headless/cuota.cache" CUOTA_LOCK="$seguir_headless/cuota.lock" \
+    BLOQUEOS_CACHE="$seguir_headless/bloqueos.cache" BLOQUEOS_LOCK="$seguir_headless/bloqueos.lock" \
+    EPICAS_CACHE="$seguir_headless/epicas.cache" EPICAS_LOCK="$seguir_headless/epicas.lock" \
+    COSTOS_LOG="$costos_headless/costos.log" WATCH_LOG="$seguir_headless/watch.log" \
+    ESTADO_INTERVALO=1 MARGEN_LANZAMIENTO_MUERTO=1 \
+    seguir_lanzamiento seguir-headless "$seguir_headless_pid" 2>&1)
+  check "caché 'headless', seguir_lanzamiento real: dibuja más de un frame" 1 \
+    "$([ "$(printf '%s\n' "$seguir_headless_salida" | grep -c '^dk --seguir seguir-headless ')" -gt 1 ] && echo 1 || echo 0)"
+  check "caché 'headless', seguir_lanzamiento real: explica una sola vez en la sesión" 1 \
+    "$(printf '%s\n' "$seguir_headless_salida" | grep -c 'sin cuota oficial en headless')"
 
   # `headless` no reintenta nunca (Nota de la card): CLAUDE_BIN roto no
   # importa, `mostrar_estado` ni siquiera debería llamar a `refrescar_cuota_bg`
