@@ -1182,8 +1182,8 @@ costos_log() {  # costos_log <línea completa, con fecha>
 # a traerlas en headless, esta extracción sigue funcionando sin cambios.
 # Aislada igual que `modelo_disponible` (directorio vacío, sin MCP): --estado
 # no necesita heredar el contexto de /workspace para esta lectura.
-leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"; rc=1 sin respuesta, rc=2 con respuesta pero sin líneas de porcentaje (headless)
-  local vacio salida texto linea_sesion linea_semana sesion_pct sesion_reset semana_pct semana_reset
+leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"; rc=1 sin respuesta o con un error de la CLI, rc=2 con el resumen de costo verificado de local_command (headless, sin porcentaje)
+  local vacio salida es_error texto linea_sesion linea_semana sesion_pct sesion_reset semana_pct semana_reset
   vacio=$(mktemp -d)
   # --no-session-persistence (H2 de pr-review en DEVKIT-62): sin ella, cada
   # lectura deja una sesión de Claude Code en ~/.claude/projects/, que con
@@ -1193,11 +1193,24 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
       --no-session-persistence \
       --strict-mcp-config --mcp-config '{"mcpServers":{}}' </dev/null 2>/dev/null)
   rm -rf "$vacio"
+  es_error=$(printf '%s' "$salida" | jq -r 'if .is_error == true then "1" else "0" end' 2>/dev/null)
   texto=$(printf '%s' "$salida" | jq -r '.result // empty' 2>/dev/null)
   [ -n "$texto" ] || return 1
   linea_sesion=$(printf '%s\n' "$texto" | grep -E '^Current session: [0-9]+% used')
   linea_semana=$(printf '%s\n' "$texto" | grep -E '^Current week \(all models\): [0-9]+% used')
-  [ -n "$linea_sesion" ] && [ -n "$linea_semana" ] || return 2
+  if [ -z "$linea_sesion" ] || [ -z "$linea_semana" ]; then
+    # H3 de pr-review en el PR#142 (DEVKIT-255): solo el resumen de costo
+    # verificado de `local_command: usage` cuenta como "headless sin
+    # porcentaje" (rc=2). Cualquier otro `.result` sin esas líneas -un error
+    # de la CLI ("Not logged in", "API Error: 429", "Credit balance is too
+    # low", etc.- sigue siendo un fallo pasajero (rc=1) que vale la pena
+    # reintentar tras CUOTA_TTL_FALLO, no un estado `headless` permanente que
+    # `refrescar_cuota_bg` deja de reintentar para siempre.
+    if [ "$es_error" != 1 ] && printf '%s\n' "$texto" | grep -q '^Total cost:'; then
+      return 2
+    fi
+    return 1
+  fi
   sesion_pct=$(printf '%s' "$linea_sesion" | grep -oE '[0-9]+' | head -1)
   sesion_reset=$(printf '%s' "$linea_sesion" | sed -E 's/^Current session: [0-9]+% used · resets //')
   semana_pct=$(printf '%s' "$linea_semana" | grep -oE '[0-9]+' | head -1)
@@ -9014,6 +9027,22 @@ FIN
   # ejemplo un binario roto- distinto de rc=2 (respuesta sin porcentaje).
   check "leer_cuota sin ninguna respuesta falla con rc=1, no rc=2" 1 \
     "$(CLAUDE_BIN=/bin/false leer_cuota >/dev/null 2>&1; echo $?)"
+
+  # H3 de pr-review en el PR#142 (DEVKIT-255): un error de la CLI que llega
+  # como `.result` -acá un 429, con `is_error:true`- no es el resumen de
+  # costo verificado de `local_command: usage`, así que sigue siendo rc=1
+  # (fallo pasajero, con reintento), no rc=2 (`headless`, sin reintento).
+  local doble_cuota_error
+  doble_cuota_error="$tmp/claude-usage-error"
+  cat >"$doble_cuota_error" <<'FIN'
+#!/usr/bin/env bash
+cat <<'JSON'
+{"is_error":true,"result":"API Error: 429 {\"error\":{\"type\":\"rate_limit_error\"}}"}
+JSON
+FIN
+  chmod +x "$doble_cuota_error"
+  check "leer_cuota con un error de la CLI (429) falla con rc=1, no rc=2" 1 \
+    "$(CLAUDE_BIN="$doble_cuota_error" leer_cuota >/dev/null 2>&1; echo $?)"
 
   # H2 de pr-review: leer_cuota no debe dejar una sesión propia de Claude
   # Code en ~/.claude/projects/ (con --seguir serían miles por hora).
