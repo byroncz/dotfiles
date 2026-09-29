@@ -3787,24 +3787,28 @@ seguir_estado() {
   local i=0 frame ahora color_tty='' desde utf filas bucle punto
   desde=${DEVKIT_AHORA:-$(date +%s)}
   utf8_disponible && utf=1 || utf=0
-  # Marca del aviso "headless" de `mostrar_consumo` (H2 de pr-review en el
+  # Marca del aviso "headless" de `mostrar_consumo` (H2/H7 de pr-review en el
   # PR#142, DEVKIT-255): propia de esta sesión de `--seguir`, no de
   # RUN_DIR/CUOTA_CACHE -que sobreviven a la sesión y por eso antes el aviso
-  # solo salía una vez por vida del contenedor. Se borra siempre al salir,
-  # con o sin tty.
-  local aviso_consumo
-  aviso_consumo=$(mktemp)
+  # solo salía una vez por vida del contenedor. `mktemp` a secas deja el
+  # archivo ya creado, y `mostrar_consumo` solo avisa si la marca *no existe*:
+  # el aviso no salía nunca. Se crea el directorio y la marca vive adentro,
+  # sin existir todavía -`mostrar_consumo` es quien la crea la primera vez.
+  # Se borra siempre al salir, con o sin tty.
+  local aviso_consumo_dir aviso_consumo
+  aviso_consumo_dir=$(mktemp -d)
+  aviso_consumo="$aviso_consumo_dir/aviso"
   export DEVKIT_CONSUMO_AVISO=$aviso_consumo
   # El trap EXIT sigue vivo después de que esta función retorne -y con ella,
   # su ámbito de variables `local`-, así que la ruta va dentro de comillas
   # dobles: se sustituye al registrar el trap, no al dispararse. Con comillas
-  # simples, `set -u` revienta con "aviso_consumo: unbound variable" apenas
-  # el script termina de verdad, porque la variable local ya no existe.
-  trap "rm -f '$aviso_consumo'" EXIT
+  # simples, `set -u` revienta con "aviso_consumo_dir: unbound variable"
+  # apenas el script termina de verdad, porque la variable local ya no existe.
+  trap "rm -rf '$aviso_consumo_dir'" EXIT
   if [ -t 1 ]; then
     tput civis 2>/dev/null
-    trap "tput cnorm 2>/dev/null; rm -f '$aviso_consumo'" EXIT
-    trap "tput cnorm 2>/dev/null; rm -f '$aviso_consumo'; exit 130" INT TERM
+    trap "tput cnorm 2>/dev/null; rm -rf '$aviso_consumo_dir'" EXIT
+    trap "tput cnorm 2>/dev/null; rm -rf '$aviso_consumo_dir'; exit 130" INT TERM
     color_tty=1
   fi
   while true; do
@@ -3862,20 +3866,21 @@ seguir_lanzamiento() {  # seguir_lanzamiento <id> <pid del worker>
   local id=$1 pid=$2 i=0 frame ahora color_tty='' resumen_final muerto_desde=0 desde utf filas bucle punto
   desde=${DEVKIT_AHORA:-$(date +%s)}
   utf8_disponible && utf=1 || utf=0
-  # Marca del aviso "headless" (H2 de pr-review en el PR#142, DEVKIT-255):
+  # Marca del aviso "headless" (H2/H7 de pr-review en el PR#142, DEVKIT-255):
   # mismo criterio que seguir_estado, ver su comentario.
-  local aviso_consumo
-  aviso_consumo=$(mktemp)
+  local aviso_consumo_dir aviso_consumo
+  aviso_consumo_dir=$(mktemp -d)
+  aviso_consumo="$aviso_consumo_dir/aviso"
   export DEVKIT_CONSUMO_AVISO=$aviso_consumo
   # Comillas dobles, no simples (mismo motivo que en seguir_estado): el trap
   # EXIT dispara después de que esta función retorne, con sus `local` ya
   # fuera de ámbito, y `set -u` revienta con "unbound variable" si la ruta se
   # busca recién ahí en vez de quedar fija al registrar el trap.
-  trap "rm -f '$aviso_consumo'" EXIT
+  trap "rm -rf '$aviso_consumo_dir'" EXIT
   if [ -t 1 ]; then tput civis 2>/dev/null; color_tty=1; fi
   trap '
     [ -t 1 ] && tput cnorm 2>/dev/null
-    rm -f "$aviso_consumo"
+    rm -rf "$aviso_consumo_dir"
     printf "dk: Ctrl-C cierra el monitor; el lanzamiento \"%s\" sigue en curso (síguelo con dk --estado)\n" "$id"
     exit 130
   ' INT TERM
@@ -9232,6 +9237,29 @@ FIN
     DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
   check "caché 'headless', --estado suelto sin DEVKIT_CONSUMO_AVISO: siempre explica" 1 \
     "$(printf '%s\n' "$salida_headless_sin_seguir" | grep -c 'sin cuota oficial en headless')"
+
+  # H7 de pr-review en el PR#142 (DEVKIT-255): la marca de sesión hay que
+  # armarla igual que `seguir_estado`/`seguir_lanzamiento` -un directorio con
+  # `mktemp -d` y la marca adentro, sin crearla todavía-, no con `mktemp` a
+  # secas (eso ya deja el archivo creado y el aviso no sale nunca). Reproduce
+  # el bug real: antes de la corrección, esta prueba fallaba en ambos casos.
+  local aviso_sesion_real_dir
+  aviso_sesion_real_dir=$(mktemp -d)
+  local salida_headless_sesion_real_1
+  salida_headless_sesion_real_1=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
+    DEVKIT_CONSUMO_AVISO="$aviso_sesion_real_dir/aviso" \
+    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
+  check "caché 'headless', marca de sesión como mktemp -d: explica en el primer mostrar_estado" 1 \
+    "$(printf '%s\n' "$salida_headless_sesion_real_1" | grep -c 'sin cuota oficial en headless')"
+  local salida_headless_sesion_real_2
+  salida_headless_sesion_real_2=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
+    DEVKIT_CONSUMO_AVISO="$aviso_sesion_real_dir/aviso" \
+    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
+  check "caché 'headless', marca de sesión como mktemp -d: no repite en el segundo mostrar_estado" 0 \
+    "$(printf '%s\n' "$salida_headless_sesion_real_2" | grep -c 'sin cuota oficial en headless')"
+  rm -rf "$aviso_sesion_real_dir"
 
   # `headless` no reintenta nunca (Nota de la card): CLAUDE_BIN roto no
   # importa, `mostrar_estado` ni siquiera debería llamar a `refrescar_cuota_bg`
