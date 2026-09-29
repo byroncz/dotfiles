@@ -1007,6 +1007,11 @@ check_salida "la ayuda lista awake" "devkit awake <proyecto>"
 if ! command -v socat >/dev/null 2>&1 || ! command -v sha256sum >/dev/null 2>&1 \
     || ! command -v timeout >/dev/null 2>&1 || ! command -v mkfifo >/dev/null 2>&1; then
   echo "skip shim: falta socat, sha256sum, timeout o mkfifo"
+# El shim corre por su shebang #!/bin/bash y usa ${x,,} (bash 4+). En macOS
+# /bin/bash es 3.2: sin este guard, los casos fallarían con "bad
+# substitution" en vez de saltarse (DEVKIT-259, H10). Alpine trae bash 5.
+elif ! /bin/bash -c 'x=A; : "${x,,}"' 2>/dev/null; then
+  echo "skip shim: /bin/bash < 4"
 else
   base=$((21000 + ($$ % 400) * 10))
   shim_port=$base
