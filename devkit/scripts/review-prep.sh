@@ -116,10 +116,27 @@ if [ -z "$head_sha" ]; then
   err "FETCH_HEAD vacío tras el fetch del PR $numero"
   exit 1
 fi
+# `origin/main` fresco (DEVKIT-262, H3): si la rama mezcló main en medio del
+# ciclo (task-fix, sección "Mezclar origin/main"), el diff de tres puntos de
+# abajo necesita el main real, no el de un fetch anterior a esa mezcla.
+if ! git -C "$WS" fetch -q origin main 2>/dev/null; then
+  err "no pude hacer git fetch de origin/main"
+  exit 1
+fi
 archivos=$(git -C "$WS" diff --name-only "origin/main...$head_sha" 2>/dev/null)
 diff_completo=$(git -C "$WS" diff "origin/main...$head_sha" 2>/dev/null)
+mezcla_desde_marcador=""
 if [ -n "$ciclo_previo" ]; then
-  diff_mostrado=$(git -C "$WS" diff "$marcador_sha" "$head_sha" 2>/dev/null)
+  if [ -n "$(git -C "$WS" rev-list --merges "$marcador_sha..$head_sha" 2>/dev/null)" ]; then
+    # La rama mezcló main después del marcador: el diff incremental
+    # marcador..head arrastraría todo lo que trajo esa mezcla y pr-review
+    # vería hallazgos falsos sobre código ajeno al PR. Se usa el diff
+    # completo contra origin/main y se avisa en el Material.
+    diff_mostrado="$diff_completo"
+    mezcla_desde_marcador=1
+  else
+    diff_mostrado=$(git -C "$WS" diff "$marcador_sha" "$head_sha" 2>/dev/null)
+  fi
 else
   diff_mostrado="$diff_completo"
 fi
@@ -316,7 +333,9 @@ card_md=$("$NOTION" contenido "$card_id" 2>/dev/null | awk '
   echo "## Cuerpo del PR"
   echo "$cuerpo_pr"
   echo
-  if [ -n "$ciclo_previo" ]; then
+  if [ -n "$mezcla_desde_marcador" ]; then
+    echo "## Diff (completo: la rama mezcló main después del marcador $marcador_sha)"
+  elif [ -n "$ciclo_previo" ]; then
     echo "## Diff (desde el marcador $marcador_sha)"
   else
     echo "## Diff (completo)"
