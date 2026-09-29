@@ -123,7 +123,11 @@ cat >"$TMP/bin/docker" <<'FIN'
 #!/bin/sh
 echo "docker $*" >> "$DEVKIT_TEST_LOG"
 case "${1:-}" in
-  compose) exit 0 ;;
+  compose)
+    # DEVKIT-258 (H1): simula un `compose up` que falla a mitad de `update`,
+    # para comprobar que el refresco de bin/devkit no se salta con `set -eu`.
+    [ "${DEVKIT_TEST_COMPOSE_FAIL:-0}" = 1 ] && exit 1
+    exit 0 ;;
   inspect)
     # DEVKIT-159: wait_ready pide dos formatos distintos: Running (true/false,
     # como ya usaba `devkit awake`) y, solo cuando el contenedor no corre,
@@ -147,6 +151,9 @@ case "${1:-}" in
     [ "${DEVKIT_TEST_DOWN:-0}" = 1 ] && exit 1
     case "$2" in
       *:/workspace/devkit/.) cp -R "$DEVKIT_TEST_WS/devkit/." "$3" || exit 1 ;;
+      # DEVKIT-258 (H2): `update` en modo dev copia solo host/devkit.sh del
+      # workspace vivo, sin rearmar todo el contexto de build.
+      *:/workspace/devkit/host/devkit.sh) cp "$DEVKIT_TEST_WS/devkit/host/devkit.sh" "$3" || exit 1 ;;
       *) exit 1 ;;
     esac
     exit 0 ;;
@@ -567,6 +574,30 @@ check_salida "update en dev manda a recreate" "usa 'devkit recreate p'"
 check        "update en dev no toca el contexto" MARCA-VIEJA "$(marca)"
 check_docker "update en dev no construye" no 'compose'
 
+# DEVKIT-258 (H2): antes de esta card, `update` en modo dev solo mandaba a
+# `recreate` y nunca tocaba bin/devkit: el aviso "'devkit update p' lo
+# refresca" no tenía remedio real en este modo. Ahora sí, leído directo del
+# workspace vivo del contenedor -no de $dir/template, que en dev solo se
+# rearma en up/recreate/rebuild- sin tocar el contexto de build.
+escenario dev; echo '# workspace nuevo' >> "$TMP/ws/devkit/host/devkit.sh"; corre update
+check_salida "update en dev refresca bin/devkit" "devkit: comando devkit actualizado a dev"
+check        "update en dev deja bin/devkit igual al workspace vivo" si \
+             "$(cmp -s "$TMP/ws/devkit/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "update en dev con refresco sigue sin tocar el contexto de build" MARCA-VIEJA "$(marca)"
+check_docker "update en dev con refresco no construye" no 'compose'
+
+# DEVKIT-258 (H1): con etiqueta y ya en la versión destino, `update` salía
+# con "ya en $target" sin tocar bin/devkit nunca: un proyecto que no corriera
+# un update a una versión distinta se quedaba para siempre con el binario
+# con el que se instaló. Ahora, aunque no haya nada que bajar, igual
+# refresca bin/devkit contra el template ya instalado.
+escenario 0.1.0; echo '# línea de más' >> "$TMP/root/bin/devkit"; corre update
+check_salida "update ya en la versión destino: refresca bin/devkit" "devkit: comando devkit actualizado a 0\.1\.0"
+check        "update ya en la versión destino: deja bin/devkit igual al template instalado" si \
+             "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
+check_salida "update ya en la versión destino: sigue diciendo que ya estaba en esa versión" "ya en 0\.1\.0"
+check_docker "update ya en la versión destino no construye" no 'compose'
+
 # --- update con compose.yaml sin EXTENSIONS (H2, DEVKIT-67) -----------------
 # compose.yaml del Mac de antes de DEVKIT-67 no declara EXTENSIONS: el
 # build seguiría sin avisar y sin extensiones. `update` debe detenerse antes
@@ -630,15 +661,17 @@ check        "bin/devkit viejo: queda ejecutable" si \
 check        "bin/devkit viejo: update termina bien" 0 "$ESTADO"
 
 # Si bin/devkit ya viene desincronizado de antes (una release anterior a esta
-# card, que nunca lo refrescó), el aviso previo a actualizar debe dar el
-# remedio real y el propio update debe igual dejarlo al día al terminar.
+# card, que nunca lo refrescó), update ya no repite a mitad de su propia
+# ejecución el aviso "'devkit update p' lo refresca" (H5, DEVKIT-258: ese
+# aviso, corriendo ya dentro de update, solo confundía) y de todas formas
+# deja bin/devkit al día al terminar.
 escenario 0.1.0
 echo '# quedó de una release vieja, antes de DEVKIT-258' >> "$TMP/root/bin/devkit"
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 corre update
-check_salida "bin/devkit ya venía viejo: el aviso antes de actualizar da el remedio real" \
-             "el comando devkit difiere del template; 'devkit update p' lo refresca"
+check        "bin/devkit ya venía viejo: update no repite el aviso confuso a mitad de camino" no \
+             "$(grep -q "el comando devkit difiere del template; 'devkit update p' lo refresca" "$OUT" && echo si || echo no)"
 check        "bin/devkit ya venía viejo: igual queda al día tras actualizar" si \
              "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
 check_salida "bin/devkit ya venía viejo: confirma el refresco" "devkit: comando devkit actualizado a 0\.2\.0"
@@ -651,6 +684,22 @@ corre update
 check        "bin/devkit ya al día: update no dice que lo actualizó" no \
              "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
 check        "bin/devkit ya al día: update termina bien" 0 "$ESTADO"
+
+# DEVKIT-258 (H1): si `compose up` falla a mitad de update, con `set -eu` el
+# script corta ahí mismo. El refresco de bin/devkit no debe saltarse: el
+# trap EXIT que arma refresh_host_devkit ya quedó registrado antes de
+# invocar compose.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
+export DEVKIT_TEST_COMPOSE_FAIL=1
+corre update
+unset DEVKIT_TEST_TARBALL_HOST_MARCA DEVKIT_TEST_COMPOSE_FAIL
+check        "compose falla: update igual refresca bin/devkit" si \
+             "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
+check_salida "compose falla: igual avisa a qué versión quedó" "devkit: comando devkit actualizado a 0\.2\.0"
+check        "compose falla: update termina con error" 1 "$ESTADO"
 
 # --- Resolución de extensiones del editor ------------------------------------
 # resolve_extensions: "latest" se resuelve contra Open VSX y queda en .env y

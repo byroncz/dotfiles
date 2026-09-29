@@ -459,15 +459,40 @@ EOF_DECLARADOS
 # del humano, etc.), así que se avisa y se deja la decisión al humano. El
 # comando devkit en cambio sí lo refresca `devkit update` (ver el caso
 # `update`, más abajo): el aviso, cuando corre fuera de un update que ya lo
-# dejó al día, dice ese remedio real en vez de mandar a reinstalar.
-warn_host_stale() {
+# dejó al día, dice ese remedio real en vez de mandar a reinstalar. Dentro del
+# propio `update` ese remedio no tiene sentido (ya está corriendo), así que
+# `update` llama con --sin-aviso-devkit para quedarse solo con el de
+# compose.yaml (H5, DEVKIT-258).
+warn_host_stale() {  # warn_host_stale [--sin-aviso-devkit]
   if [ -f "$dir/template/compose.yaml" ] && ! cmp -s "$dir/template/compose.yaml" "$dir/compose.yaml"; then
     echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con new-project.sh --ref <rama>" >&2
   fi
+  [ "${1:-}" = --sin-aviso-devkit ] && return 0
   if [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
      && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
     echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
   fi
+}
+# Objetivo del refresco de bin/devkit pendiente en el trap EXIT que arma
+# refresh_host_devkit, y tmp a limpiar junto con él; vacíos si no hay ninguno
+# pendiente. Globales para que el trap (single-quoted, se expande recién al
+# dispararse) los lea con su valor de ese momento, igual que FUENTE_DIFIERE.
+REFRESCO_DEVKIT=""
+REFRESCO_TMP=""
+# bin/devkit es este mismo script en ejecución: sobrescribirlo directo se
+# arriesga a interrumpirse a sí mismo a mitad de la lectura. cp a un archivo
+# aparte y mv encima es seguro: el rename cambia la entrada del directorio a
+# un inodo nuevo y el shell en ejecución sigue leyendo el viejo por el
+# descriptor que ya tiene abierto; sobrescribir en sitio (cp directo) sí lo
+# corrompería. El mv se difiere a un trap EXIT para que corra pase lo que
+# pase después -incluido un `compose up` que falla (H1, DEVKIT-258)-, así que
+# quien llama debe registrarlo antes de cualquier paso que pueda fallar.
+refresh_host_devkit() {  # refresh_host_devkit <target> <archivo-host-devkit.sh>
+  [ -f "$2" ] || return 0
+  cmp -s "$2" "$ROOT/bin/devkit" && return 0
+  cp "$2" "$ROOT/bin/devkit.new"; chmod +x "$ROOT/bin/devkit.new"
+  REFRESCO_DEVKIT="$1"
+  trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "devkit: comando devkit actualizado a $REFRESCO_DEVKIT"; [ -n "$REFRESCO_TMP" ] && rm -rf "$REFRESCO_TMP"' EXIT
 }
 compose() { docker compose --project-directory "$dir" "$@"; }
 wait_ready() {
@@ -648,10 +673,25 @@ case "$cmd" in
     if [ "$target" = "$current" ]; then
       # En modo dev no hay etiqueta que descargar: el template es el workspace y
       # quien lo lleva a la imagen es `recreate`. Decirlo evita creer que este
-      # comando ya aplicó lo mergeado (DEVKIT-30).
+      # comando ya aplicó lo mergeado (DEVKIT-30). El comando devkit sí lo
+      # refresca aquí, directo desde el workspace vivo del contenedor: es la
+      # única fuente al día en este modo, $dir/template solo se rearma en
+      # up/recreate/rebuild (H2, DEVKIT-258).
       if [ "$target" = dev ]; then
+        hosttmp="$(mktemp -d)"
+        if docker cp "devkit-$proj:/workspace/devkit/host/devkit.sh" "$hosttmp/devkit.sh" 2>/dev/null; then
+          refresh_host_devkit dev "$hosttmp/devkit.sh"
+        else
+          echo "devkit: aviso: no se pudo copiar host/devkit.sh del workspace; el comando devkit no se refrescó" >&2
+        fi
+        rm -rf "$hosttmp"
         echo "en modo dev el template es el workspace; usa 'devkit recreate $proj' para llevar devkit/ a la imagen"
       else
+        # Ya en la versión destino: el único refresco pendiente es bin/devkit
+        # contra el template ya instalado, que update nunca tocaba (H1,
+        # DEVKIT-258): sin esto, un proyecto ya al día con un bin/devkit
+        # viejo de antes de esta card nunca lo actualizaba.
+        refresh_host_devkit "$target" "$dir/template/host/devkit.sh"
         echo "ya en $target"
       fi
       exit 0
@@ -666,34 +706,30 @@ case "$cmd" in
       || { echo "devkit: $dir/compose.yaml no declara EXTENSIONS; reinstala con 'new-project.sh $proj --version $target' antes de actualizar" >&2; exit 1; }
     # El aviso y la confirmación van después de los chequeos de arriba (H2,
     # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
-    # pedía aceptar una pérdida y después salía sin recrear nada. warn_host_stale
-    # avisa con el template actual (antes de bajar el destino): si el comando
-    # devkit ya venía desincronizado de una release anterior, se ve aquí; este
-    # mismo `update` lo deja al día más abajo.
+    # pedía aceptar una pérdida y después salía sin recrear nada. Solo el
+    # aviso de compose.yaml aplica aquí: el del comando devkit se omite
+    # (--sin-aviso-devkit) porque este mismo `update` lo deja al día más
+    # abajo, pase lo que pase después (H5, DEVKIT-258).
     mostrar_fuente_toml
-    warn_host_stale
+    warn_host_stale --sin-aviso-devkit
     if [ "$FUENTE_DIFIERE" = 1 ]; then
       confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
         || { echo "devkit: cancelado" >&2; exit 1; }
     fi
     echo "devkit: actualizando template $current -> $target"
-    tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+    tmp="$(mktemp -d)"; REFRESCO_TMP="$tmp"; trap '[ -n "$REFRESCO_TMP" ] && rm -rf "$REFRESCO_TMP"' EXIT
     curl -fsSL "https://github.com/$REPO/archive/refs/tags/v$target.tar.gz" | tar -xz -C "$tmp"
     src="$(find "$tmp" -maxdepth 2 -type d -name devkit | head -1)"
     [ -d "$src" ] || { echo "el tarball no contiene devkit/" >&2; exit 1; }
     rm -rf "$dir/template"; cp -R "$src" "$dir/template"
     grep -v '^DEVKIT_VERSION=' "$dir/.env" > "$dir/.env.tmp"
     { cat "$dir/.env.tmp"; printf 'DEVKIT_VERSION=%s\n' "$target"; } > "$dir/.env"; rm -f "$dir/.env.tmp"
+    # Registrado antes de compose up (H1, DEVKIT-258): si compose falla, con
+    # set -eu el script sale ahí mismo, y el trap EXIT ya armado por
+    # refresh_host_devkit sigue corriendo el refresco de bin/devkit y la
+    # limpieza de $tmp igual.
+    refresh_host_devkit "$target" "$dir/template/host/devkit.sh"
     sync_toml_env && resolve_extensions && sync_tz_env && compose up -d --build --force-recreate
-    # bin/devkit es este mismo script en ejecución: sobrescribirlo directo se
-    # arriesga a interrumpirse a sí mismo a mitad de la lectura. `cp` a un
-    # archivo aparte y renombrarlo encima al salir es seguro (rename es
-    # atómico y el intérprete ya leyó el script en memoria); por eso se
-    # difiere a un trap EXIT en vez de hacerlo en línea.
-    if [ -f "$dir/template/host/devkit.sh" ] && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
-      cp "$dir/template/host/devkit.sh" "$ROOT/bin/devkit.new"; chmod +x "$ROOT/bin/devkit.new"
-      trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "devkit: comando devkit actualizado a $target"; rm -rf "$tmp"' EXIT
-    fi
     ;;
   logs)     compose logs -f --tail 100 ;;
   net-open) DEVKIT_NET_OPEN=1 compose up -d --force-recreate proxy && echo "red abierta hasta el próximo 'devkit up'" ;;
