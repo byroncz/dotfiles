@@ -9607,10 +9607,15 @@ FIN
   # arriba, la llamada de más arriba corre dentro de un pipe; `--tablero` y
   # `--estado --seguir` sin tty se cubren más abajo. `script`
   # (util-linux, ya en la imagen base) le da una tty real al subproceso para
-  # que `[ -t 1 ]` la vea como tal; `timeout` lo corta a 1.5 s -antes del
-  # primer refresco real a los 3/30 s- porque `seguir_estado`/`seguir_tablero`
-  # no salen solas, solo con la señal que manda `timeout`. La cabecera de
-  # seguimiento lleva "(cada Ns; Ctrl-C para salir)"; la de la foto no.
+  # que `[ -t 1 ]` la vea como tal; `timeout` lo corta a 5 s -generoso frente a
+  # lo que tarda armar el primer cuadro (H4, pr-review PR#150: en una máquina
+  # lenta, 1.5 s podía cortar antes de que `mostrar_estado`/`mostrar_tablero`
+  # terminaran, sin que hubiera un error real)-, y los casos que entran en
+  # seguimiento suben DEVKIT_ESTADO_INTERVALO/DEVKIT_TABLERO_INTERVALO bien
+  # por encima de esos 5 s para que no salga un segundo cuadro dentro de la
+  # ventana. `seguir_estado`/`seguir_tablero` no salen solas, solo con la
+  # señal que manda `timeout`. La cabecera de seguimiento lleva
+  # "(cada Ns; Ctrl-C para salir)"; la de la foto no.
   local dk256_tmp dk256_run dk256_out
   dk256_tmp=$(mktemp -d)
   dk256_run="$dk256_tmp/run"
@@ -9624,20 +9629,20 @@ FIN
   printf '%s\theadless\n' "$(date +%s)" >"$dk256_run/cuota.cache"
 
   dk256_out="$dk256_tmp/estado-seguir.out"
-  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado" "$dk256_out" </dev/null >/dev/null 2>&1
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --estado sin bandera entra en seguimiento" 1 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
 
   dk256_out="$dk256_tmp/estado-seguir-sinonimo.out"
-  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --seguir" "$dk256_out" </dev/null >/dev/null 2>&1
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --seguir" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --estado --seguir (sinónimo) también sigue" 1 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
 
   dk256_out="$dk256_tmp/estado-foto.out"
   DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --foto" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --estado --foto imprime una sola vez" 0 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
   # H2 (pr-review PR#150): que falte "Ctrl-C para salir" no basta -si el
@@ -9647,20 +9652,20 @@ FIN
     "$(grep -qE '^dk --estado  .*[●*]' "$dk256_out" && echo si || echo no)"
 
   dk256_out="$dk256_tmp/estado-todo-tty.out"
-  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --todo" "$dk256_out" </dev/null >/dev/null 2>&1
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_ESTADO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --estado --todo" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --estado --todo también entra en seguimiento" 1 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
 
   dk256_out="$dk256_tmp/tablero-seguir.out"
-  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --tablero" "$dk256_out" </dev/null >/dev/null 2>&1
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" DEVKIT_TABLERO_INTERVALO=60 \
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --tablero" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --tablero sin bandera entra en seguimiento" 1 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
 
   dk256_out="$dk256_tmp/tablero-foto.out"
   DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
-    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --tablero --foto" "$dk256_out" </dev/null >/dev/null 2>&1
+    timeout 5 script -qc "bash '$HERE/devkit-run.sh' --tablero --foto" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --tablero --foto imprime una sola vez" 0 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
   check "DEVKIT-256: tty simulada, --tablero --foto trae la cabecera" si \
