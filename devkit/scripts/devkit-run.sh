@@ -5462,6 +5462,64 @@ FIN
   check "review-publish.sh de verdad: publica un informe distinto aunque el marcador se repita (H7)" 1 \
     "$(grep -c '^pr review$' "$rpub_dir/llamadas" 2>/dev/null)"
 
+  # --- review-publish.sh de verdad: normaliza filas de tabla con barra en
+  # devkit-findings (DEVKIT-261) -----------------------------------------------
+  # pr-review a veces escribe un hallazgo como fila de tabla completa
+  # (`| H8 | media | ... |`) en vez de la fila sin barra que pide la
+  # plantilla. fix-publish.sh y task-document.sh extraen el id asumiendo que
+  # la línea empieza con `H<n>`, así que una fila con barra inicial se
+  # perdía y, con el informe en CAMBIOS, la guarda de DEVKIT-102 abortaba una
+  # respuesta que sí atendía el hallazgo (PR 145, DEVKIT-258). Un bloque
+  # mixto -H1 sin barra, H2 con barra inicial y final, H3 solo con barra
+  # inicial- prueba que los tres quedan normalizados en el cuerpo publicado.
+  local rpub_norm_dir
+  rpub_norm_dir=$(mktemp -d "$tmp/rpub-norm.XXXXXX")
+  cat >"$rpub_norm_dir/informe.md" <<'FIN'
+<!-- devkit-review sha=abc261 verdict=CAMBIOS -->
+Informe de prueba con un bloque mixto de hallazgos.
+
+<!-- devkit-findings -->
+H1 | alta | a.sh:1 | falla algo | arreglarlo
+| H2 | media | b.sh:2 | falla otra cosa | arreglarla |
+| H3 | baja | c.sh:3 | un detalle | ajustarlo
+<!-- /devkit-findings -->
+FIN
+  cat >"$rpub_norm_dir/gh-doble" <<'FIN'
+#!/usr/bin/env bash
+echo "$1 $2" >>"$(dirname "$0")/llamadas"
+case "$1 $2" in
+  "pr view") printf '' ;;
+  "pr review")
+    shift 2
+    while [ $# -gt 0 ]; do
+      if [ "$1" = --body-file ]; then
+        cat "$2" >"$(dirname "$0")/cuerpo-publicado"
+        shift
+      fi
+      shift
+    done
+    ;;
+  *) exit 0 ;;
+esac
+FIN
+  chmod +x "$rpub_norm_dir/gh-doble"
+  DEVKIT_WS="$rpub_norm_dir" DEVKIT_GH_BIN="$rpub_norm_dir/gh-doble" \
+    bash "$HERE/review-publish.sh" 9308 "$rpub_norm_dir/informe.md" >"$rpub_norm_dir/salida.out" 2>"$rpub_norm_dir/salida.err"
+  check "review-publish.sh de verdad: normaliza H1 sin barra (queda igual)" 1 \
+    "$(grep -c '^H1 | alta | a\.sh:1 | falla algo | arreglarlo$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: normaliza H2 con barra inicial y final" 1 \
+    "$(grep -c '^H2 | media | b\.sh:2 | falla otra cosa | arreglarla$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: normaliza H3 con barra inicial" 1 \
+    "$(grep -c '^H3 | baja | c\.sh:3 | un detalle | ajustarlo$' "$rpub_norm_dir/cuerpo-publicado" 2>/dev/null)"
+  check "review-publish.sh de verdad: ninguna fila de devkit-findings conserva la barra inicial" 0 \
+    "$(sed -n '/<!-- devkit-findings -->/,/<!-- \/devkit-findings -->/p' "$rpub_norm_dir/cuerpo-publicado" | grep -c '^|')"
+  # Mismo patrón `grep -oE '^H[0-9]+'` que fix-publish.sh:159 usa para leer los
+  # ids válidos de un informe CAMBIOS: los tres deben reconocerse.
+  check "review-publish.sh de verdad: bloque mixto, se reconocen los tres ids (H1 sin barra, H2 y H3 con barra)" \
+    "H1 H2 H3" \
+    "$(sed -n '/<!-- devkit-findings -->/,/<!-- \/devkit-findings -->/p' "$rpub_norm_dir/cuerpo-publicado" \
+       | grep -oE '^H[0-9]+' | tr '\n' ' ' | sed -E 's/ +$//')"
+
   # --- review-publish.sh de verdad: `-` lee el informe por stdin, sin que la
   # skill tenga que escribirlo antes (DEVKIT-125, revisión del PR 92, H2) ----
   # El perfil restringido de pr-review no trae `Write`; el heredoc que la
