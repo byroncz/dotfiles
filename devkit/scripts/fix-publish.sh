@@ -115,6 +115,17 @@ while IFS= read -r id; do
   [[ "$id" =~ ^H[0-9]+$ ]] && solo_c=0
 done <<<"$ids_respuesta"
 
+# `H0` (DEVKIT-262): el id fijo y reservado que task-fix publica tras mezclar
+# origin/main (sección "Mezclar origin/main" de SKILL.md), no un hallazgo de
+# ningún informe. El conflicto contra main es ortogonal al ciclo de revisión
+# -puede llegar a mitad de un CAMBIOS real, antes de que se atiendan sus
+# hallazgos, o con el head del merge ya distinto del que revisó el último
+# informe-, así que una respuesta que trae exactamente `H0` y nada más no
+# tiene nada que comparar contra `ids_validos` ni contra el sha del último
+# informe.
+solo_h0=0
+[ "$ids_respuesta" = "H0" ] && solo_h0=1
+
 # --- Comentario humano genuino posterior al corte, mismo criterio que
 # `$human` en `decide` de watch.sh (DEVKIT-102, H5): una respuesta que solo
 # trae `C<n>` y responde a ese comentario no tiene `devkit-findings` que
@@ -147,7 +158,7 @@ comentario_humano=$(jq -nr --argjson a "$pr_json" --argjson b "$comentarios_json
   "\$a + \$b | $HUMANO")
 
 saltar_validacion=0
-if [ "$solo_c" = 1 ] && { [ "$manual" = 1 ] || [ "$comentario_humano" = si ]; }; then
+if { [ "$solo_c" = 1 ] && { [ "$manual" = 1 ] || [ "$comentario_humano" = si ]; }; } || [ "$solo_h0" = 1 ]; then
   saltar_validacion=1
 fi
 

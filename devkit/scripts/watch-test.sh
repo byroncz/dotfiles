@@ -249,6 +249,43 @@ check "DEVKIT-246: aprobación humana sin la frase exacta, con marcador: no revi
 check "DEVKIT-246: bloqueo por dominio tras push previo (sin devkit-fix): no revisa" bloqueado e5 \
   "$(rev T01 a1 CAMBIOS)" -- "$(block T02 e5)"
 
+# --- Conflicto con main (DEVKIT-262) -----------------------------------------
+# `mergeable=CONFLICTING` manda por sobre cualquier otra acción, salvo un
+# bloqueo ya vigente: no importa en qué punto del ciclo esté el PR (sin
+# informe, CAMBIOS pendiente, OK sin documentar), un conflicto contra main
+# hay que resolverlo primero. `UNKNOWN` -GitHub todavía calculando tras un
+# push reciente- se trata igual que si no hubiera conflicto.
+# check_mergeable <nombre> <acción esperada> <head> <mergeable> <reviews...> -- <comments...>
+check_mergeable() {
+  local name=$1 want=$2 head=$3 mergeable=$4; shift 4
+  local reviews=() comments=() got
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do reviews+=("$1"); shift; done
+  [ $# -eq 0 ] || shift
+  comments=("$@")
+  got=$(printf '{"headRefOid":"%s","reviews":[%s],"comments":[%s],"mergeable":"%s"}' \
+          "$head" "$(join "${reviews[@]}")" "$(join "${comments[@]}")" "$mergeable" \
+        | bash "$WATCH" --decide | cut -f1)
+  if [ "$got" = "$want" ]; then
+    printf 'ok   %-58s %s\n' "$name" "$got"
+  else
+    printf 'FAIL %-58s esperado %s, obtenido %s\n' "$name" "$want" "${got:-<vacío>}"
+    fail=1
+  fi
+}
+
+check_mergeable "CONFLICTING sin ningún informe: mezcla antes de revisar" mezclar a1 CONFLICTING --
+check_mergeable "CONFLICTING con CAMBIOS pendiente: mezcla antes de corregir" mezclar a1 CONFLICTING \
+  "$(rev T01 a1 CAMBIOS)" --
+check_mergeable "CONFLICTING con OK sin documentar: mezcla antes de documentar" mezclar a1 CONFLICTING \
+  "$(rev T01 a1 OK)" --
+check_mergeable "CONFLICTING con comentario humano pendiente: mezcla antes que fix-humano" mezclar a1 CONFLICTING \
+  "$(rev T01 a1 OK)" -- "$(comment humano T02 'urgente')"
+check_mergeable "UNKNOWN se trata como sin conflicto: sigue el flujo normal" fix a1 UNKNOWN \
+  "$(rev T01 a1 CAMBIOS)" --
+check_mergeable "MERGEABLE no dispara mezclar" revisar a1 MERGEABLE --
+check_mergeable "bloqueado manda sobre CONFLICTING" bloqueado d4 CONFLICTING \
+  "$(rev T05 c3 CAMBIOS)" -- "$(fix T06 d4 c3)" "$(block T07 d4)"
+
 # --- Rama de cierre: PRs ya mergeados (DEVKIT-24) ---------------------------
 # Otra decisión y otra entrada: `--decide-merged` solo mira los comentarios,
 # porque un PR mergeado ya no tiene head que revisar.
@@ -1701,6 +1738,39 @@ corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" a1b2c3d
 corre_caso_fix_humano_dos_veces "$DIR_FIX_HUMANO_NUEVO" e5f6a7b
 check_igual "DEVKIT-101 H1 (fix-humano): comentario nuevo (otro \$ref) relanza" 2 \
   "$(cat "$DIR_FIX_HUMANO_NUEVO/llamadas" 2>/dev/null || echo 0)"
+
+# --- Caso `mezclar` (DEVKIT-262) ---------------------------------------------
+# `caso_mezclar` pasa por la misma guarda que `fix`/`revisar`/`fix-humano`:
+# clave `mezclar:<num>:<head>`, sin `$ref` ni informe -depende solo del head
+# en conflicto-. Reutiliza los dobles de `$FIX` (devkit-run.sh real, `claude`
+# de doble): `caso_mezclar` no consulta `gh`, así que ni siquiera hace falta
+# su doble para esta prueba.
+corre_caso_mezclar_dos_veces() {  # corre_caso_mezclar_dos_veces <dir> <head 1> <head 2>
+  local dir=$1 head1=$2 head2=$3
+  OUT="$dir/watch.log"
+  FIX_DIR="$dir" FIX_R1="listo" FIX_R2="listo" FIX_HEAD="$head1" PATH="$FIX/bin:$PATH" \
+  DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-mezclar 45 DEVKIT-9 "$head1" >"$OUT" 2>&1
+  FIX_DIR="$dir" FIX_R1="listo" FIX_R2="listo" FIX_HEAD="$head2" PATH="$FIX/bin:$PATH" \
+  DEVKIT_CLAUDE_BIN="$FIX/claude" DEVKIT_RUN_DIR="$dir/run" DEVKIT_WS="$dir" \
+  DEVKIT_FRONTERA_CACHE_DIR="$FRONTERA_CACHE" DEVKIT_TASK_BLOCK_BIN="$FIX/task-block" \
+  DEVKIT_NOTION_BIN="$FIX/notion.sh" \
+    bash "$WATCH" --caso-mezclar 45 DEVKIT-9 "$head2" >>"$OUT" 2>&1
+}
+
+DIR_MEZCLAR_MISMO=$(mktemp -d -p "$TMP")
+corre_caso_mezclar_dos_veces "$DIR_MEZCLAR_MISMO" a1b2c3d a1b2c3d
+check_igual "DEVKIT-262 (mezclar): mismo head, no relanza task-fix dos veces" 1 \
+  "$(cat "$DIR_MEZCLAR_MISMO/llamadas" 2>/dev/null || echo 0)"
+check_log "DEVKIT-262 (mezclar): avisa una vez que ya está lanzada para ese head" \
+  'PR #45 \(DEVKIT-9\) mezclar ya lanzada para este informe; esperando'
+
+DIR_MEZCLAR_NUEVO=$(mktemp -d -p "$TMP")
+corre_caso_mezclar_dos_veces "$DIR_MEZCLAR_NUEVO" a1b2c3d e5f6a7b
+check_igual "DEVKIT-262 (mezclar): head nuevo (tras el merge) relanza task-fix" 2 \
+  "$(cat "$DIR_MEZCLAR_NUEVO/llamadas" 2>/dev/null || echo 0)"
 
 # --- Presupuesto de turnos, meta que avisa sin bloquear, vía task-fix
 # (DEVKIT-94, DEVKIT-105) ---------------------------------------------------

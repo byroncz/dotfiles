@@ -423,6 +423,14 @@ MERGE_LOCK="${DEVKIT_MERGE_LOCK:-$RUN_DIR/merge.lock}"
 DRAFT_TTL="${DEVKIT_DRAFT_TTL:-30}"
 DRAFT_CACHE="${DEVKIT_DRAFT_CACHE:-$RUN_DIR/draft.cache}"
 DRAFT_LOCK="${DEVKIT_DRAFT_LOCK:-$RUN_DIR/draft.lock}"
+# PR en conflicto con main (DEVKIT-262): mismo patrón de caché TTL que Draft,
+# sobre `gh pr list --json mergeable` -watch.sh usa el mismo campo para la
+# acción `mezclar`, Notion no lo sabe-. Mientras dura, `--estado`/`--tablero`
+# lo muestran en ámbar: un PR aprobado que el auto-merge no puede cerrar
+# necesita destacarse, no perderse entre las filas ya terminadas.
+CONFLICT_TTL="${DEVKIT_CONFLICT_TTL:-30}"
+CONFLICT_CACHE="${DEVKIT_CONFLICT_CACHE:-$RUN_DIR/conflict.cache}"
+CONFLICT_LOCK="${DEVKIT_CONFLICT_LOCK:-$RUN_DIR/conflict.lock}"
 # Antes de lanzar, `run_claude` comprueba con `claude mcp list` que Notion está
 # conectado (DEVKIT-65): todas las skills la necesitan (AGENTS.md), y sin ella
 # piden autorizar el conector y no avanzan. En 0 en la autoprueba, que corre
@@ -1620,6 +1628,54 @@ pr_es_draft() {  # pr_es_draft <número de PR>
   jq -e --argjson n "$1" 'index($n) != null' <<<"$drafts" >/dev/null 2>&1
 }
 
+# Trae los números de todos los PR abiertos con `mergeable=CONFLICTING` y
+# escribe CONFLICT_CACHE (DEVKIT-262); mismo patrón que
+# `_draft_fetch_y_guardar`.
+_conflict_fetch_y_guardar() {
+  local conflictivos
+  conflictivos=$("$GH_BIN" pr list --state open --limit 30 --json number,mergeable \
+    --jq '[.[] | select(.mergeable == "CONFLICTING") | .number]' 2>/dev/null) || return 1
+  printf '%s\t%s\n' "$(date +%s)" "$conflictivos" >"$CONFLICT_CACHE.tmp" && mv -f "$CONFLICT_CACHE.tmp" "$CONFLICT_CACHE"
+}
+
+# Refresca CONFLICT_CACHE en segundo plano, mismo patrón que
+# `refrescar_draft_bg`.
+refrescar_conflict_bg() {
+  (
+    mkdir -p "$(dirname "$CONFLICT_CACHE")" 2>/dev/null
+    exec 8>"$CONFLICT_LOCK"
+    flock -n 8 || exit 0
+    _conflict_fetch_y_guardar
+  ) </dev/null >/dev/null 2>&1 &
+}
+
+# Igual que `asegurar_draft_cache`, para CONFLICT_CACHE: la usa
+# `mostrar_tablero` en primer plano, para que la primera vuelta ya distinga
+# un PR en conflicto sin esperar el refresco de fondo.
+asegurar_conflict_cache() {
+  if [ -s "$CONFLICT_CACHE" ]; then
+    local ts edad
+    IFS=$'\t' read -r ts _ <"$CONFLICT_CACHE"
+    edad=$(( $(date +%s) - ts ))
+    [ "$edad" -lt "$CONFLICT_TTL" ] && return 0
+  fi
+  mkdir -p "$(dirname "$CONFLICT_CACHE")" 2>/dev/null
+  { flock 8; _conflict_fetch_y_guardar; } 8>"$CONFLICT_LOCK"
+}
+
+# ¿El PR <num> está en conflicto con main? (DEVKIT-262) Falso si no hay caché
+# todavía o `gh` no respondió -nunca bloquea la fila por eso, mismo criterio
+# que `pr_es_draft`-. `--estado` la llama por fila sin esperar en línea;
+# `mostrar_tablero` ya aseguró la caché antes de la primera llamada.
+pr_tiene_conflicto() {  # pr_tiene_conflicto <número de PR>
+  local ts conflictivos edad
+  [ -s "$CONFLICT_CACHE" ] || { refrescar_conflict_bg; return 1; }
+  IFS=$'\t' read -r ts conflictivos <"$CONFLICT_CACHE"
+  edad=$(( $(date +%s) - ts ))
+  [ "$edad" -lt "$CONFLICT_TTL" ] || refrescar_conflict_bg
+  jq -e --argjson n "$1" 'index($n) != null' <<<"$conflictivos" >/dev/null 2>&1
+}
+
 # Copia de `matar_arbol`/`detener_arbol` de watch.sh (DEVKIT-137/DEVKIT-185):
 # los dos scripts no se importan entre sí, mismo patrón que SKILL_TIMEOUT de
 # arriba. `--worker` nace con `setsid` en su propia sesión (ver más abajo), así
@@ -2554,11 +2610,29 @@ estado_filas() {  # estado_filas <watch.log> <ahora epoch>
     # el bucle no va a actuar sobre él mientras siga en draft). Si el
     # lanzamiento sigue realmente "en curso" (un proceso vivo, lanzado antes
     # de marcarse draft) esa realidad manda y no se toca.
+    # DEVKIT-262: un PR en conflicto con main, en cambio, sí es un paso
+    # pendiente del ciclo -watch.sh va a lanzar task-fix a mezclar en la
+    # próxima vuelta- así que no pisa ESTADO, solo suma "conflicto con main"
+    # a DETALLE (ámbar, ver `formatear_fila`): la fila sigue diciendo en qué
+    # punto del ciclo está (terminó, Lista para merge, CAMBIOS) y además que
+    # el auto-merge no la puede cerrar todavía. Draft manda primero -un draft
+    # no se puede mergear de todos modos y GitHub no calcula `mergeable`
+    # sobre él-, por eso va en el mismo `if`, como rama alternativa.
     if [ "$estado" != "en curso" ] && [ "$pr" != - ]; then
       numpr=${pr##*/}
       case "$numpr" in
         ''|*[!0-9]*) ;;
-        *) pr_es_draft "$numpr" && { estado=borrador; detalle=borrador; } ;;
+        *)
+          if pr_es_draft "$numpr"; then
+            estado=borrador; detalle=borrador
+          elif pr_tiene_conflicto "$numpr"; then
+            if [ -z "$detalle" ] || [ "$detalle" = - ]; then
+              detalle="conflicto con main"
+            else
+              detalle="$detalle; conflicto con main"
+            fi
+          fi
+          ;;
       esac
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$skill" "${clave:--}" "$origen" "$(hace "$edad")" "$estado" "${detalle:--}" "$modelo_col" "$duracion_col" "$turnos_col" "$pr"
@@ -3421,7 +3495,8 @@ FONDO_GRUPO=$'\033[48;5;236m'
 formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <duracion> <estado> <modelo> <turnos> <detalle> [idx=0] [fijo=1] [color=] [fondo_grupo=0]
   local skill=$1 clave=$2 pr=$3 origen=$4 edad=$5 duracion=$6 estado=$7 modelo=$8 turnos=$9 detalle=${10} \
         idx=${11:-0} fijo=${12:-1} color_habilitado=${13:-} fondo_grupo=${14:-0} frena="" utf glifo color icono_len \
-        estado_texto glifo_lento glifo_lento_len ancho fila off_skill off_pr off_estado off_turnos off_detalle pr_texto
+        estado_texto glifo_lento glifo_lento_len ancho fila off_skill off_pr off_estado off_turnos off_detalle pr_texto \
+        conflicto_txt conflicto_prefix conflicto_off conflicto_len
   # PR (DEVKIT-156): "#<número>" en la columna, no la URL completa que sigue
   # viajando en <pr> -esta función la recibe ya armada desde `estado_filas`,
   # que la arma con `url_de_pr`- para envolverla en el hipervínculo OSC 8 más
@@ -3445,6 +3520,22 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
   esac
   ancho=$(ancho_terminal)
   detalle=$(recortar "$detalle" "$((ancho - ANCHO_COLUMNAS_FIJAS))")
+  # "conflicto con main" (DEVKIT-262, la misma alarma ámbar que "lento" pero
+  # sin su glifo: `estado_filas` ya la suma al DETALLE que trae esta función,
+  # en cualquier posición -al final, si ya había otro motivo-). Se ubica
+  # después del recorte de arriba, no antes: apéndice al final del texto,
+  # es lo primero que un terminal angosto se come, y pintar un rango que ya
+  # no existe correría el resto de la fila.
+  conflicto_txt="conflicto con main"
+  conflicto_off=0
+  conflicto_len=0
+  case "$detalle" in
+    *"$conflicto_txt"*)
+      conflicto_prefix=${detalle%%"$conflicto_txt"*}
+      conflicto_off=${#conflicto_prefix}
+      conflicto_len=${#conflicto_txt}
+      ;;
+  esac
   glifo=$(glifo_estado_fila "$estado" "$idx" "$fijo" "$utf")
   color=$(color_de_estado_fila "$estado")
   icono_len=${#glifo}
@@ -3469,6 +3560,7 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
   [ "${#fila}" -le "$ancho" ] || fila=$(recortar "$fila" "$ancho")
   if [ "$color_habilitado" = 1 ]; then
     [ "$glifo_lento_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$off_detalle" "$glifo_lento_len" ambar)
+    [ "$conflicto_len" -eq 0 ] || fila=$(pintar_rango "$fila" "$((off_detalle + conflicto_off))" "$conflicto_len" ambar)
     # TURNOS excedido ("67/60!", DEVKIT-107).
     case "$turnos" in *'!') fila=$(pintar_rango "$fila" "$off_turnos" "$ANCHO_TURNOS" rojo) ;; esac
     # ESTADO en negrita y color solo para los veredictos de pr-review (DEVKIT-
@@ -4038,11 +4130,23 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
   # "Revisión automática" mientras el humano decide qué hacer con él- porque
   # ya no es trabajo activo del ciclo: watch.sh no lo va a tocar mientras
   # siga en draft, y mostrarlo como "en curso" (girando) sería mentir.
+  # DEVKIT-262: un PR en conflicto con main pisa igual -mismo criterio,
+  # "Conflicto con main" cae en el ámbar por defecto de
+  # `glifo_estado_tablero`/`color_de_estado_tablero`, ninguno de los casos
+  # con nombre propio- salvo que ya esté en draft, que manda primero: un
+  # draft no se puede mergear de todos modos y GitHub no calcula
+  # `mergeable` sobre él.
   if [ "$pr" != - ]; then
     numpr=${pr##*/}
     case "$numpr" in
       ''|*[!0-9]*) ;;
-      *) pr_es_draft "$numpr" && estado=Borrador ;;
+      *)
+        if pr_es_draft "$numpr"; then
+          estado=Borrador
+        elif pr_tiene_conflicto "$numpr"; then
+          estado="Conflicto con main"
+        fi
+        ;;
     esac
   fi
   frena=$(bloquea_a "$clave")
@@ -4099,6 +4203,7 @@ mostrar_tablero() {  # mostrar_tablero [idx=0] [fijo=1] [color=]
   asegurar_bloqueos_cache
   asegurar_epicas_cache
   asegurar_draft_cache
+  asegurar_conflict_cache
   local clave estado tipo pr
   local -A epica_de_clave
   local -a orden_epicas=()
@@ -9890,6 +9995,15 @@ FIN
   check "color_de_estado_tablero: Borrador es gris, no la alarma ámbar por defecto" gris \
     "$(color_de_estado_tablero Borrador)"
 
+  # DEVKIT-262: "Conflicto con main" no tiene caso propio en
+  # `glifo_estado_tablero`/`color_de_estado_tablero` -a diferencia de
+  # "Borrador"-, así que cae en el mismo ⚠ ámbar por defecto que cualquier
+  # Estado que esas dos funciones no reconocen.
+  check "glifo_estado_tablero: Conflicto con main cae en el ⚠ ámbar por defecto" \
+    "$(glifo_estado_tablero "no reconocido" 0 1 1)" "$(glifo_estado_tablero "Conflicto con main" 0 1 1)"
+  check "color_de_estado_tablero: Conflicto con main es ámbar" ambar \
+    "$(color_de_estado_tablero "Conflicto con main")"
+
   # `--estado` con un PR draft (DEVKIT-250): un veredicto CAMBIOS ya resuelto
   # -normalmente ⚠ ámbar, algo que "necesita atención"- deja de mostrarse así
   # apenas GitHub dice que el PR está en draft: watch.sh no va a actuar sobre
@@ -9924,6 +10038,26 @@ FIN
     "$(printf '%s\n' "$draft_filas" | awk -F'\t' '$2 == "DEVKIT-201" {print $6; exit}')"
   check "--estado: PR draft con la skill todavía en curso no se pisa" "en curso" \
     "$(printf '%s\n' "$draft_filas" | awk -F'\t' '$2 == "DEVKIT-202" {print $5; exit}')"
+
+  # `--estado` con un PR en conflicto con main (DEVKIT-262): a diferencia de
+  # un draft, sigue siendo un paso pendiente del ciclo -watch.sh va a lanzar
+  # task-fix a mezclar-, así que no pisa ESTADO (sigue diciendo CAMBIOS, el
+  # veredicto ya resuelto) y solo suma "conflicto con main" a DETALLE. Mismo
+  # fixture que el draft, con CONFLICT_CACHE en vez de DRAFT_CACHE.
+  local conflicto_est conflicto_filas
+  conflicto_est="$tmp/estado-conflicto"
+  mkdir -p "$conflicto_est"
+  printf '%s\t%s\n' "$(date +%s)" '[201,202]' >"$conflicto_est/conflict.cache"
+  conflicto_filas=$(REPO_NAME_WITH_OWNER_CACHE="$conflicto_est/repo.cache" GH_BIN="$gh_doble_pr" \
+    PS_BIN="$draft_pslist" LOCK="$conflicto_est/skill.lock" \
+    CONFLICT_CACHE="$conflicto_est/conflict.cache" CONFLICT_LOCK="$conflicto_est/conflict.lock" \
+    estado_filas "$draft_est/watch.log" "$draft_ahora")
+  check "--estado: PR en conflicto con main no pisa el veredicto CAMBIOS (ESTADO)" CAMBIOS \
+    "$(printf '%s\n' "$conflicto_filas" | awk -F'\t' '$2 == "DEVKIT-201" {print $5; exit}')"
+  check "--estado: PR en conflicto con main suma el detalle" "conflicto con main" \
+    "$(printf '%s\n' "$conflicto_filas" | awk -F'\t' '$2 == "DEVKIT-201" {print $6; exit}')"
+  check "--estado: PR en conflicto con main, la skill en curso no se pisa" "en curso" \
+    "$(printf '%s\n' "$conflicto_filas" | awk -F'\t' '$2 == "DEVKIT-202" {print $5; exit}')"
 
   # --tablero (DEVKIT-82): una sola consulta a notion.sh `activas`, con
   # "bloquea a" (misma caché de DEVKIT-63) y agrupada por Épica de origen
@@ -10092,6 +10226,31 @@ FIN
     mostrar_tablero 0 1 1)
   check "--tablero: PR draft en gris (código ANSI 90), no ámbar ni verde" si \
     "$(printf '%s\n' "$salida_tablero_draft_color" | grep 'DEVKIT-58' | grep -qF $'\033[90m' && echo si || echo no)"
+
+  # --tablero con un PR en conflicto con main (DEVKIT-262): mismo fixture que
+  # el draft -DEVKIT-58 trae el PR #9-, pero con ese número en CONFLICT_CACHE
+  # en vez de DRAFT_CACHE. La fila deja de mostrar el Estado real de Notion
+  # ("Lista para merge", con su ✔ verde) y muestra "Conflicto con main": sin
+  # caso propio en `glifo_estado_tablero`/`color_de_estado_tablero`, cae en
+  # el mismo ⚠ ámbar por defecto que "CAMBIOS" en `--estado`.
+  local tablero_conflicto salida_tablero_conflicto salida_tablero_conflicto_color
+  tablero_conflicto="$tmp/tablero-conflicto"
+  mkdir -p "$tablero_conflicto"
+  printf '%s\t%s\n' "$(date +%s)" '[9]' >"$tablero_conflicto/conflict.cache"
+  salida_tablero_conflicto=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    CONFLICT_CACHE="$tablero_conflicto/conflict.cache" CONFLICT_LOCK="$tablero_conflicto/conflict.lock" \
+    mostrar_tablero)
+  check "--tablero: PR en conflicto con main muestra 'Conflicto con main', no el Estado real de Notion" si \
+    "$(printf '%s\n' "$salida_tablero_conflicto" | grep 'DEVKIT-58' | grep -q 'Conflicto con main' && echo si || echo no)"
+  salida_tablero_conflicto_color=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    CONFLICT_CACHE="$tablero_conflicto/conflict.cache" CONFLICT_LOCK="$tablero_conflicto/conflict.lock" \
+    mostrar_tablero 0 1 1)
+  check "--tablero: PR en conflicto con main en ámbar (código ANSI 33)" si \
+    "$(printf '%s\n' "$salida_tablero_conflicto_color" | grep 'DEVKIT-58' | grep -qF $'\033[33m' && echo si || echo no)"
 
   # --cola (DEVKIT-119): un paso al costado, `cola.sh --lista`. Doble que
   # anota sus argumentos, para comprobar que se llama con --lista y que

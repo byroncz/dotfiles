@@ -15,7 +15,7 @@ con `claude -p "/nombre argumentos"`.
 | `task-start` | Lista → En progreso | Agente; también `epic-plan` y `cola.sh` |
 | `task-submit` | En progreso → Revisión automática | Agente |
 | `pr-review` | Revisión automática → Lista para merge, o se queda | `watch.sh` (headless) o humano |
-| `task-fix` | Revisión automática o Lista para merge → Revisión automática | `watch.sh` (headless) o humano |
+| `task-fix` | Revisión automática o Lista para merge → Revisión automática. Con `mergeable=CONFLICTING` (PR en conflicto con `main`, DEVKIT-262), mezcla `origin/main` con un commit de merge antes que cualquier otro hallazgo | `watch.sh` (headless) o humano |
 | `task-document` | Entrada "decisión" (PR marcado `Tipo: decisión`) o entrada consolidada de una Épica cerrada; no cambia el Estado. La entrada "cambio" ordinaria la escribe `task-document.sh`, sin agente | `watch.sh` si el PR trae la marca; `task-close.sh` solo para una Épica |
 | `project-status` | Estado del proyecto y siguiente card libre | Humano o agente |
 | `template-update` | Sube la versión del template y pone al día `AGENTS.md` | Agente |
