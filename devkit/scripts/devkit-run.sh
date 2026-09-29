@@ -9615,6 +9615,12 @@ FIN
   dk256_run="$dk256_tmp/run"
   mkdir -p "$dk256_run"
   : >"$dk256_run/watch.log"
+  # H1 (pr-review PR#150): sin esto, el RUN_DIR nuevo no trae `cuota.cache` y
+  # `mostrar_consumo` dispara `refrescar_cuota_bg` con el `claude` real (sin
+  # `DEVKIT_CLAUDE_BIN`) en cada llamada a `--estado`. Sembrar la caché en
+  # `headless` evita cualquier refresco, igual que hace `leer_cuota` de
+  # verdad en modo headless (DEVKIT-255).
+  printf '%s\theadless\n' "$(date +%s)" >"$dk256_run/cuota.cache"
 
   dk256_out="$dk256_tmp/estado-seguir.out"
   DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
