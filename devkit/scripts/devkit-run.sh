@@ -42,11 +42,16 @@
 #     roles.toml (TURNOS, con "!" si lo excede, misma cuenta que `--costos`).
 #     DETALLE se recorta al ancho de la terminal, y la tabla a su alto -las
 #     filas más recientes, con un resumen de cuántas quedaron afuera-; `--todo`
-#     desactiva ese recorte de alto (DEVKIT-97). Debajo, un bloque `Consumo`
-#     con el porcentaje de cuota del plan en vivo (sesión y semana), leído con
-#     `claude -p "/usage"` (DEVKIT-62): es la misma cifra oficial de una
-#     sesión interactiva, no una estimación desde watch.log. `--seguir`
-#     refresca todo cada 3 s hasta Ctrl-C, con `bucle: ...` en la cabecera:
+#     desactiva ese recorte de alto (DEVKIT-97). Debajo, un bloque `Consumo`:
+#     en una sesión interactiva `claude -p "/usage"` (DEVKIT-62) sí trae el
+#     porcentaje oficial de cuota del plan (sesión y semana); en modo headless
+#     -que es como corre siempre este monitor- nunca lo trae (DEVKIT-255,
+#     verificado el 2026-09-28), así que el bloque muestra en su lugar el
+#     costo y los turnos de hoy y de la semana, estimados desde
+#     `.devkit/costos.log` (los mismos que calcula `--costos`), con la
+#     explicación de por qué no hay cifra oficial solo una vez, no en cada
+#     refresco. `--seguir` refresca todo cada 3 s hasta Ctrl-C, con `bucle: ...`
+#     en la cabecera:
 #     `vivo` (tick reciente), `esperando <skill>-<n>` (una skill de origen
 #     bucle en curso explica la falta de tick, sin alarma), `SIN SEÑAL` (ni lo
 #     uno ni lo otro) o `MUERTO` (watch.sh no está en `ps`).
@@ -1164,15 +1169,20 @@ costos_log() {  # costos_log <línea completa, con fecha>
 }
 
 # Cuota del plan, leída en vivo con `claude -p "/usage"` (DEVKIT-62). La
-# compuerta de la card probó que sí existe una fuente oficial legible por
-# script: la CLI responde con el mismo texto que `/usage` en una sesión
-# interactiva, como comando local que no gasta turnos ni cuota
-# (`duration_api_ms=0`, `total_cost_usd=0`). No hay campo numérico
-# estructurado para el porcentaje, así que se extrae del texto con una
-# expresión regular sobre sus dos líneas fijas. Aislada igual que
-# `modelo_disponible` (directorio vacío, sin MCP): --estado no necesita
-# heredar el contexto de /workspace para esta lectura.
-leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"
+# compuerta de la card probó que la CLI responde con el mismo texto que
+# `/usage` en una sesión interactiva, como comando local que no gasta turnos
+# ni cuota (`duration_api_ms=0`, `total_cost_usd=0`) -pero DEVKIT-255
+# encontró que en modo headless (`-p`, que es como corre siempre este
+# monitor) ese texto nunca trae las líneas de porcentaje: `/usage` se
+# resuelve ahí como `local_command` y el `.result` que llega es el resumen de
+# costo de esa sesión vacía ("Total cost: $0.0000 / ..."), verificado con
+# Claude Code 2.1.284 el 2026-09-28. No hay campo numérico estructurado para
+# el porcentaje, así que cuando sí está se extrae del texto con una expresión
+# regular sobre sus dos líneas fijas -si una versión futura de la CLI vuelve
+# a traerlas en headless, esta extracción sigue funcionando sin cambios.
+# Aislada igual que `modelo_disponible` (directorio vacío, sin MCP): --estado
+# no necesita heredar el contexto de /workspace para esta lectura.
+leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>semana_reset"; rc=1 sin respuesta, rc=2 con respuesta pero sin líneas de porcentaje (headless)
   local vacio salida texto linea_sesion linea_semana sesion_pct sesion_reset semana_pct semana_reset
   vacio=$(mktemp -d)
   # --no-session-persistence (H2 de pr-review en DEVKIT-62): sin ella, cada
@@ -1187,7 +1197,7 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
   [ -n "$texto" ] || return 1
   linea_sesion=$(printf '%s\n' "$texto" | grep -E '^Current session: [0-9]+% used')
   linea_semana=$(printf '%s\n' "$texto" | grep -E '^Current week \(all models\): [0-9]+% used')
-  [ -n "$linea_sesion" ] && [ -n "$linea_semana" ] || return 1
+  [ -n "$linea_sesion" ] && [ -n "$linea_semana" ] || return 2
   sesion_pct=$(printf '%s' "$linea_sesion" | grep -oE '[0-9]+' | head -1)
   sesion_reset=$(printf '%s' "$linea_sesion" | sed -E 's/^Current session: [0-9]+% used · resets //')
   semana_pct=$(printf '%s' "$linea_semana" | grep -oE '[0-9]+' | head -1)
@@ -1205,6 +1215,12 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
 # séptimo campo `ts_ok`): antes, una sola falla borraba el porcentaje que
 # `mostrar_consumo` venía mostrando y lo cambiaba por "no se pudo leer", aun
 # con una lectura buena de hace un minuto todavía útil.
+# `leer_cuota` con rc=2 (DEVKIT-255) deja un estado `headless` aparte de
+# `fail`: no es un fallo pasajero que valga la pena reintentar -en modo
+# headless `/usage` nunca va a traer el porcentaje-, así que `mostrar_consumo`
+# deja de llamar a esta función mientras la caché diga `headless`, y el
+# `claude -p` deja de lanzarse hasta el siguiente arranque del monitor (que
+# limpia RUN_DIR y con él CUOTA_CACHE).
 refrescar_cuota_bg() {
   (
     mkdir -p "$(dirname "$CUOTA_CACHE")" 2>/dev/null
@@ -1214,7 +1230,7 @@ refrescar_cuota_bg() {
     # bash): con `set -u`, "$prev_tsok" más abajo revienta la subshell entera
     # si nunca se llega al `read` (sin caché previa). Se inicializan vacías a
     # propósito.
-    local cuota prev_ts='' prev_estado='' prev_sp='' prev_sr='' prev_wp='' prev_wr='' prev_tsok=''
+    local cuota rc_cuota prev_ts='' prev_estado='' prev_sp='' prev_sr='' prev_wp='' prev_wr='' prev_tsok=''
     if [ -s "$CUOTA_CACHE" ]; then
       IFS=$'\t' read -r prev_ts prev_estado prev_sp prev_sr prev_wp prev_wr prev_tsok <"$CUOTA_CACHE"
       # Caché del formato viejo, de 6 campos sin `ts_ok` (H4, pr-review
@@ -1225,7 +1241,14 @@ refrescar_cuota_bg() {
       [ "$prev_estado" = ok ] && [ -z "$prev_tsok" ] && prev_tsok=$prev_ts
     fi
     if cuota=$(leer_cuota); then
+      rc_cuota=0
+    else
+      rc_cuota=$?
+    fi
+    if [ "$rc_cuota" = 0 ]; then
       printf '%s\tok\t%s\t%s\n' "$(date +%s)" "$cuota" "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
+    elif [ "$rc_cuota" = 2 ]; then
+      printf '%s\theadless\n' "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
     elif [ -n "$prev_tsok" ]; then
       printf '%s\tfail\t%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$prev_sp" "$prev_sr" "$prev_wp" "$prev_wr" "$prev_tsok" \
         >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
@@ -1233,6 +1256,48 @@ refrescar_cuota_bg() {
       printf '%s\tfail\n' "$(date +%s)" >"$CUOTA_CACHE.tmp" && mv -f "$CUOTA_CACHE.tmp" "$CUOTA_CACHE"
     fi
   ) </dev/null >/dev/null 2>&1 &
+}
+
+# Turnos y costo de hoy y de la semana, sumando todos los lanzamientos de
+# costos.log sin filtrar por Clave (DEVKIT-255): lo que muestra el bloque
+# `Consumo` cuando no hay cuota oficial (modo headless). "Hoy" y "semana" son
+# ventanas móviles de 24 horas y 7 días desde ahora, no el calendario -mismo
+# criterio que el corte de 30 días de `costos_resumen_proyecto`-, así se evita
+# resolver zona horaria de inicio de semana. Respeta DEVKIT_AHORA, igual que
+# `mostrar_estado`, para que las pruebas no dependan de la hora real.
+costos_periodo() {  # costos_periodo -> "turnos_dia<TAB>costo_dia<TAB>turnos_semana<TAB>costo_semana"
+  local ahora corte_dia corte_semana ts clave skill id modelo esfuerzo ronda t c d epoch tt cc
+  local turnos_dia=0 costo_dia=0.0000 turnos_semana=0 costo_semana=0.0000
+  ahora=${DEVKIT_AHORA:-$(date +%s)}
+  corte_dia=$((ahora - 86400))
+  corte_semana=$((ahora - 7 * 86400))
+  if [ -f "$COSTOS_LOG" ]; then
+    while IFS=$'\t' read -r ts clave skill id modelo esfuerzo ronda t c d; do
+      [ -n "$skill" ] || continue
+      epoch=$(date -d "$ts" +%s 2>/dev/null) || continue
+      [ "$epoch" -ge "$corte_semana" ] || continue
+      tt=$t; [ "$tt" = - ] && tt=0
+      cc=$c; [ "$cc" = - ] && cc=0
+      turnos_semana=$((turnos_semana + tt))
+      costo_semana=$(awk -v a="$costo_semana" -v b="$cc" 'BEGIN{printf "%.4f", a+b}')
+      if [ "$epoch" -ge "$corte_dia" ]; then
+        turnos_dia=$((turnos_dia + tt))
+        costo_dia=$(awk -v a="$costo_dia" -v b="$cc" 'BEGIN{printf "%.4f", a+b}')
+      fi
+    done < <(costos_filas "$COSTOS_LOG")
+  fi
+  printf '%s\t%s\t%s\t%s' "$turnos_dia" "$costo_dia" "$turnos_semana" "$costo_semana"
+}
+
+# Sustituto del porcentaje oficial en el bloque `Consumo` (DEVKIT-255): no es
+# la cuota del plan -eso no se puede leer en headless-, así que se etiqueta
+# como estimado, y se aclara de dónde sale, para no hacerlo pasar por una
+# cifra que no es.
+mostrar_consumo_local() {
+  local turnos_dia costo_dia turnos_semana costo_semana
+  IFS=$'\t' read -r turnos_dia costo_dia turnos_semana costo_semana < <(costos_periodo)
+  printf '  hoy: %s turnos, $%s (estimado desde los lanzamientos, no la cuota del plan)\n' "$turnos_dia" "$costo_dia"
+  printf '  semana: %s turnos, $%s (estimado desde los lanzamientos, no la cuota del plan)\n' "$turnos_semana" "$costo_semana"
 }
 
 # Bloque `Consumo` de `--estado`: porcentaje de cuota en vivo, con la hora de
@@ -1254,6 +1319,24 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
       printf '\nConsumo (cuota oficial, leída %s)\n' "$(date -d "@$ts" +%T 2>/dev/null || date -r "$ts" +%T)"
       printf '  sesión: %s%% usada, reinicia %s\n' "$sesion_pct" "$sesion_reset"
       printf '  semana: %s%% usada, reinicia %s\n' "$semana_pct" "$semana_reset"
+    elif [ "$estado" = headless ]; then
+      # DEVKIT-255: en modo headless `claude -p "/usage"` nunca trae el
+      # porcentaje del plan -siempre el resumen de costo de una sesión
+      # vacía-, así que no tiene caso seguir relanzándolo (`refrescar_cuota_bg`
+      # ya no reintenta este estado) ni repetir la explicación en cada
+      # refresco de `--seguir`. "Una sola vez" no puede ser "en el primer
+      # cuadro": el refresco de fondo que detecta `headless` por primera vez
+      # tarda ~1-2 s, así que para cuando `--estado --seguir` lo muestra ya
+      # van uno o dos cuadros. `$CUOTA_CACHE.headless-aviso`, junto a la
+      # propia caché -mismo ciclo de vida, tmpfs que un `devkit recreate`
+      # limpia-, es lo que de verdad hace que se muestre una sola vez por
+      # arranque del monitor, sin depender de en qué cuadro cae.
+      printf '\nConsumo (estimado desde los lanzamientos, no la cuota del plan)\n'
+      if [ ! -e "$CUOTA_CACHE.headless-aviso" ]; then
+        printf '  cuota oficial no disponible en modo headless: `claude -p "/usage"` no trae el porcentaje del plan aquí\n'
+        : > "$CUOTA_CACHE.headless-aviso" 2>/dev/null
+      fi
+      mostrar_consumo_local
     elif [ -n "$ts_ok" ]; then
       # Fallo con una lectura buena previa (DEVKIT-78): se sigue mostrando esa
       # lectura -no "no se pudo leer"-. El segundo dato es la hora del último
@@ -1270,11 +1353,14 @@ mostrar_consumo() {  # mostrar_consumo [permitir_refresco=1]
     fi
     # Un fallo espera CUOTA_TTL_FALLO, no CUOTA_TTL, antes de reintentar (H1,
     # pr-review): contra un 429 activo, CUOTA_TTL repite la cadencia del
-    # propio incidente.
-    ttl_efectivo=$CUOTA_TTL
-    [ "$estado" = ok ] || ttl_efectivo=$CUOTA_TTL_FALLO
-    if [ "$edad" -ge "$ttl_efectivo" ] && [ "$permitir_refresco" = 1 ]; then
-      refrescar_cuota_bg
+    # propio incidente. `headless` (DEVKIT-255) no reintenta nunca: ver el
+    # comentario de `refrescar_cuota_bg`.
+    if [ "$estado" != headless ]; then
+      ttl_efectivo=$CUOTA_TTL
+      [ "$estado" = ok ] || ttl_efectivo=$CUOTA_TTL_FALLO
+      if [ "$edad" -ge "$ttl_efectivo" ] && [ "$permitir_refresco" = 1 ]; then
+        refrescar_cuota_bg
+      fi
     fi
   elif [ "$permitir_refresco" = 1 ]; then
     printf '\nConsumo: todavía no hay una lectura de la cuota oficial, refrescando en segundo plano\n'
@@ -8891,10 +8977,14 @@ FIN
   check "leer_cuota extrae cuándo reinicia la semana" "Sep 22, 11pm (UTC)" \
     "$(printf '%s' "$resultado_cuota" | cut -f4)"
 
-  # DEVKIT-78: el texto de /cost en vez del de /usage (visto de verdad el
-  # 2026-09-17, evidencia de la card) no debe confundirse con una lectura
-  # válida: sin las líneas "Current session"/"Current week", leer_cuota falla
-  # como con cualquier salida sin las líneas esperadas.
+  # DEVKIT-78/DEVKIT-255: el texto de /cost en vez del de /usage (visto de
+  # verdad el 2026-09-17) y el resumen de costo que `/usage` responde en
+  # modo headless (visto de verdad el 2026-09-28, con Claude Code 2.1.284:
+  # `local_command: usage` sin líneas de porcentaje) tienen la misma forma
+  # -sin las líneas "Current session"/"Current week"- y ya no se tratan como
+  # un fallo genérico de lectura (rc=1): leer_cuota los reconoce con rc=2,
+  # "headless", para que `mostrar_consumo` muestre el consumo local en vez de
+  # insistir con "no se pudo leer".
   local doble_cuota_costo
   doble_cuota_costo="$tmp/claude-usage-costo"
   cat >"$doble_cuota_costo" <<'FIN'
@@ -8904,8 +8994,13 @@ cat <<'JSON'
 JSON
 FIN
   chmod +x "$doble_cuota_costo"
-  check "leer_cuota no confunde el texto de /cost con una lectura de /usage" 1 \
+  check "leer_cuota no confunde el texto de /cost con una lectura de /usage (rc=2, headless)" 2 \
     "$(CLAUDE_BIN="$doble_cuota_costo" leer_cuota >/dev/null 2>&1; echo $?)"
+
+  # rc=1 sigue siendo el fallo genérico -sin respuesta en absoluto, por
+  # ejemplo un binario roto- distinto de rc=2 (respuesta sin porcentaje).
+  check "leer_cuota sin ninguna respuesta falla con rc=1, no rc=2" 1 \
+    "$(CLAUDE_BIN=/bin/false leer_cuota >/dev/null 2>&1; echo $?)"
 
   # H2 de pr-review: leer_cuota no debe dejar una sesión propia de Claude
   # Code en ~/.claude/projects/ (con --seguir serían miles por hora).
@@ -8950,6 +9045,83 @@ FIN
     'Consumo: no se pudo leer la cuota oficial con `claude -p "/usage"` ahora' \
     "$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_fail/cuota.cache" CUOTA_LOCK="$cuota_fail/cuota.lock" \
         WATCH_LOG="$est/vacio.log" mostrar_estado | tail -1)"
+
+  # --- DEVKIT-255: Consumo en modo headless, sin cuota oficial -------------
+  # `refrescar_cuota_bg` con `leer_cuota` en rc=2 (el doble de costo de más
+  # arriba, `doble_cuota_costo`) deja `headless` en la caché, no `fail`.
+  local cuota_headless_bg
+  cuota_headless_bg="$tmp/cuota-headless-bg"
+  mkdir -p "$cuota_headless_bg"
+  CLAUDE_BIN="$doble_cuota_costo" CUOTA_CACHE="$cuota_headless_bg/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless_bg/cuota.lock" refrescar_cuota_bg
+  local headless_bg_ok=0
+  for intento in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(cut -f2 "$cuota_headless_bg/cuota.cache" 2>/dev/null)" = headless ] && { headless_bg_ok=1; break; }
+    sleep 0.3
+  done
+  check "refrescar_cuota_bg con leer_cuota en rc=2 deja 'headless' en la caché, no 'fail'" 1 "$headless_bg_ok"
+
+  # Fixture de costos.log con lanzamientos a distintas distancias de "ahora"
+  # (DEVKIT_AHORA fijo, para que la prueba no dependa del reloj real): uno
+  # dentro de las últimas 24 h, uno fuera de las 24 h pero dentro de los 7
+  # días, y uno fuera de los 7 días. costos_periodo debe sumar solo lo que
+  # corresponde a cada ventana.
+  local costos_headless=$tmp/costos-headless ahora_headless
+  mkdir -p "$costos_headless"
+  cat >"$costos_headless/costos.log" <<'FIN'
+2026-09-20T11:00:00-00:00 task-start-501 lanzando (origen=humano) modelo=m esfuerzo=low ronda=1: "/task-start DEVKIT-500" log=/run/devkit/task-start-501.log
+2026-09-20T11:00:30-00:00 task-start-501 terminado: modelo=m esfuerzo=low ronda=1 costo=0.05 turnos=2 duracion=30s tokens: entrada=1 cache=1 salida=1 :: listo
+2026-09-19T10:00:00-00:00 task-start-502 lanzando (origen=humano) modelo=m esfuerzo=low ronda=1: "/task-start DEVKIT-501" log=/run/devkit/task-start-502.log
+2026-09-19T10:00:30-00:00 task-start-502 terminado: modelo=m esfuerzo=low ronda=1 costo=0.10 turnos=3 duracion=30s tokens: entrada=1 cache=1 salida=1 :: listo
+2026-09-01T00:00:00-00:00 task-start-503 lanzando (origen=humano) modelo=m esfuerzo=low ronda=1: "/task-start DEVKIT-502" log=/run/devkit/task-start-503.log
+2026-09-01T00:00:30-00:00 task-start-503 terminado: modelo=m esfuerzo=low ronda=1 costo=0.01 turnos=1 duracion=30s tokens: entrada=1 cache=1 salida=1 :: listo
+FIN
+  ahora_headless=$(date -d '2026-09-20T12:00:00Z' +%s)
+  check "costos_periodo suma solo lo del día (24h) en turnos_dia/costo_dia" "2	0.0500" \
+    "$(DEVKIT_AHORA="$ahora_headless" COSTOS_LOG="$costos_headless/costos.log" costos_periodo | cut -f1,2)"
+  check "costos_periodo suma lo de la semana (7 días), día incluido" "5	0.1500" \
+    "$(DEVKIT_AHORA="$ahora_headless" COSTOS_LOG="$costos_headless/costos.log" costos_periodo | cut -f3,4)"
+
+  # Caché en `headless`: --estado muestra el consumo local en vez de "no se
+  # pudo leer", con la etiqueta que aclara que no es la cuota del plan. La
+  # explicación de por qué no hay cuota oficial sale una sola vez -no en cada
+  # refresco de `--seguir`, ni depende de en qué cuadro cae (ver el
+  # comentario de `mostrar_consumo`)-, así que la segunda llamada con la misma
+  # caché ya no la repite.
+  local cuota_headless
+  cuota_headless="$tmp/cuota-headless"
+  mkdir -p "$cuota_headless"
+  printf '%s\theadless\n' "$(date +%s)" >"$cuota_headless/cuota.cache"
+  local salida_headless_1
+  salida_headless_1=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
+    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
+  check "caché 'headless', primera vez: explica por qué no hay cuota oficial" 1 \
+    "$(printf '%s\n' "$salida_headless_1" | grep -c 'cuota oficial no disponible en modo headless')"
+  check "caché 'headless': muestra el consumo local con hoy y semana" \
+    'hoy: 2 turnos, $0.0500 (estimado desde los lanzamientos, no la cuota del plan)|semana: 5 turnos, $0.1500 (estimado desde los lanzamientos, no la cuota del plan)' \
+    "$(printf '%s\n' "$salida_headless_1" | sed -nE '/^  (hoy|semana):/ s/^  //p' | paste -sd'|')"
+  local salida_headless_2
+  salida_headless_2=$(CLAUDE_BIN=/bin/false CUOTA_TTL=9999 CUOTA_CACHE="$cuota_headless/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless/cuota.lock" COSTOS_LOG="$costos_headless/costos.log" \
+    DEVKIT_AHORA="$ahora_headless" WATCH_LOG="$est/vacio.log" mostrar_estado)
+  check "caché 'headless', segunda vez con la misma caché: no repite la explicación" 0 \
+    "$(printf '%s\n' "$salida_headless_2" | grep -c 'cuota oficial no disponible en modo headless')"
+  check "caché 'headless', segunda vez: sigue mostrando el consumo local" 1 \
+    "$(printf '%s\n' "$salida_headless_2" | grep -c 'hoy: 2 turnos, \$0.0500')"
+
+  # `headless` no reintenta nunca (Nota de la card): CLAUDE_BIN roto no
+  # importa, `mostrar_estado` ni siquiera debería llamar a `refrescar_cuota_bg`
+  # -si lo hiciera, la caché pasaría a `fail` en vez de seguir en `headless`.
+  CLAUDE_BIN=/bin/false CUOTA_TTL=1 CUOTA_TTL_FALLO=1 CUOTA_CACHE="$cuota_headless/cuota.cache" \
+    CUOTA_LOCK="$cuota_headless/cuota.lock" WATCH_LOG="$est/vacio.log" mostrar_estado >/dev/null
+  sleep 0.5
+  check "caché 'headless' no dispara un reintento pese a CUOTA_TTL/CUOTA_TTL_FALLO vencidos" headless \
+    "$(cut -f2 "$cuota_headless/cuota.cache" 2>/dev/null)"
+
+  # Sin costos.log todavía, mostrar_consumo_local avisa 0 en vez de reventar.
+  check "mostrar_consumo_local sin costos.log muestra 0 turnos, no revienta" 1 \
+    "$(COSTOS_LOG="$tmp/sin-costos-headless/costos.log" mostrar_consumo_local | grep -c 'hoy: 0 turnos, \$0.0000')"
 
   # Caché vencida: se sigue mostrando la última lectura al instante, y se
   # dispara un refresco en segundo plano que la reemplaza sin que --estado lo
