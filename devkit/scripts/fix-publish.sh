@@ -61,7 +61,7 @@ limpiar() {
 }
 trap limpiar EXIT
 
-marcador_fix=$(grep -m1 -oE '<!-- devkit-fix sha=[0-9a-f]+ review=[0-9a-f]+( manual=1)? -->' "$archivo")
+marcador_fix=$(grep -m1 -oE '<!-- devkit-fix sha=[0-9a-f]+ review=[0-9a-f]+( manual=1)?( merge=1)? -->' "$archivo")
 if [ -z "$marcador_fix" ]; then
   err "$archivo no empieza con el marcador <!-- devkit-fix sha=... review=... -->"
   exit 1
@@ -139,10 +139,14 @@ def markers($re; $ts):
 
 (.reviews | markers("<!-- devkit-review sha=(?<sha>[0-9a-f]+) verdict=(?<verdict>OK|CAMBIOS) -->"; "submittedAt")
    | sort_by(.at)) as $reviews
-| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)? -->"; "createdAt")) as $fixes
+| (.comments | markers("<!-- devkit-fix sha=(?<sha>[0-9a-f]+) review=(?<review>[0-9a-f]+)(?<manual> manual=1)?(?<merge> merge=1)? -->"; "createdAt")) as $fixes
+# La respuesta H0 de una mezcla de main (DEVKIT-262, H1) lleva `merge=1` y no
+# atiende ningún comentario humano: se excluye del corte, mismo criterio que
+# $real_fixes en decide de watch.sh.
+| ([$fixes[] | select(.merge == null)]) as $real_fixes
 | (.comments | markers("<!-- devkit-block sha=(?<sha>[0-9a-f]+) -->"; "createdAt") | sort_by(.at)) as $blocks
-| (([$fixes[].at, $blocks[].at] | max)
-   // ($reviews | map(.at) | max)
+| (([$real_fixes[].at, $blocks[].at] | max)
+   // ($reviews | map(.at) | min)
    // "") as $human_cutoff
 | ([ (.reviews[] | select(.state != "APPROVED" and .state != "DISMISSED")
        | {body, at: .submittedAt, login: .author.login}),

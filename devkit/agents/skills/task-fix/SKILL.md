@@ -236,10 +236,16 @@ igual; sigue esta sección entera en vez del resto del paso 3 y de los pasos
 6. `git push origin <headRefName>`. Nunca `--force`.
 7. Escribe la respuesta en `.devkit/fix-<N>.md`, con `review=` igual al
    `headRefOid` que leíste en el paso 2 -el head en conflicto, no el nuevo
-   tras el merge-:
+   tras el merge-. El marcador lleva `merge=1` (DEVKIT-262, H1 de la
+   revisión del PR 151): así `decide` en `watch.sh` y `fix-publish.sh` la
+   excluyen de `human_cutoff`, de la guarda de tres ciclos y de
+   `head_fix_body` -esta respuesta no atiende ningún hallazgo real ni ningún
+   comentario humano, y contarla ahí adelantaría el corte de un comentario
+   humano sin responder, sumaría un ciclo que nadie resolvió, o taparía una
+   espera de aprobación pendiente sobre el head anterior-:
 
    ```
-   <!-- devkit-fix sha=<head nuevo> review=<head del paso 2> -->
+   <!-- devkit-fix sha=<head nuevo> review=<head del paso 2> merge=1 -->
    <!-- devkit-fixes -->
    H0 | atendido | <sha corto del commit de merge>
    <!-- /devkit-fixes -->
