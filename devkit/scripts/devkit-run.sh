@@ -1265,26 +1265,39 @@ refrescar_cuota_bg() {
 # criterio que el corte de 30 días de `costos_resumen_proyecto`-, así se evita
 # resolver zona horaria de inicio de semana. Respeta DEVKIT_AHORA, igual que
 # `mostrar_estado`, para que las pruebas no dependan de la hora real.
+# No pasa por `costos_filas` (H1 de pr-review en el PR#142, DEVKIT-255): sin
+# Clave que filtrar, resolverla por fila no aporta nada, y `costos_filas`
+# la resuelve siempre -vía `clave_de_lanzamiento`/`clave_de_pr`- con un
+# `gh pr view` por cada fila pr-review/task-close del historial completo. Con
+# `--seguir` refrescando cada `ESTADO_INTERVALO` (3 s por defecto), eso agota
+# el límite de la API de GitHub y deja el cuadro colgado varios segundos. Se
+# recorre `lanzamientos` directo -la misma primitiva de más bajo nivel que usa
+# `costos_filas`- y se filtra por fecha antes de mirar el cierre de cada fila.
+# Los cierres bare de `task-close-N` (sin su propia "lanzando") no traen
+# turnos ni costo -por diseño, DEVKIT-55- así que da igual no leerlos aquí.
 costos_periodo() {  # costos_periodo -> "turnos_dia<TAB>costo_dia<TAB>turnos_semana<TAB>costo_semana"
-  local ahora corte_dia corte_semana ts clave skill id modelo esfuerzo ronda t c d epoch tt cc
+  local ahora corte_dia corte_semana ln ts id origen prompt logf modelo esfuerzo ronda epoch cierre t c tt cc
   local turnos_dia=0 costo_dia=0.0000 turnos_semana=0 costo_semana=0.0000
   ahora=${DEVKIT_AHORA:-$(date +%s)}
   corte_dia=$((ahora - 86400))
   corte_semana=$((ahora - 7 * 86400))
   if [ -f "$COSTOS_LOG" ]; then
-    while IFS=$'\t' read -r ts clave skill id modelo esfuerzo ronda t c d; do
-      [ -n "$skill" ] || continue
+    while IFS=$'\t' read -r ln ts id origen prompt logf modelo esfuerzo ronda; do
+      [ -n "$id" ] || continue
       epoch=$(date -d "$ts" +%s 2>/dev/null) || continue
       [ "$epoch" -ge "$corte_semana" ] || continue
-      tt=$t; [ "$tt" = - ] && tt=0
-      cc=$c; [ "$cc" = - ] && cc=0
+      cierre=$(costos_cierre_de "$COSTOS_LOG" "$ln" "$id")
+      case "$cierre" in *" no lanzó: "*) continue ;; esac
+      t=$(costos_campo "${cierre:-}" turnos); c=$(costos_campo "${cierre:-}" costo)
+      tt=$t; [ -n "$tt" ] || tt=0
+      cc=$c; [ -n "$cc" ] || cc=0
       turnos_semana=$((turnos_semana + tt))
       costo_semana=$(awk -v a="$costo_semana" -v b="$cc" 'BEGIN{printf "%.4f", a+b}')
       if [ "$epoch" -ge "$corte_dia" ]; then
         turnos_dia=$((turnos_dia + tt))
         costo_dia=$(awk -v a="$costo_dia" -v b="$cc" 'BEGIN{printf "%.4f", a+b}')
       fi
-    done < <(costos_filas "$COSTOS_LOG")
+    done < <(lanzamientos "$COSTOS_LOG")
   fi
   printf '%s\t%s\t%s\t%s' "$turnos_dia" "$costo_dia" "$turnos_semana" "$costo_semana"
 }
@@ -9081,6 +9094,32 @@ FIN
     "$(DEVKIT_AHORA="$ahora_headless" COSTOS_LOG="$costos_headless/costos.log" costos_periodo | cut -f1,2)"
   check "costos_periodo suma lo de la semana (7 días), día incluido" "5	0.1500" \
     "$(DEVKIT_AHORA="$ahora_headless" COSTOS_LOG="$costos_headless/costos.log" costos_periodo | cut -f3,4)"
+
+  # H1 de pr-review en el PR#142 (DEVKIT-255): costos_periodo no filtra por
+  # Clave, así que no debería resolverla -y con ella, nunca llamar a `gh`-
+  # para las filas de pr-review/task-close, aunque el historial las traiga.
+  # Fixture aparte, no la de arriba: no debe alterar las sumas que ya
+  # verifican las pruebas de `mostrar_estado` con `costos_headless` más abajo.
+  local costos_gh=$tmp/costos-gh
+  mkdir -p "$costos_gh"
+  cat >"$costos_gh/costos.log" <<'FIN'
+2026-09-20T11:00:00-00:00 task-start-501 lanzando (origen=humano) modelo=m esfuerzo=low ronda=1: "/task-start DEVKIT-500" log=/run/devkit/task-start-501.log
+2026-09-20T11:00:30-00:00 task-start-501 terminado: modelo=m esfuerzo=low ronda=1 costo=0.05 turnos=2 duracion=30s tokens: entrada=1 cache=1 salida=1 :: listo
+2026-09-20T11:30:00-00:00 pr-review-77-abc1234 lanzando (origen=bucle) modelo=fable esfuerzo=high ronda=1: "/pr-review 31" log=/run/devkit/pr-review-77.log
+2026-09-20T11:30:20-00:00 pr-review-77-abc1234 terminado: modelo=fable esfuerzo=high ronda=1 costo=0.20 turnos=4 duracion=20s :: CAMBIOS
+2026-09-20T11:40:00-00:00 task-close-31 terminado: bash, cerrado 15s después del merge :: cerrada
+FIN
+  local gh_contador_periodo
+  gh_contador_periodo="$tmp/gh-contador-periodo"
+  cat >"$gh_contador_periodo" <<FIN
+#!/usr/bin/env bash
+echo llamada >>"$costos_gh/gh-llamadas"
+FIN
+  chmod +x "$gh_contador_periodo"
+  check "costos_periodo suma el turno/costo de pr-review sin resolver su Clave" "6	0.2500" \
+    "$(DEVKIT_AHORA="$ahora_headless" GH_BIN="$gh_contador_periodo" COSTOS_LOG="$costos_gh/costos.log" costos_periodo | cut -f1,2)"
+  check "costos_periodo no llama a gh pese a filas pr-review/task-close en el historial" 0 \
+    "$(wc -l <"$costos_gh/gh-llamadas" 2>/dev/null || echo 0)"
 
   # Caché en `headless`: --estado muestra el consumo local en vez de "no se
   # pudo leer", con la etiqueta que aclara que no es la cuota del plan. La
