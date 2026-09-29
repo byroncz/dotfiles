@@ -2600,6 +2600,7 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
   done
   while read -r pid resto; do
     [ -n "$pid" ] || continue
+    case "$resto" in *" -p "*) ;; *) continue ;; esac
     local sin_prefijo=$resto ejecutable ejecutable_real
     # `timeout N cmd...` (la sonda de modelo y la lectura de cuota) bifurca:
     # el envoltorio queda en su propia fila de `ps` con el número de segundos
@@ -2612,7 +2613,6 @@ filas_sin_registro() {  # filas_sin_registro <procesos ps -eo pid=,args=> [promp
     [ -n "$ejecutable" ] || continue
     ejecutable_real=$(resolver_ejecutable "$ejecutable")
     [ -n "$bin_real" ] && [ "$ejecutable_real" = "$bin_real" ] || continue
-    case "$resto" in *" -p "*) ;; *) continue ;; esac
     case "$resto" in
       *" -p --model "*)
         # DEVKIT-247: el prompt viaja por stdin, no por argv, así que `ps` ya
