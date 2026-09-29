@@ -9603,8 +9603,9 @@ FIN
 
   # DEVKIT-256: en una tty, `--estado`/`--tablero` a secas entran en
   # seguimiento por defecto; `--foto` fuerza la foto única (lo que hacían
-  # antes sin bandera) y sin tty siempre es foto (ya cubierto arriba, sin
-  # cambios: la llamada de más arriba corre dentro de un pipe). `script`
+  # antes sin bandera) y sin tty siempre es foto -para `--estado` ya cubierto
+  # arriba, la llamada de más arriba corre dentro de un pipe; `--tablero` y
+  # `--estado --seguir` sin tty se cubren más abajo. `script`
   # (util-linux, ya en la imagen base) le da una tty real al subproceso para
   # que `[ -t 1 ]` la vea como tal; `timeout` lo corta a 1.5 s -antes del
   # primer refresco real a los 3/30 s- porque `seguir_estado`/`seguir_tablero`
@@ -9639,6 +9640,17 @@ FIN
     timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --foto" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --estado --foto imprime una sola vez" 0 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  # H2 (pr-review PR#150): que falte "Ctrl-C para salir" no basta -si el
+  # comando revienta y deja el archivo vacío, el check de arriba pasa igual-.
+  # Se comprueba también que trae la cabecera propia de la foto.
+  check "DEVKIT-256: tty simulada, --estado --foto trae la cabecera" si \
+    "$(grep -qE '^dk --estado  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  dk256_out="$dk256_tmp/estado-todo-tty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --estado --todo" "$dk256_out" </dev/null >/dev/null 2>&1
+  check "DEVKIT-256: tty simulada, --estado --todo también entra en seguimiento" 1 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
 
   dk256_out="$dk256_tmp/tablero-seguir.out"
   DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
@@ -9651,6 +9663,28 @@ FIN
     timeout 1.5 script -qc "bash '$HERE/devkit-run.sh' --tablero --foto" "$dk256_out" </dev/null >/dev/null 2>&1
   check "DEVKIT-256: tty simulada, --tablero --foto imprime una sola vez" 0 \
     "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: tty simulada, --tablero --foto trae la cabecera" si \
+    "$(grep -qE '^dk --tablero  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  # H2 (pr-review PR#150): sin tty, --tablero y --estado --seguir también
+  # deben quedar en una sola foto -antes solo estaba cubierto --estado a
+  # secas, línea arriba-. Sin `script` de por medio: el pipe ya hace que
+  # `[ -t 1 ]` sea falso.
+  dk256_out="$dk256_tmp/tablero-sintty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    bash "$HERE/devkit-run.sh" --tablero >"$dk256_out" 2>&1 </dev/null
+  check "DEVKIT-256: --tablero sin tty es una sola foto (sin Ctrl-C)" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: --tablero sin tty trae la cabecera de foto" si \
+    "$(grep -qE '^dk --tablero  .*[●*]' "$dk256_out" && echo si || echo no)"
+
+  dk256_out="$dk256_tmp/estado-seguir-sintty.out"
+  DEVKIT_RUN_DIR="$dk256_run" DEVKIT_WS="$dk256_tmp" \
+    bash "$HERE/devkit-run.sh" --estado --seguir >"$dk256_out" 2>&1 </dev/null
+  check "DEVKIT-256: --estado --seguir sin tty es una sola foto (sin Ctrl-C)" 0 \
+    "$(grep -cF 'Ctrl-C para salir' "$dk256_out")"
+  check "DEVKIT-256: --estado --seguir sin tty trae la cabecera de foto" si \
+    "$(grep -qE '^dk --estado  .*[●*]' "$dk256_out" && echo si || echo no)"
   rm -rf "$dk256_tmp"
 
   # --seguir <skill> <Clave> (DEVKIT-82): lanza igual que el uso normal y se
