@@ -8318,18 +8318,18 @@ FIN
   cat >"$pslist_reg" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-501 claude -p ok --model modelo-x --output-format json
-502 claude -p /usage --output-format json
-503 claude -p /pr-review 99 --model opus --effort high --output-format json
+501 $doble -p ok --model modelo-x --output-format json
+502 $doble -p /usage --output-format json
+503 $doble -p /pr-review 99 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_reg"
   local filas_reg
-  filas_reg=$(PS_BIN="$pslist_reg" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
+  filas_reg=$(PS_BIN="$pslist_reg" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$est/watch.log" "$ahora")
   check "sin registro: un claude -p sin línea lanzando aparece, uno solo" 1 \
     "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
   check "sin registro: el detalle trae el pid y el prompt" \
-    "claude -p vivo (pid 503) sin línea lanzando: /pr-review 99" \
+    "$doble -p vivo (pid 503) sin línea lanzando: /pr-review 99" \
     "$(printf '%s\n' "$filas_reg" | awk -F'\t' '$5 == "sin registro" {print $6}')"
   check "sin registro: la sonda de modelo (-p ok) no cuenta" 0 \
     "$(printf '%s\n' "$filas_reg" | grep -c 'pid 501')"
@@ -8381,18 +8381,18 @@ FIN
   cat >"$pslist_stdin" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-601 claude -p --model opus --effort high --output-format json
+601 $doble -p --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_stdin"
   log_stdin_sin="$tmp/sin-activos-watch.log"
   : >"$log_stdin_sin"
   local filas_stdin_sin
-  filas_stdin_sin=$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
+  filas_stdin_sin=$(PS_BIN="$pslist_stdin" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_stdin_sin" "$ahora")
   check "sin registro (DEVKIT-247, prompt por stdin): sin lanzamientos activos, aparece" 1 \
     "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
   check "sin registro (DEVKIT-247, prompt por stdin): el detalle nombra el pid, sin prompt" \
-    "claude -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
+    "$doble -p vivo (pid 601) sin línea lanzando (prompt por stdin)" \
     "$(printf '%s\n' "$filas_stdin_sin" | awk -F'\t' '$5 == "sin registro" {print $6}')"
 
   log_stdin_activo="$tmp/con-activo-watch.log"
@@ -8400,7 +8400,7 @@ FIN
   printf '%s task-fix-stdin lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-247" log=%s/task-fix-stdin.log\n' \
     "$(date -u -d "@$ahora" +%FT%TZ)" "$est" >"$log_stdin_activo"
   check "sin registro (DEVKIT-247, prompt por stdin): con un lanzamiento activo, no duplica la fila" 0 \
-    "$(PS_BIN="$pslist_stdin" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
+    "$(PS_BIN="$pslist_stdin" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_stdin_activo" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: un prompt de más de 120 caracteres queda cortado en la
@@ -8417,12 +8417,12 @@ FIN
   cat >"$pslist_largo" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-701 claude -p $prompt_largo --model opus --effort high --output-format json
+701 $doble -p $prompt_largo --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_largo"
   check "sin registro: un prompt de más de 120 caracteres no cae en sin registro" 0 \
-    "$(PS_BIN="$pslist_largo" LOCK="$est/skill.lock" estado_filas "$log_largo" "$ahora" \
+    "$(PS_BIN="$pslist_largo" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_largo" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: comillas en el prompt (un comentario humano puede traerlas)
@@ -8440,12 +8440,12 @@ FIN
   cat >"$pslist_comillas" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-702 claude -p $prompt_comillas --model opus --effort high --output-format json
+702 $doble -p $prompt_comillas --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_comillas"
   check "sin registro: un prompt con comillas normaliza igual que la línea lanzando" 0 \
-    "$(PS_BIN="$pslist_comillas" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
+    "$(PS_BIN="$pslist_comillas" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_comillas" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H10: un comentario humano que trae " --" (por ejemplo "no uses
@@ -8465,12 +8465,12 @@ FIN
   cat >"$pslist_guiones" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-703 claude -p $prompt_guiones --model opus --effort high --output-format json
+703 $doble -p $prompt_guiones --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_guiones"
   check "sin registro: un comentario humano con -- no se corta ahí" 0 \
-    "$(PS_BIN="$pslist_guiones" LOCK="$est/skill.lock" estado_filas "$log_guiones" "$ahora" \
+    "$(PS_BIN="$pslist_guiones" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_guiones" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H2: un lanzamiento fuera de la cola visible (ESTADO_FILAS, 20
@@ -8491,12 +8491,12 @@ FIN
   cat >"$pslist_cola" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-801 claude -p /task-fix DEVKIT-77 --model opus --effort high --output-format json
+801 $doble -p /task-fix DEVKIT-77 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_cola"
   check "sin registro: un lanzamiento fuera de la cola visible sigue contando como activo" 0 \
-    "$(PS_BIN="$pslist_cola" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
+    "$(PS_BIN="$pslist_cola" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_cola" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-97 (ampliación del 17:11 sobre DEVKIT-94): desde DEVKIT-90,
@@ -8522,12 +8522,12 @@ FIN
 #!/usr/bin/env bash
 cat <<TABLA
 701 bash devkit-run.sh --worker /task-start DEVKIT-94 $est/task-start-94.log opus high 40
-801 claude -p $prompt_card --model opus --effort high --output-format json
+801 $doble -p $prompt_card --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_card"
   local filas_card
-  filas_card=$(PS_BIN="$pslist_card" LOCK="$est/skill.lock" estado_filas "$log_card" "$ahora")
+  filas_card=$(PS_BIN="$pslist_card" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_card" "$ahora")
   check "task-start con la card completa en ps: una sola fila, sin sin registro" "1|0" \
     "$(printf '%s\n' "$filas_card" | awk -F'\t' '$2 == "DEVKIT-94" {c++} $5 == "sin registro" {s++} END{print (c+0)"|"(s+0)}')"
   check "task-start con la card completa en ps: la fila queda en curso" "en curso" \
@@ -8547,12 +8547,12 @@ FIN
   cat >"$pslist_repetido" <<FIN
 #!/usr/bin/env bash
 cat <<TABLA
-901 claude -p /pr-review 58 --model opus --effort high --output-format json
+901 $doble -p /pr-review 58 --model opus --effort high --output-format json
 TABLA
 FIN
   chmod +x "$pslist_repetido"
   check "sin registro: un lanzamiento ya terminado no cubre un claude -p vivo que repite su prompt" 1 \
-    "$(PS_BIN="$pslist_repetido" LOCK="$est/skill.lock" estado_filas "$log_repetido" "$ahora" \
+    "$(PS_BIN="$pslist_repetido" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_repetido" "$ahora" \
         | awk -F'\t' '$5 == "sin registro"' | wc -l | tr -d ' ')"
 
   # DEVKIT-81 H6: `lanzamientos()` filtra primero con `grep -nF` antes del
@@ -8832,12 +8832,12 @@ FIN
 #!/usr/bin/env bash
 cat <<TABLA
 701 bash devkit-run.sh --worker /task-fix DEVKIT-155 $logf_origen opus high 40
-702 claude -p /task-fix DEVKIT-155 --model opus --effort high --output-format json
+702 $doble -p /task-fix DEVKIT-155 --model opus --effort high --output-format json
 TABLA
 FIN
     chmod +x "$pslist_origen"
     check "origen $origen_prueba: en curso con su origen, sin sin registro" "en curso|$origen_prueba|0" \
-      "$(PS_BIN="$pslist_origen" LOCK="$est/skill.lock" estado_filas "$log_origen" "$ahora" \
+      "$(PS_BIN="$pslist_origen" CLAUDE_BIN="$doble" LOCK="$est/skill.lock" estado_filas "$log_origen" "$ahora" \
           | awk -F'\t' -v c=DEVKIT-155 'BEGIN{estado="";origen="";sr=0} $2==c{estado=$5;origen=$3} $5=="sin registro"{sr++} END{print estado"|"origen"|"sr}')"
   done
 
