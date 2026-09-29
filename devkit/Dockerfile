@@ -124,8 +124,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # aquí ya fijas, como "ns.ext=versión" separadas por espacio: nunca "latest" a
 # esta altura, y nunca una extensión a mano en el contenedor. Por cada una se
 # prueba primero el paquete de su plataforma (Open VSX no publica todas así)
-# y, si no existe, el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
-# (redirección de descarga) van en `domains` de .devkit/devkit.toml.
+# y, si no existe, el universal. El build baja los paquetes con la red del
+# host, no por el proxy en vivo del contenedor: `open-vsx.org` y
+# `openvsx.eclipsecontent.org` (redirección de descarga) solo hacen falta en
+# `domains` de .devkit/devkit.toml si se quiere Open VSX en vivo, no para el
+# build.
 # --retry reintenta un 5xx de Open VSX (un 404 del paquete de plataforma no
 # es un error transitorio, así que cae al universal sin reintentar).
 # --retry-all-errors va solo en el paquete universal: ahí un corte de
@@ -135,10 +138,10 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # reintentando en vano antes de caer al universal.
 # Al final se comprueba que cada id de EXTENSIONS quedó instalado en la
 # versión declarada, y que cada extensionDependencies de lo instalado también
-# está en la lista: esta descarga es directa contra Open VSX y no pasa por
-# extensionsGallery de product.json (quitada después de este bloque,
-# DEVKIT-260, para no perder esas dependencias; ver el comentario de ese
-# RUN), pero conviene que el build note si algo se queda sin su dependencia.
+# está en la lista: el .vsix declarado se baja directo de Open VSX, pero sus
+# extensionDependencies se resuelven por extensionsGallery de product.json
+# (quitada después de este bloque, DEVKIT-260, para no perder esas
+# dependencias; ver el comentario de ese RUN).
 # ARG EXTENSIONS se declara aquí, no arriba con los demás: Docker mete todo
 # ARG en el entorno de cada RUN posterior a su declaración, así que si
 # viviera arriba, cada versión nueva de una extensión invalidaría la caché
