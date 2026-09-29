@@ -1234,8 +1234,10 @@ leer_cuota() {  # leer_cuota -> "sesion_pct<TAB>sesion_reset<TAB>semana_pct<TAB>
 # `fail`: no es un fallo pasajero que valga la pena reintentar -en modo
 # headless `/usage` nunca va a traer el porcentaje-, así que `mostrar_consumo`
 # deja de llamar a esta función mientras la caché diga `headless`, y el
-# `claude -p` deja de lanzarse hasta el siguiente arranque del monitor (que
-# limpia RUN_DIR y con él CUOTA_CACHE).
+# `claude -p` deja de lanzarse hasta que se reinicia el contenedor (H8 de
+# pr-review en el PR#142: RUN_DIR vive en tmpfs, así que CUOTA_CACHE no
+# sobrevive a un `devkit recreate`, pero el arranque del monitor no la limpia
+# por su cuenta).
 refrescar_cuota_bg() {
   (
     mkdir -p "$(dirname "$CUOTA_CACHE")" 2>/dev/null
