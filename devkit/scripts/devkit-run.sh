@@ -33,7 +33,10 @@
 #     esa fila (DEVKIT-134, DEVKIT-156: el owner/repo real de `gh repo view`,
 #     cacheado; "-" sin PR todavía, el caso de task-start) -en una TTY es un
 #     hipervínculo OSC 8 al PR completo, se abre con Ctrl/Cmd+clic sin ocupar
-#     el ancho de la URL entera-, quién lanzó, hace cuánto, cuánto duró (DURÓ:
+#     el ancho de la URL entera; en la terminal integrada del editor
+#     (TERM_PROGRAM=vscode, DEVKIT-229) es "#<número>" en texto plano y el
+#     clic lo resuelve la extensión devkit.devkit-links, que abre el PR en el
+#     webview de GitHub Pull Requests-, quién lanzó, hace cuánto, cuánto duró (DURÓ:
 #     `duracion=` de la línea terminado, o el tiempo desde "lanzando" mientras
 #     sigue en curso, DEVKIT-107), estado (en curso, terminó, error, bloqueada,
 #     no arrancó, no lanzó -un rc=3 de review-prep.sh o task-begin.sh, "nada
@@ -53,8 +56,10 @@
 #   devkit-run --tablero [--seguir]
 #     Cards activas del proyecto (Lista, En progreso, Revisión automática,
 #     Lista para merge, Bloqueada) en una tabla de consola: Clave, Estado,
-#     Tipo, PR ("#<número>" con el mismo hipervínculo OSC 8 en una TTY que
-#     `--estado`, DEVKIT-156) y "bloquea a" (columna de DEVKIT-63), agrupadas
+#     Tipo, PR ("#<número>" con el mismo hipervínculo OSC 8 en una TTY, o en
+#     texto plano abierto por devkit.devkit-links en la terminal integrada,
+#     que `--estado`, DEVKIT-156/DEVKIT-229) y "bloquea a" (columna de
+#     DEVKIT-63), agrupadas
 #     por Épica de origen cuando hay más de una Épica En progreso (DEVKIT-80).
 #     Una sola consulta a Notion por refresco (DEVKIT-82). `--seguir` la
 #     refresca cada 30 s, no 3, para no gastar el límite de peticiones de Notion.
@@ -2905,6 +2910,18 @@ enlazar_rango() {  # enlazar_rango <fila> <inicio> <largo> <url>
   printf '%s%s%s%s%s' "${fila:0:inicio}" "$abre" "${fila:inicio:visible}" "$cierra" "${fila:$((inicio + visible))}"
 }
 
+# TERM_PROGRAM=vscode (DEVKIT-229): la terminal integrada de openvscode-
+# server. Ahí el hipervínculo OSC 8 de `enlazar_rango` no se puede abrir -el
+# navegador no sabe resolver el esquema openvscode-server://, ver la
+# investigación de la card en Notion-, así que la columna PR entrega
+# "#<número>" en texto plano y deja que la extensión devkit.devkit-links (un
+# TerminalLinkProvider, ver devkit/vscode/devkit-links/) lo intercepte y abra
+# el PR en el webview de GitHub Pull Requests. Fuera de esa terminal (iTerm,
+# Terminal, tmux) el comportamiento no cambia.
+terminal_ide() {
+  [ "${TERM_PROGRAM:-}" = vscode ]
+}
+
 # Iconos y color de `--estado`/`--tablero` (DEVKIT-106): un vistazo sin leer
 # texto. Sin UTF-8 declarada en LANG/LC_ALL caen a un respaldo ASCII de un
 # carácter -bash cuenta bytes, no caracteres, fuera de una locale UTF-8, y un
@@ -3269,8 +3286,11 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     case "$color" in *-negrita) fila=$(pintar_rango "$fila" "$off_estado" "$ANCHO_ESTADO" "$color") ;; esac
     # PR (DEVKIT-156): el hipervínculo OSC 8 con la URL completa. Va antes de
     # SKILL y del icono, cuyos `off_*` son menores (ver el comentario de
-    # `enlazar_rango`).
-    [ "$pr_texto" = - ] || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
+    # `enlazar_rango`). Salvo en la terminal integrada (DEVKIT-229,
+    # `terminal_ide`): ahí "#<número>" queda en texto plano, para que lo
+    # tome la extensión devkit.devkit-links en vez de un enlace que el
+    # navegador no sabe abrir.
+    { [ "$pr_texto" = - ] || terminal_ide; } || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
     # SKILL en negrita para task-start (DEVKIT-134): distingue de un vistazo
     # la fila que abre una card de la que la continúa.
     [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
@@ -3812,11 +3832,13 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
   # PR (DEVKIT-156): "#<número>" envuelto en el hipervínculo OSC 8 a la URL
   # completa que trae Notion, igual que `formatear_fila`. <prefijo> mide su
   # ancho ya armado -no una suma de constantes- porque `estado_col` puede
-  # traer el color de arriba adentro, con sus propios bytes ANSI.
+  # traer el color de arriba adentro, con sus propios bytes ANSI. Salvo en la
+  # terminal integrada (DEVKIT-229, `terminal_ide`): mismo motivo que en
+  # `formatear_fila`.
   if [ "$pr" = - ]; then pr_texto=-; else pr_texto="#${pr##*/}"; fi
   prefijo="$(rellenar "$clave" 12)$estado_col$(rellenar "$tipo" 10)"
   fila="$prefijo$(rellenar "$pr_texto" "$ANCHO_PR")${frena#bloquea a: }"
-  if [ "$color_habilitado" = 1 ] && [ "$pr_texto" != - ]; then
+  if [ "$color_habilitado" = 1 ] && [ "$pr_texto" != - ] && ! terminal_ide; then
     fila=$(enlazar_rango "$fila" "${#prefijo}" "$ANCHO_PR" "$pr")
   fi
   printf '%s\n' "$fila"
@@ -7688,7 +7710,10 @@ FIN
   local abre_156 cierra_156 fila_con_pr_156_tty fila_con_pr_156_sin_osc
   abre_156=$'\033]8;;'"$pr_url_156"$'\033\\'
   cierra_156=$'\033]8;;\033\\'
-  fila_con_pr_156_tty=$(COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_156" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
+  # TERM_PROGRAM= explícito (no heredado): estos casos prueban la rama que
+  # SÍ lleva OSC 8, y --test puede correr dentro de la propia terminal
+  # integrada del editor (DEVKIT-229) en un `task-start` real.
+  fila_con_pr_156_tty=$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_156" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
   check "columna PR con TTY: trae el hipervínculo OSC 8 con la URL completa" si \
     "$([[ "$fila_con_pr_156_tty" == *"$abre_156"* ]] && echo si || echo no)"
   fila_con_pr_156_sin_osc=${fila_con_pr_156_tty//"$abre_156"/}
@@ -7697,10 +7722,23 @@ FIN
   check "columna PR con TTY: el texto visible mide lo mismo que sin el enlace" \
     "${#fila_con_pr_134}" "${#fila_con_pr_156_sin_osc}"
   check "columna PR sin PR (task-start) con TTY: sin la secuencia OSC 8" no \
-    "$(COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 1 \
+    "$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 1 \
         | { [[ "$(cat)" == *$'\033]8;;'* ]] && echo si || echo no; })"
+
+  # DEVKIT-229: en la terminal integrada (TERM_PROGRAM=vscode) la columna PR
+  # no lleva el hipervínculo OSC 8 aunque haya TTY (color_habilitado=1) -el
+  # navegador no sabe abrir openvscode-server://-, sino "#<número>" en texto
+  # plano, igual que sin TTY, para que lo tome devkit.devkit-links.
+  local fila_con_pr_229_tty
+  fila_con_pr_229_tty=$(TERM_PROGRAM=vscode COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_156" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
+  check "columna PR con TTY en la terminal integrada: sin la secuencia OSC 8" no \
+    "$([[ "$fila_con_pr_229_tty" == *$'\033]8;;'* ]] && echo si || echo no)"
+  check "columna PR con TTY en la terminal integrada: #<número> en texto plano" \
+    "$(rellenar '#41' "$ANCHO_PR")" \
+    "${fila_con_pr_229_tty:$off_pr_134:$ANCHO_PR}"
+
   unset off_pr_134 pr_url_156 fila_con_pr_134 fila_sin_pr_134 abre_156 cierra_156 \
-    fila_con_pr_156_tty fila_con_pr_156_sin_osc
+    fila_con_pr_156_tty fila_con_pr_156_sin_osc fila_con_pr_229_tty
 
   # DEVKIT-156 H1: con PR y un ESTADO en negrita ("Lista para merge") a la
   # vez, cada envoltorio debe ir de <inicio> mayor a menor -si no, el
@@ -7708,7 +7746,7 @@ FIN
   # `enlazar_rango` y el enlace sale corrupto.
   local pr_url_156h1 fila_pr_estado_156h1
   pr_url_156h1="https://github.com/o/r/pull/41"
-  fila_pr_estado_156h1=$(COLUMNS=200 formatear_fila pr-review DEVKIT-12 "$pr_url_156h1" humano 5m 5m "Lista para merge" opus/high 3/60 - 0 1 1)
+  fila_pr_estado_156h1=$(TERM_PROGRAM= COLUMNS=200 formatear_fila pr-review DEVKIT-12 "$pr_url_156h1" humano 5m 5m "Lista para merge" opus/high 3/60 - 0 1 1)
   check "PR + ESTADO en negrita con TTY: la apertura OSC 8 llega intacta" si \
     "$([[ "$fila_pr_estado_156h1" == *$'\033]8;;'"$pr_url_156h1"$'\033\\'* ]] && echo si || echo no)"
   # El texto de ESTADO envuelto por completo (código, relleno y reset) tiene
@@ -9308,7 +9346,9 @@ FIN
   check "--tablero sin TTY: columna PR sin la secuencia OSC 8" no \
     "$([[ "$salida_tablero" == *$'\033]8;;'* ]] && echo si || echo no)"
   local salida_tablero_tty
-  salida_tablero_tty=$(LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+  # TERM_PROGRAM= explícito, mismo motivo que en `formatear_fila` más arriba:
+  # este caso prueba la rama que SÍ lleva OSC 8.
+  salida_tablero_tty=$(TERM_PROGRAM= LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
     BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
     EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
     mostrar_tablero 0 1 1)
@@ -9318,6 +9358,19 @@ FIN
   check "--tablero con TTY: DEVKIT-57 sin PR sigue sin secuencia OSC 8" no \
     "$(printf '%s\n' "$salida_tablero_tty" | grep 'DEVKIT-57' | grep -qF $'\033]8;;' && echo si || echo no)"
   unset salida_tablero_tty
+
+  # DEVKIT-229: en la terminal integrada, --tablero tampoco envuelve la
+  # columna PR en OSC 8 aunque haya TTY, igual que --estado.
+  local salida_tablero_229
+  salida_tablero_229=$(TERM_PROGRAM=vscode LC_ALL=C.UTF-8 NOTION_BIN="$notion_tablero" WS="$tablero_ws" \
+    BLOQUEOS_CACHE="$tablero_bloq/bloqueos.cache" BLOQUEOS_LOCK="$tablero_bloq/bloqueos.lock" \
+    EPICAS_CACHE="$tablero_epic/epicas.cache" EPICAS_LOCK="$tablero_epic/epicas.lock" \
+    mostrar_tablero 0 1 1)
+  check "--tablero con TTY en la terminal integrada: sin la secuencia OSC 8" no \
+    "$([[ "$salida_tablero_229" == *$'\033]8;;'* ]] && echo si || echo no)"
+  check "--tablero con TTY en la terminal integrada: columna PR sigue en #<número>" si \
+    "$(printf '%s\n' "$salida_tablero_229" | grep 'DEVKIT-58' | grep -qF '#9' && echo si || echo no)"
+  unset salida_tablero_229
 
   # H1 (pr-review sobre DEVKIT-82): con las cachés de bloqueos/epicas vacías
   # -contenedor recién arrancado, sin ningún `--estado` previo-, `--tablero`

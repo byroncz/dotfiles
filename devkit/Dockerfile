@@ -202,15 +202,27 @@ RUN DEVKIT_GEN_CHEATSHEET_SALIDA="$HOME/.openvscode-server/extensions/devkit.che
     DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_CLARO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-light.svg" \
     DEVKIT_GEN_CHEATSHEET_SALIDA_SVG_OSCURO="$HOME/.openvscode-server/extensions/devkit.cheatsheet-0.1.0/cheatsheet-dark.svg" \
     bash /opt/devkit/scripts/gen-cheatsheet.sh --check
+
+# Enlaces del monitor en el IDE (DEVKIT-229): misma idea que devkit.cheatsheet
+# de arriba -extensión local, sin empaquetar ni Open VSX
+# (devkit/vscode/devkit-links/), copiada tal cual a la carpeta de
+# extensiones-. Registra un TerminalLinkProvider que abre el PR de la columna
+# PR del monitor (`dk --estado`/`--tablero`) en el webview de GitHub Pull
+# Requests en vez de una pestaña nueva del navegador: un hipervínculo OSC 8
+# (DEVKIT-156) no se puede abrir desde la terminal integrada, ver la
+# investigación de la card en Notion.
+COPY --chown=${USER_UID}:${USER_GID} vscode/devkit-links/ /home/${USERNAME}/.openvscode-server/extensions/devkit.devkit-links-0.1.0/
+
 # Desde VS Code 1.80, extensions.json (ya escrito por el --install-extension
 # de más arriba) es el manifiesto autoritativo de qué extensiones carga
 # openvscode-server: una carpeta copiada a mano después no aparece ahí y
 # queda en disco pero invisible para el editor. Se borra para forzar un
 # reescaneo del directorio completo; el grep corta el build si el reescaneo
-# no deja la extensión listada.
+# no deja alguna de las dos extensiones locales listada.
 RUN rm -f "$HOME/.openvscode-server/extensions/extensions.json" \
- && openvscode-server --list-extensions --extensions-dir "$HOME/.openvscode-server/extensions" \
-    | grep -qx devkit.cheatsheet
+ && lista_extensiones="$(openvscode-server --list-extensions --extensions-dir "$HOME/.openvscode-server/extensions")" \
+ && echo "$lista_extensiones" | grep -qx devkit.cheatsheet \
+ && echo "$lista_extensiones" | grep -qx devkit.devkit-links
 
 # Marca de agua del editor vacío (DEVKIT-143): el editor sin pestañas pinta
 # un div.letterpress con el logo de openvscode-server como fondo; no hay API

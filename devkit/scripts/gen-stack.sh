@@ -72,6 +72,13 @@ version_de() {  # version_de <id> <Dockerfile> <proxy_dockerfile>
       printf 'alpine %s' "$valor" ;;
     uv) arg_valor "$2" UV_VERSION ;;
     openvscode) arg_valor "$2" OPENVSCODE_VERSION ;;
+    devkit-links)
+      valor="$(grep -oE 'devkit\.devkit-links-[0-9]+\.[0-9]+\.[0-9]+' "$2" | head -1 | sed 's/^devkit\.devkit-links-//')"
+      if [ -z "$valor" ]; then
+        echo "gen-stack.sh: $2 no tiene una ruta devkit.devkit-links-<versión>" >&2
+        return 1
+      fi
+      printf '%s' "$valor" ;;
     zsh)
       valor="$(arg_valor "$2" STARSHIP_VERSION)" || return 1
       printf 'starship %s' "$valor" ;;
@@ -185,6 +192,17 @@ if [ "${1:-}" = "--test" ]; then
 | Debian | Base sin lenguaje. | — |'
   check "BASE_IMAGE sin etiqueta muestra — en vez de un dato falso (H6)" "$esperado" \
     "$(tabla "$tmp/stack-debian.tsv" "$tmp/Dockerfile-sin-tag" "$tmp/proxy-Dockerfile")"
+
+  # DEVKIT-229: devkit-links toma su versión de la ruta
+  # devkit.devkit-links-<versión> del Dockerfile, no de un ARG -es una
+  # extensión local, sin Open VSX, igual que devkit.cheatsheet-.
+  printf 'COPY vscode/devkit-links/ /home/dev/.openvscode-server/extensions/devkit.devkit-links-0.1.0/\n' \
+    > "$tmp/Dockerfile-devkit-links"
+  check "devkit-links: versión desde la ruta devkit.devkit-links-<versión>" "0.1.0" \
+    "$(version_de devkit-links "$tmp/Dockerfile-devkit-links" "$tmp/proxy-Dockerfile")"
+  printf 'FROM debian:trixie-slim\n' > "$tmp/Dockerfile-sin-devkit-links"
+  version_de devkit-links "$tmp/Dockerfile-sin-devkit-links" "$tmp/proxy-Dockerfile" >/dev/null 2>&1
+  check "devkit-links: sin la ruta en el Dockerfile, falla en vez de quedar en blanco" 1 "$?"
 
   exit $fail
 fi
