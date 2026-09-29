@@ -1395,6 +1395,30 @@ FIN
   [ "$vivos" = 0 ] || pkill -f -- "^/bin/bash $SHIM" 2>/dev/null
   check "shim: ninguna petición con cookies deja un shim vivo" "0" "$vivos"
 
+  # DEVKIT-264: con EXEC a secas (socketpair) y socat 1.8.1.3 (alpine, OrbStack)
+  # el socat interno del shim no lee la petición hasta que el cliente cierra la
+  # conexión, y el navegador nunca la cierra: la pestaña queda cargando. En
+  # Ubuntu (socat 1.8.0.x) con socketpair pasa, así que ningún caso de arriba
+  # lo vio: curl y `printf | socat` cierran su lado de escritura al terminar de
+  # enviar. Este caso es el único que lo atrapa. Lanza el shim con la misma
+  # línea de socat que devkit/proxy/entrypoint.sh (,pipes incluido: NO se quita
+  # por "redundante", falla en OrbStack) y un cliente que envía GET y mantiene
+  # la conexión abierta 3 s; la respuesta debe llegar en menos de 2 s. Usa un
+  # asset y no la raíz: el doble de dev espera 1,5 s antes de responder la
+  # raíz, y eso dejaría poco margen sobre el umbral.
+  prod_port=$((base + 4))
+  env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$dev_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \
+    socat TCP-LISTEN:$prod_port,fork,reuseaddr,bind=0.0.0.0 EXEC:$SHIM,pipes >"$sw/shim_prod.log" 2>&1 & shim_pids+=("$!")
+  sleep 0.3
+  rm -f "$sw/abierta.out"
+  ( printf 'GET /assets/foo.js HTTP/1.1\r\nHost: x\r\n\r\n'; sleep 3 ) \
+    | socat -t 1 - TCP:127.0.0.1:$prod_port | head -n 1 > "$sw/abierta.out" &
+  abierta_pid=$!
+  for _ in $(seq 20); do [ -s "$sw/abierta.out" ] && break; sleep 0.1; done
+  check "shim: responde con la conexión del cliente abierta (<2 s)" "HTTP/1.1 200 OK" \
+    "$(tr -d '\r' < "$sw/abierta.out")"
+  wait "$abierta_pid" 2>/dev/null
+
   # Recreate (proxy y dev, sin volumen propio): otro shim y otro endpoint de
   # dígesto, mismo token en dev, misma clave. Prueba que se deriva de nuevo y
   # no se cachea (DEVKIT-259).

@@ -25,5 +25,8 @@ socat TCP-LISTEN:45454,fork,reuseaddr TCP:dev:45454 &
 # (DEVKIT-259). El shim habla HTTP y WebSocket, agrega la cookie del
 # almacén de secretos en la respuesta de la raíz y responde
 # POST /devkit/secret-key sin llegar a dev; todo lo demás pasa crudo.
-socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 EXEC:/opt/devkit/proxy-shim.sh &
+# ,pipes y no el socketpair por defecto de EXEC: con socat 1.8.1.3 (alpine) el
+# socat interno del shim no lee la petición hasta que el navegador cierra la
+# conexión, y la pestaña queda cargando para siempre (DEVKIT-264).
+socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 EXEC:/opt/devkit/proxy-shim.sh,pipes &
 exec tinyproxy -d -c "$conf"
