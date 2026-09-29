@@ -1,0 +1,19 @@
+{
+  "name": "devkit-links",
+  "displayName": "devkit: enlaces del monitor",
+  "description": "Abre el PR de la columna PR del monitor (dk --estado/--tablero) en el webview de GitHub Pull Requests, sin pestaña nueva, cuando un hipervínculo OSC 8 no sirve en la terminal integrada.",
+  "publisher": "devkit",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ]
+}
