@@ -1,9 +1,9 @@
 # devkit: proxy de salida con lista blanca. Único contenedor con acceso a
 # internet; el contenedor de trabajo solo puede hablar con él.
 FROM alpine:3.22
-# bash: el shim del editor (DEVKIT-259) necesita `read -u` sobre un fd
-# explícito y expansión de subcadena (`${var:i:n}`), que busybox ash no
-# tiene. Alpine no la trae por defecto.
+# bash: el shim del editor (DEVKIT-259) necesita arreglos, `+=`, `$'\r'` y
+# expansión hexadecimal (`16#...`), que busybox ash no tiene. Alpine no la
+# trae por defecto.
 RUN apk add --no-cache tinyproxy socat bash \
  && mkdir -p /var/log/tinyproxy \
  && chown tinyproxy:tinyproxy /var/log/tinyproxy

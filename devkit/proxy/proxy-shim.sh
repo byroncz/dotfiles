@@ -18,11 +18,10 @@
 #     se deriva de nuevo cada vez, así que sobrevive a un proxy recién
 #     recreado sin volumen propio.
 #
-# Para que el editor reutilice la MISMA clave entre reinicios, cada request
-# que no sea el especial de arriba se fuerza a "Connection: close" (salvo un
-# upgrade de WebSocket, que debe seguir vivo): así cada conexión de este
-# script atiende una sola petición y nunca hay que reconocer una segunda
-# dentro del mismo socket, que este parser de línea no soporta.
+# Cada request que no sea el especial de arriba se fuerza a "Connection:
+# close" (salvo un upgrade de WebSocket, que debe seguir vivo): este parser
+# de línea solo reconoce una petición por conexión, así que forzar el cierre
+# evita tener que interpretar una segunda petición dentro del mismo socket.
 set -u
 UPSTREAM_HOST="${DEVKIT_SHIM_UPSTREAM:-dev}"
 UPSTREAM_PORT="${DEVKIT_SHIM_UPSTREAM_PORT:-3001}"
