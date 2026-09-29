@@ -36,13 +36,16 @@ OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
 estado del editor VS Code del lado del servidor (estado de las extensiones,
 perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
-sí: esas vienen en la imagen, así que una que instales a mano desde el editor
-no sobrevive al `devkit rebuild`. Para que sí sobreviva, declárala en
-`extensions` de `.devkit/devkit.toml` (se suma a las del template, por
-ejemplo `extensions = ["GitHub.vscode-github-actions",
-"ms-python.python@2026.2.0"]`) y corre `devkit recreate`. `devkit down` no
-borra el volumen, igual que
-al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
+sí: esas vienen en la imagen. La vista de Extensiones no tiene tienda en
+vivo: el build baja las extensiones con la red del host, pero el proxy en
+vivo del contenedor solo deja pasar lo que está en `allowlist.base` más
+`domains` de `.devkit/devkit.toml`, así que buscar ahí solo muestra el aviso
+nativo de que no hay galería configurada, sin botón "Instalar". Para sumar
+una, declárala en `extensions` de `.devkit/devkit.toml` (se suma a las del
+template, por ejemplo `extensions = ["ms-python.python"]`) y corre
+`devkit rebuild <proyecto>`, el camino que documenta la chuleta para sumar
+una extensión. `devkit down` no borra el volumen, igual que al resto de los
+volúmenes con nombre; para reiniciarlo desde cero hace falta
 `docker volume rm editor-<proyecto>`.
 
 ## Stack
@@ -86,7 +89,10 @@ Detalle y convenciones de cada transición:
   `extensions` en `.devkit/devkit.toml` (por ejemplo `extensions =
   ["GitHub.vscode-github-actions", "ms-python.python@2026.2.0"]`, sin
   versión resuelve a la más reciente), y si un id se repite gana la del
-  proyecto. Todas se resuelven contra Open VSX al construir la imagen.
+  proyecto. Todas se resuelven contra Open VSX al construir la imagen, nunca
+  desde el editor en vivo: `product.json` no trae `extensionsGallery`, así
+  que la vista de Extensiones no ofrece una tienda que el proxy no dejaría
+  usar.
 
 ## Documentación
 

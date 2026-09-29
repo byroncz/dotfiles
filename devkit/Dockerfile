@@ -124,8 +124,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # aquí ya fijas, como "ns.ext=versión" separadas por espacio: nunca "latest" a
 # esta altura, y nunca una extensión a mano en el contenedor. Por cada una se
 # prueba primero el paquete de su plataforma (Open VSX no publica todas así)
-# y, si no existe, el universal. Dominios `open-vsx.org` y `openvsx.eclipsecontent.org`
-# (redirección de descarga) van en `domains` de .devkit/devkit.toml.
+# y, si no existe, el universal. El build baja los paquetes con la red del
+# host, no por el proxy en vivo del contenedor: `open-vsx.org` y
+# `openvsx.eclipsecontent.org` (redirección de descarga) solo hacen falta en
+# `domains` de .devkit/devkit.toml si se quiere Open VSX en vivo, no para el
+# build.
 # --retry reintenta un 5xx de Open VSX (un 404 del paquete de plataforma no
 # es un error transitorio, así que cae al universal sin reintentar).
 # --retry-all-errors va solo en el paquete universal: ahí un corte de
@@ -133,6 +136,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
 # alternativas (DEVKIT-73: un 503 intermitente de Open VSX tumbó un build a
 # medias); en el paquete de plataforma dejaría al 404 esperado
 # reintentando en vano antes de caer al universal.
+# Al final se comprueba que cada id de EXTENSIONS quedó instalado en la
+# versión declarada, y que cada extensionDependencies de lo instalado también
+# está en la lista: el .vsix declarado se baja directo de Open VSX, pero sus
+# extensionDependencies se resuelven por extensionsGallery de product.json
+# (quitada después de este bloque, DEVKIT-260, para no perder esas
+# dependencias; ver el comentario de ese RUN).
 # ARG EXTENSIONS se declara aquí, no arriba con los demás: Docker mete todo
 # ARG en el entorno de cada RUN posterior a su declaración, así que si
 # viviera arriba, cada versión nueva de una extensión invalidaría la caché
@@ -156,8 +165,52 @@ RUN set -eux; \
         --extensions-dir "$HOME/.openvscode-server/extensions"; \
       rm -f /tmp/ext.vsix; \
     done; \
-    openvscode-server --list-extensions --show-versions \
-      --extensions-dir "$HOME/.openvscode-server/extensions"
+    lista="$(openvscode-server --list-extensions --show-versions \
+      --extensions-dir "$HOME/.openvscode-server/extensions")"; \
+    echo "$lista"; \
+    for entry in ${EXTENSIONS}; do \
+      id="${entry%%=*}"; version="${entry#*=}"; \
+      entry_regex="$(printf '%s@%s' "$id" "$version" | sed 's/\./\\./g')"; \
+      echo "$lista" | grep -qi "^${entry_regex}$" \
+        || { echo "extensión declarada $id no quedó instalada en la versión $version" >&2; exit 1; }; \
+    done; \
+    integradas="$(jq -r '"\(.publisher).\(.name)"' \
+      /opt/openvscode-server/extensions/*/package.json 2>/dev/null)"; \
+    for pkg in "$HOME/.openvscode-server/extensions"/*/package.json; do \
+      [ -f "$pkg" ] || continue; \
+      for dep in $(jq -r '(.extensionDependencies // [])[]' "$pkg" 2>/dev/null); do \
+        dep_regex="$(printf '%s' "$dep" | sed 's/\./\\./g')"; \
+        { echo "$lista" | grep -qi "^${dep_regex}@"; } \
+          || { echo "$integradas" | grep -qix "$dep"; } \
+          || { echo "dependencia $dep de $(basename "$(dirname "$pkg")") no quedó instalada" >&2; exit 1; }; \
+      done; \
+    done
+
+# --- Editor sin tienda de extensiones (DEVKIT-260) --------------------------
+# product.json trae de fábrica extensionsGallery apuntando a Open VSX
+# (https://open-vsx.org/vscode/gallery); el build sí lo alcanza porque baja
+# con la red del host, pero el proxy en vivo del contenedor solo deja pasar
+# lo que está en `allowlist.base` más `domains` de .devkit/devkit.toml: buscar
+# una extensión desde la vista de Extensiones y pulsar "Instalar" no descarga
+# nada ni avisa del error. Se quita la clave para que VS Code muestre en su
+# lugar el aviso nativo de que no hay galería configurada.
+# Va después de instalar EXTENSIONS (arriba), no antes: con la galería ya
+# apagada, `--install-extension` no resuelve extensionDependencies ni
+# extensionPack (getAllDepsAndPackExtensions devuelve [] si la galería está
+# deshabilitada), así que quitarla antes dejaría instaladas las extensiones
+# sin sus dependencias. Las extensiones siguen entrando por `extensions` de
+# .devkit/devkit.toml (o extensions.toml del template) más
+# `devkit rebuild <proyecto>`, que instala directo desde Open VSX (arriba)
+# sin pasar por product.json. El `jq -e 'has(...)'` antes de borrar corta el
+# build si una versión nueva de openvscode-server ya no trae la clave, en
+# vez de dejar un `del` sobre algo que ya no está sin que nadie lo note.
+# product.json es de root; USER $USERNAME (arriba) no puede escribirlo.
+USER root
+RUN jq -e 'has("extensionsGallery")' /opt/openvscode-server/product.json >/dev/null \
+ && jq 'del(.extensionsGallery)' /opt/openvscode-server/product.json > /tmp/product.json \
+ && mv /tmp/product.json /opt/openvscode-server/product.json \
+ && ! jq -e 'has("extensionsGallery")' /opt/openvscode-server/product.json >/dev/null
+USER $USERNAME
 
 # --- Herramientas de Python para el editor ---------------------------------
 # Un Python fijo solo para las herramientas. El de cada proyecto lo decide su
