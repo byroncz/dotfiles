@@ -479,6 +479,14 @@ puede_actualizar_host_devkit() {  # puede_actualizar_host_devkit <candidato>
   [ "$instalada" = "$candidato" ] && return 1
   [ "$(printf '%s\n%s\n' "$candidato" "$instalada" | sort -V | tail -1)" = "$candidato" ]
 }
+# "dev" instalado gana siempre frente a una etiqueta, aunque ese snapshot de
+# main haya quedado más viejo que la etiqueta del proyecto: sin commit que
+# comparar, no hay forma de saberlo desde aquí. Por lo menos se dice quién
+# mantiene el comando y cómo refrescarlo, en vez de callar (H10, DEVKIT-258).
+aviso_devkit_dev() {  # aviso_devkit_dev <candidato>
+  [ "$1" != dev ] && [ "$(cat "$ROOT/bin/devkit.version" 2>/dev/null || true)" = dev ] || return 0
+  echo "devkit: aviso: el comando devkit lo instaló un proyecto en modo dev y $proj ($1) no lo reemplaza; si quedó atrás, corre 'devkit update <proyecto-dev>' con ese workspace en main" >&2
+}
 # El compose.yaml del proyecto solo lo escribe new-project.sh: reemplazarlo
 # aquí no es seguro (compose.yaml no declarado en devkit.toml, cambios locales
 # del humano, etc.), así que se avisa y se deja la decisión al humano. El
@@ -503,9 +511,12 @@ warn_host_stale() {  # warn_host_stale [--sin-aviso-devkit]
   fi
   [ "${1:-}" = --sin-aviso-devkit ] && return 0
   if [ -n "$version_env" ] && [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
-     && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit" \
-     && puede_actualizar_host_devkit "$version_env"; then
-    echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
+     && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
+    if puede_actualizar_host_devkit "$version_env"; then
+      echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
+    else
+      aviso_devkit_dev "$version_env"
+    fi
   fi
 }
 # Objetivo del refresco de bin/devkit pendiente en el trap EXIT que arma
@@ -528,7 +539,7 @@ REFRESCO_TMP=""
 refresh_host_devkit() {  # refresh_host_devkit <target> <archivo-host-devkit.sh>
   [ -f "$2" ] || return 0
   cmp -s "$2" "$ROOT/bin/devkit" && return 0
-  puede_actualizar_host_devkit "$1" || return 0
+  puede_actualizar_host_devkit "$1" || { aviso_devkit_dev "$1"; return 0; }
   cp "$2" "$ROOT/bin/devkit.new"; chmod +x "$ROOT/bin/devkit.new"
   REFRESCO_DEVKIT="$1"
   trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "$REFRESCO_DEVKIT" > "$ROOT/bin/devkit.version" && echo "devkit: comando devkit actualizado a $REFRESCO_DEVKIT"; [ -n "$REFRESCO_TMP" ] && rm -rf "$REFRESCO_TMP"' EXIT

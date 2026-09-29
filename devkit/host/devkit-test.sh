@@ -763,6 +763,26 @@ printf 'dev\n' > "$TMP/root/bin/devkit.version"
 corre update
 check        "bin/devkit instalado por un proyecto en dev: update con etiqueta no lo baja" no \
              "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+# H10, DEVKIT-258: pero no calla: dice quién mantiene el comando.
+check_salida "bin/devkit instalado por un proyecto en dev: update con etiqueta lo avisa" \
+             "lo instaló un proyecto en modo dev y p \(0\.1\.0\) no lo reemplaza"
+
+escenario 0.1.0
+echo '# línea de más' >> "$TMP/root/bin/devkit"
+printf 'dev\n' > "$TMP/root/bin/devkit.version"
+corre up
+check_salida "bin/devkit instalado por un proyecto en dev: up con etiqueta lo avisa" \
+             "corre 'devkit update <proyecto-dev>' con ese workspace en main"
+check        "bin/devkit instalado por un proyecto en dev: up no manda a 'devkit update p'" no \
+             "$(grep -q "'devkit update p' lo refresca" "$OUT" && echo si || echo no)"
+
+# Con una etiqueta instalada (no dev) que gana, el aviso de dev no aparece.
+escenario 0.1.0
+echo '# línea de más' >> "$TMP/root/bin/devkit"
+printf '1.2.0\n' > "$TMP/root/bin/devkit.version"
+corre up
+check        "bin/devkit en una etiqueta más nueva: no habla de modo dev" no \
+             "$(grep -q 'lo instaló un proyecto en modo dev' "$OUT" && echo si || echo no)"
 
 # H9, DEVKIT-258: el camino positivo con devkit.version presente. Instalada
 # 0.1.0 y update a 0.2.0 por el camino de descarga: refresca, y el trap deja
