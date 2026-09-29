@@ -110,6 +110,10 @@ src="$(find "$tmp" -maxdepth 2 -type d -name devkit | head -1)"
 rm -rf "$dir/template"; cp -R "$src" "$dir/template"
 cp "$dir/template/compose.yaml" "$dir/compose.yaml"
 cp "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; chmod +x "$ROOT/bin/devkit"
+# devkit.sh compara contra esto antes de refrescar bin/devkit, para que un
+# proyecto en una versión vieja no baje de versión el comando de uno más
+# nuevo en el mismo Mac (H6, DEVKIT-258).
+echo "$( [ -n "$ref" ] && echo dev || echo "$version" )" > "$ROOT/bin/devkit.version"
 if [ ! -f "$dir/devkit.env" ]; then
   sed "s/^DEVKIT_PROJECT=.*/DEVKIT_PROJECT=$proj/" "$dir/template/devkit.env.example" > "$dir/devkit.env"
   # Con --ref el template es el propio workspace (modo dev) y el repo se

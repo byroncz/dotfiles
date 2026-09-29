@@ -454,6 +454,31 @@ EOF_DECLARADOS
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTENSIONS=%s\n' "$resuelto"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
 }
+# bin/devkit es un solo comando para todos los proyectos del Mac (ROOT, no
+# $dir), pero el refresco y este aviso comparaban solo contra el template de
+# un proyecto: con dos proyectos en versiones distintas, actualizar el más
+# viejo bajaba de versión el comando global y el más nuevo lo subía de
+# vuelta, sin fin (H6, DEVKIT-258). La versión que de verdad quedó instalada
+# vive en $ROOT/bin/devkit.version (la escribe el trap de
+# refresh_host_devkit, y new-project.sh en la instalación inicial); sin ese
+# archivo -un bin/devkit de antes de esta card- cualquier candidato cuenta
+# como mejora. "dev" (el workspace vivo de este mismo devkit en modo dev) se
+# trata siempre como la versión más nueva -sigue el main de este repo-, pero
+# solo si la rama viva del workspace es main: una rama de card sin mergear
+# no debe instalarse como el comando global.
+puede_actualizar_host_devkit() {  # puede_actualizar_host_devkit <candidato>
+  candidato="$1"
+  if [ "$candidato" = dev ]; then
+    rama="$(docker exec "devkit-$proj" git -C /workspace rev-parse --abbrev-ref HEAD 2>/dev/null)" || rama=""
+    [ "$rama" = main ]
+    return
+  fi
+  instalada="$(cat "$ROOT/bin/devkit.version" 2>/dev/null || true)"
+  [ -z "$instalada" ] && return 0
+  [ "$instalada" = dev ] && return 1
+  [ "$instalada" = "$candidato" ] && return 1
+  [ "$(printf '%s\n%s\n' "$candidato" "$instalada" | sort -V | tail -1)" = "$candidato" ]
+}
 # El compose.yaml del proyecto solo lo escribe new-project.sh: reemplazarlo
 # aquí no es seguro (compose.yaml no declarado en devkit.toml, cambios locales
 # del humano, etc.), así que se avisa y se deja la decisión al humano. El
@@ -468,8 +493,10 @@ warn_host_stale() {  # warn_host_stale [--sin-aviso-devkit]
     echo "devkit: aviso: $dir/compose.yaml difiere del template; reinstala con new-project.sh --ref <rama>" >&2
   fi
   [ "${1:-}" = --sin-aviso-devkit ] && return 0
-  if [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
-     && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit"; then
+  current="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" 2>/dev/null | head -1)"
+  if [ -n "$current" ] && [ -f "$ROOT/bin/devkit" ] && [ -f "$dir/template/host/devkit.sh" ] \
+     && ! cmp -s "$dir/template/host/devkit.sh" "$ROOT/bin/devkit" \
+     && puede_actualizar_host_devkit "$current"; then
     echo "devkit: aviso: el comando devkit difiere del template; 'devkit update $proj' lo refresca" >&2
   fi
 }
@@ -487,12 +514,16 @@ REFRESCO_TMP=""
 # corrompería. El mv se difiere a un trap EXIT para que corra pase lo que
 # pase después -incluido un `compose up` que falla (H1, DEVKIT-258)-, así que
 # quien llama debe registrarlo antes de cualquier paso que pueda fallar.
+# puede_actualizar_host_devkit filtra el candidato antes de tocar nada: sin
+# eso, el `cmp` de abajo solo mira si el archivo difiere, no si difiere por
+# ser una versión más vieja (H6, DEVKIT-258).
 refresh_host_devkit() {  # refresh_host_devkit <target> <archivo-host-devkit.sh>
   [ -f "$2" ] || return 0
   cmp -s "$2" "$ROOT/bin/devkit" && return 0
+  puede_actualizar_host_devkit "$1" || return 0
   cp "$2" "$ROOT/bin/devkit.new"; chmod +x "$ROOT/bin/devkit.new"
   REFRESCO_DEVKIT="$1"
-  trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "devkit: comando devkit actualizado a $REFRESCO_DEVKIT"; [ -n "$REFRESCO_TMP" ] && rm -rf "$REFRESCO_TMP"' EXIT
+  trap 'mv -f "$ROOT/bin/devkit.new" "$ROOT/bin/devkit" && echo "$REFRESCO_DEVKIT" > "$ROOT/bin/devkit.version" && echo "devkit: comando devkit actualizado a $REFRESCO_DEVKIT"; [ -n "$REFRESCO_TMP" ] && rm -rf "$REFRESCO_TMP"' EXIT
 }
 compose() { docker compose --project-directory "$dir" "$@"; }
 wait_ready() {

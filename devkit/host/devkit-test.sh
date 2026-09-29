@@ -198,6 +198,12 @@ case "${1:-}" in
         ref="${*#git -C /workspace rev-parse --short origin/}"
         [ -f "$DEVKIT_TEST_ORIGIN_DIR/$ref.toml" ] || exit 1
         printf 'abc1234'; exit 0 ;;
+      # H6, DEVKIT-258: en modo dev, refresh_host_devkit solo refresca
+      # bin/devkit si la rama viva del workspace es main. "main" por
+      # defecto, para no tener que declararla en cada escenario dev que no
+      # ejercita esta guarda.
+      "git -C /workspace rev-parse --abbrev-ref HEAD")
+        printf '%s' "${DEVKIT_TEST_WS_BRANCH:-main}"; exit 0 ;;
       # DEVKIT-159: wait_ready sondea el marcador de arranque. Sin ningún
       # DEVKIT_TEST_READY_* aparece listo de inmediato (el comportamiento de
       # siempre); DEVKIT_TEST_READY_NEVER=1 simula un contenedor que nunca
@@ -585,6 +591,7 @@ check        "update en dev deja bin/devkit igual al workspace vivo" si \
              "$(cmp -s "$TMP/ws/devkit/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
 check        "update en dev con refresco sigue sin tocar el contexto de build" MARCA-VIEJA "$(marca)"
 check_docker "update en dev con refresco no construye" no 'compose'
+check        "update en dev con refresco termina bien" 0 "$ESTADO"
 
 # DEVKIT-258 (H1): con etiqueta y ya en la versión destino, `update` salía
 # con "ya en $target" sin tocar bin/devkit nunca: un proyecto que no corriera
@@ -597,6 +604,7 @@ check        "update ya en la versión destino: deja bin/devkit igual al templat
              "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
 check_salida "update ya en la versión destino: sigue diciendo que ya estaba en esa versión" "ya en 0\.1\.0"
 check_docker "update ya en la versión destino no construye" no 'compose'
+check        "update ya en la versión destino: termina bien" 0 "$ESTADO"
 
 # --- update con compose.yaml sin EXTENSIONS (H2, DEVKIT-67) -----------------
 # compose.yaml del Mac de antes de DEVKIT-67 no declara EXTENSIONS: el
@@ -700,6 +708,58 @@ check        "compose falla: update igual refresca bin/devkit" si \
              "$(cmp -s "$TMP/root/p/template/host/devkit.sh" "$TMP/root/bin/devkit" && echo si || echo no)"
 check_salida "compose falla: igual avisa a qué versión quedó" "devkit: comando devkit actualizado a 0\.2\.0"
 check        "compose falla: update termina con error" 1 "$ESTADO"
+
+# --- bin/devkit es un solo comando para todos los proyectos (H6, DEVKIT-258) -
+# Antes, refresh_host_devkit y warn_host_stale solo miraban si el archivo
+# difería del template de un proyecto, sin saber qué versión quedó instalada
+# de verdad: con dos proyectos en versiones distintas en el mismo Mac, el más
+# viejo bajaba de versión el comando global y el más nuevo lo subía de
+# vuelta, sin fin. $TMP/root/bin/devkit.version simula lo que otro proyecto
+# ya dejó instalado.
+escenario 0.1.0
+echo '# línea de más' >> "$TMP/root/bin/devkit"
+printf '1.2.0\n' > "$TMP/root/bin/devkit.version"
+corre update
+check        "otro proyecto ya dejó bin/devkit en 1.2.0: update del más viejo no lo toca" no \
+             "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+check        "otro proyecto ya dejó bin/devkit en 1.2.0: bin/devkit sigue con su marca" si \
+             "$(grep -q 'línea de más' "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "otro proyecto ya dejó bin/devkit en 1.2.0: update del más viejo termina bien" 0 "$ESTADO"
+
+escenario 0.1.0
+echo '# línea de más' >> "$TMP/root/bin/devkit"
+printf '1.2.0\n' > "$TMP/root/bin/devkit.version"
+corre up
+check        "otro proyecto ya dejó bin/devkit en 1.2.0: up del más viejo no pide bajarlo" no \
+             "$(grep -q 'el comando devkit difiere del template' "$OUT" && echo si || echo no)"
+
+escenario 0.1.0
+echo '# línea de más' >> "$TMP/root/bin/devkit"
+printf 'dev\n' > "$TMP/root/bin/devkit.version"
+corre update
+check        "bin/devkit instalado por un proyecto en dev: update con etiqueta no lo baja" no \
+             "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+
+# En dev, el refresco solo sigue al workspace vivo si su rama es main: una
+# rama de card sin mergear no debe instalarse como el comando global.
+escenario dev
+echo '# workspace nuevo' >> "$TMP/ws/devkit/host/devkit.sh"
+export DEVKIT_TEST_WS_BRANCH="fix/DEVKIT-999-algo"
+corre update
+unset DEVKIT_TEST_WS_BRANCH
+check        "dev en una rama de card: update no instala su devkit.sh como comando global" no \
+             "$(grep -q 'comando devkit actualizado' "$OUT" && echo si || echo no)"
+check        "dev en una rama de card: bin/devkit no cambia" si \
+             "$(cmp -s "$DEVKIT" "$TMP/root/bin/devkit" && echo si || echo no)"
+check        "dev en una rama de card: update termina bien" 0 "$ESTADO"
+
+# dev en main sigue ganando aunque otro proyecto ya haya dejado una versión
+# con etiqueta más nueva instalada: dev sigue el main de este repo.
+escenario dev
+echo '# workspace nuevo' >> "$TMP/ws/devkit/host/devkit.sh"
+printf '9.9.9\n' > "$TMP/root/bin/devkit.version"
+corre update
+check_salida "dev en main gana aunque haya una etiqueta más nueva instalada" "devkit: comando devkit actualizado a dev"
 
 # --- Resolución de extensiones del editor ------------------------------------
 # resolve_extensions: "latest" se resuelve contra Open VSX y queda en .env y
