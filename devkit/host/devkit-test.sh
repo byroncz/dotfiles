@@ -1371,8 +1371,11 @@ FIN
   # terminaba (un espacio inicial sobrevivía en cookie_rest) y la petición
   # quedaba colgada con el bash al 100 % de CPU. El navegador ya manda dos
   # desde el 302 del token, porque el shim siembra la segunda. Cada caso
-  # exige 200 con timeout 5, y al final que no quede ningún shim vivo.
-  shim_vivos() { pgrep -f "^/bin/bash .*proxy-shim\.sh" 2>/dev/null | wc -l | tr -d ' '; }
+  # exige 200 con timeout 5, y al final que no quede ningún shim vivo. Se busca
+  # por la ruta del shim de este checkout ($SHIM), no por el nombre, y solo los
+  # procesos bash, no el socat que escucha (su línea también la trae): en un host
+  # con Docker nativo el shim real del proxy también se ve desde aquí.
+  shim_vivos() { pgrep -f -- "^/bin/bash $SHIM" 2>/dev/null | wc -l | tr -d ' '; }
   cookie_caso() { # $1: nombre, $2: método, $3: ruta, $4: encabezado Cookie
     local codigo
     codigo="$("$REAL_CURL" -s --max-time 5 -o /dev/null -w '%{http_code}' -X "$2" -H "Cookie: $4" \
@@ -1389,7 +1392,7 @@ FIN
   cookie_caso "shim: POST clave con tres cookies" POST /devkit/secret-key "a=1; $sk; $tkn"
   sleep 0.3
   vivos="$(shim_vivos)"
-  [ "$vivos" = 0 ] || pkill -f "^/bin/bash .*proxy-shim\.sh" 2>/dev/null
+  [ "$vivos" = 0 ] || pkill -f -- "^/bin/bash $SHIM" 2>/dev/null
   check "shim: ninguna petición con cookies deja un shim vivo" "0" "$vivos"
 
   # Recreate (proxy y dev, sin volumen propio): otro shim y otro endpoint de
