@@ -27,8 +27,6 @@ UPSTREAM_HOST="${DEVKIT_SHIM_UPSTREAM:-dev}"
 UPSTREAM_PORT="${DEVKIT_SHIM_UPSTREAM_PORT:-3001}"
 DIGEST_PORT="${DEVKIT_SHIM_DIGEST_PORT:-3002}"
 
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-
 # hex_to_bin <64 hex chars> -> 32 bytes crudos en stdout. Sin xxd/openssl:
 # alpine no los trae por defecto y no vale la pena sumarlos por esto.
 hex_to_bin() {
@@ -58,7 +56,7 @@ while IFS= read -r line; do
   line="${line%$'\r'}"
   [ -z "$line" ] && break
   headers+=("$line")
-  low="$(lower "$line")"
+  low="${line,,}"
   case "$low" in
     content-length:*) content_length="$(printf '%s' "${line#*:}" | tr -dc '0-9')" ;;
     upgrade:*) es_upgrade=1 ;;
@@ -87,7 +85,7 @@ fi
 # nunca con un fd intermedio que bash pueda cerrar solo.
 fwd="$request_line"$'\r\n'
 for line in "${headers[@]}"; do
-  case "$(lower "$line")" in
+  case "${line,,}" in
     connection:* | keep-alive:*) [ "$es_upgrade" = 1 ] && fwd+="$line"$'\r\n' ;;
     *) fwd+="$line"$'\r\n' ;;
   esac
