@@ -3440,7 +3440,7 @@ formatear_fila() {  # formatear_fila <skill> <clave> <pr> <origen> <edad> <durac
     # `terminal_ide`): ahí "#<número>" queda en texto plano, para que lo
     # tome la extensión devkit.devkit-links en vez de un enlace que el
     # navegador no sabe abrir.
-    { [ "$pr_texto" = - ] || terminal_ide; } || fila=$(enlazar_rango "$fila" "$off_pr" "$ANCHO_PR" "$pr")
+    { [ "$pr_texto" = - ] || terminal_ide; } || fila=$(enlazar_rango "$fila" "$off_pr" "${#pr_texto}" "$pr")
     # SKILL en negrita para task-start (DEVKIT-134): distingue de un vistazo
     # la fila que abre una card de la que la continúa.
     [ "$skill" != task-start ] || fila=$(pintar_rango "$fila" "$off_skill" "$ANCHO_SKILL" negrita)
@@ -4019,7 +4019,7 @@ formatear_fila_tablero() {  # formatear_fila_tablero <clave> <estado> <tipo> <pr
   prefijo="$(rellenar "$clave" 12)$estado_col$(rellenar "$tipo" 10)"
   fila="$prefijo$(rellenar "$pr_texto" "$ANCHO_PR")${frena#bloquea a: }"
   if [ "$color_habilitado" = 1 ] && [ "$pr_texto" != - ] && ! terminal_ide; then
-    fila=$(enlazar_rango "$fila" "${#prefijo}" "$ANCHO_PR" "$pr")
+    fila=$(enlazar_rango "$fila" "${#prefijo}" "${#pr_texto}" "$pr")
   fi
   printf '%s\n' "$fila"
 }
@@ -7937,6 +7937,17 @@ FIN
     "$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-start DEVKIT-13 - bucle 1m 9m terminó sonnet/high -/40 - 0 1 1 \
         | { [[ "$(cat)" == *$'\033]8;;'* ]] && echo si || echo no; })"
 
+  # DEVKIT-252: el hipervínculo envuelve solo "#<número>", no el relleno
+  # hasta ANCHO_PR -si no, la terminal subraya los espacios de relleno como
+  # si fueran parte del enlace. "#123" (3 dígitos) deja relleno de sobra
+  # dentro de ANCHO_PR (7) para que el caso sea representativo.
+  local pr_url_252 fila_con_pr_252_tty
+  pr_url_252="https://github.com/o/r/pull/123"
+  fila_con_pr_252_tty=$(TERM_PROGRAM= COLUMNS=200 formatear_fila task-fix DEVKIT-12 "$pr_url_252" humano 5m 5m "en curso" opus/high 3/60 - 0 1 1)
+  check "columna PR con TTY: el cierre OSC 8 llega justo después de #123, sin relleno adentro" si \
+    "$([[ "$fila_con_pr_252_tty" == *"#123"$'\033]8;;\033\\'* ]] && echo si || echo no)"
+  unset pr_url_252 fila_con_pr_252_tty
+
   # DEVKIT-229: en la terminal integrada (TERM_PROGRAM=vscode) la columna PR
   # no lleva el hipervínculo OSC 8 aunque haya TTY (color_habilitado=1) -el
   # navegador no sabe abrir openvscode-server://-, sino "#<número>" en texto
@@ -8106,6 +8117,11 @@ FIN
   check "formatear_fila_tablero: En progreso pinta el girador en verde y negrita" si \
     "$(formatear_fila_tablero DEVKIT-1 "En progreso" feature - 0 1 1 \
         | grep -qF $'\033[1;32m' && echo si || echo no)"
+  # DEVKIT-252: mismo patrón que en `formatear_fila` -el hipervínculo envuelve
+  # solo "#<número>", no el relleno hasta ANCHO_PR.
+  check "formatear_fila_tablero con TTY: el cierre OSC 8 llega justo después de #123, sin relleno adentro" si \
+    "$(TERM_PROGRAM= formatear_fila_tablero DEVKIT-1 "En progreso" feature "https://github.com/o/r/pull/123" 0 1 1 \
+        | { [[ "$(cat)" == *"#123"$'\033]8;;\033\\'* ]] && echo si || echo no; })"
 
   # `agentes_en_curso_rapido` (DEVKIT-63) cuenta lo mismo que `estado_filas`
   # sobre este mismo watch.log: DEVKIT-57 (proceso vivo) y DEVKIT-61 (gracia).
