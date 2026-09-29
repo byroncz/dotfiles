@@ -76,9 +76,12 @@ services:
       - "127.0.0.1:${DEVKIT_OAUTH_PORT:-54545}:45454"
       # Editor VS Code (openvscode-server), gateado por token de conexión:
       # Mac localhost:${DEVKIT_VSCODE_PORT} -> proxy:3001 -> dev:3001 ->
-      # 127.0.0.1:3000 dentro de dev, donde escucha el servidor. Mismo patrón
-      # que el OAuth de arriba. `devkit code <proyecto>` arma la URL con el
-      # token.
+      # 127.0.0.1:3000 dentro de dev, donde escucha el servidor. A diferencia
+      # del OAuth de arriba, el salto proxy:3001 -> dev:3001 no es socat puro:
+      # lo hace proxy-shim.sh, que agrega la cookie del almacén de secretos y
+      # responde POST /devkit/secret-key con el dígesto que pide a dev:3002.
+      # Ese puerto existe solo en la red `internal`, nunca se publica al host
+      # (DEVKIT-259). `devkit code <proyecto>` arma la URL con el token.
       - "127.0.0.1:${DEVKIT_VSCODE_PORT:-3000}:3001"
     networks:
       - internal
