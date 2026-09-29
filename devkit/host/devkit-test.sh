@@ -1367,6 +1367,34 @@ FIN
     "http://127.0.0.1:$shim_port/devkit/secret-key" -D "$sw/key_mal.hdr" -o "$sw/key_mal.bin"
   check_hdr "$sw/key_mal.hdr" "^HTTP/1\.1 403 Forbidden" "shim: cookie de sesión que no coincide, 403"
 
+  # DEVKIT-263: con más de una cookie el bucle del encabezado Cookie no
+  # terminaba (un espacio inicial sobrevivía en cookie_rest) y la petición
+  # quedaba colgada con el bash al 100 % de CPU. El navegador ya manda dos
+  # desde el 302 del token, porque el shim siembra la segunda. Cada caso
+  # exige 200 con timeout 5, y al final que no quede ningún shim vivo. Se busca
+  # por la ruta del shim de este checkout ($SHIM), no por el nombre, y solo los
+  # procesos bash, no el socat que escucha (su línea también la trae): en un host
+  # con Docker nativo el shim real del proxy también se ve desde aquí.
+  shim_vivos() { pgrep -f -- "^/bin/bash $SHIM" 2>/dev/null | wc -l | tr -d ' '; }
+  cookie_caso() { # $1: nombre, $2: método, $3: ruta, $4: encabezado Cookie
+    local codigo
+    codigo="$("$REAL_CURL" -s --max-time 5 -o /dev/null -w '%{http_code}' -X "$2" -H "Cookie: $4" \
+      "http://127.0.0.1:$shim_port$3")"
+    check "$1" "200" "$codigo"
+  }
+  tkn="vscode-tkn=token-de-prueba-devkit-259"
+  sk="vscode-secret-key-path=/devkit/secret-key"
+  cookie_caso "shim: GET / con vscode-tkn y otra cookie" GET / "$tkn; $sk"
+  cookie_caso "shim: GET / con la otra cookie primero" GET / "$sk; $tkn"
+  cookie_caso "shim: POST clave con vscode-tkn y otra cookie" POST /devkit/secret-key "$tkn; $sk"
+  cookie_caso "shim: POST clave con la otra cookie primero" POST /devkit/secret-key "$sk; $tkn"
+  cookie_caso "shim: GET / con tres cookies" GET / "a=1; $tkn; $sk"
+  cookie_caso "shim: POST clave con tres cookies" POST /devkit/secret-key "a=1; $sk; $tkn"
+  sleep 0.3
+  vivos="$(shim_vivos)"
+  [ "$vivos" = 0 ] || pkill -f -- "^/bin/bash $SHIM" 2>/dev/null
+  check "shim: ninguna petición con cookies deja un shim vivo" "0" "$vivos"
+
   # Recreate (proxy y dev, sin volumen propio): otro shim y otro endpoint de
   # dígesto, mismo token en dev, misma clave. Prueba que se deriva de nuevo y
   # no se cachea (DEVKIT-259).
