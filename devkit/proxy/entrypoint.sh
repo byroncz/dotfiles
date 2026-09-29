@@ -21,7 +21,9 @@ touch /var/log/tinyproxy/tinyproxy.log; chown tinyproxy:tinyproxy /var/log/tinyp
 # Puerto fijo, ajeno a la familia 54545/54546/... de DEVKIT_OAUTH_PORT
 # (DEVKIT-155, H5).
 socat TCP-LISTEN:45454,fork,reuseaddr TCP:dev:45454 &
-# Editor VS Code: lo que llega del Mac al 3001 va al contenedor dev, mismo
-# patrón que el retorno OAuth.
-socat TCP-LISTEN:3001,fork,reuseaddr TCP:dev:3001 &
+# Editor VS Code: lo que llega del Mac al 3001 ya no se reenvía tal cual
+# (DEVKIT-259). El shim habla HTTP y WebSocket, agrega la cookie del
+# almacén de secretos en la respuesta de la raíz y responde
+# POST /devkit/secret-key sin llegar a dev; todo lo demás pasa crudo.
+socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 EXEC:/opt/devkit/proxy-shim.sh &
 exec tinyproxy -d -c "$conf"

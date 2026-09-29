@@ -204,6 +204,9 @@ esac
 exit 0
 FIN
 chmod +x "$TMP/bin/docker"
+# El shim del proxy (DEVKIT-259, más abajo) necesita el curl real: el doble
+# de abajo solo entiende la API de Open VSX y de GitHub.
+REAL_CURL="$(command -v curl)"
 export PATH="$TMP/bin:$PATH"
 
 # --- Escenario y ejecución --------------------------------------------------
@@ -994,5 +997,97 @@ check_docker "awake sin caffeinate no espera al contenedor" no 'docker wait'
 
 corre nada
 check_salida "la ayuda lista awake" "devkit awake <proyecto>"
+
+# --- Shim del proxy: cookie, endpoint de la clave y WebSocket (DEVKIT-259) --
+# A diferencia de todo lo anterior, esto no dobla `docker`: corre el shim de
+# verdad (devkit/proxy/proxy-shim.sh) con socat real contra dobles de dev (un
+# HTTP mínimo y el endpoint de dígesto de dev:$DIGEST_PORT), en puertos altos
+# propios. Nunca toca el proxy real del contenedor. Puertos derivados del PID
+# para no chocar entre corridas concurrentes.
+base=$((21000 + ($$ % 400) * 10))
+shim_port=$base
+dev_port=$((base + 1))
+digest_port=$((base + 2))
+ws_port=$((base + 3))
+SHIM="$HERE/../proxy/proxy-shim.sh"
+sw="$TMP/shim"
+mkdir -p "$sw"
+printf 'token-de-prueba-devkit-259' > "$sw/token"
+digest_esperado="$(sha256sum "$sw/token" | cut -c1-64)"
+
+cat > "$sw/dev_http.sh" <<'FIN'
+#!/bin/bash
+read -r reqline
+path="${reqline#* }"; path="${path%% *}"
+while IFS= read -r l; do l="${l%$'\r'}"; [ -z "$l" ] && break; done
+body="cuerpo-$path"
+len=${#body}
+printf 'HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s' "$len" "$body"
+FIN
+cat > "$sw/dev_digest.sh" <<FIN
+#!/bin/sh
+sha256sum '$sw/token' | cut -c1-64
+FIN
+cat > "$sw/dev_ws.sh" <<'FIN'
+#!/bin/bash
+read -r reqline
+while IFS= read -r l; do l="${l%$'\r'}"; [ -z "$l" ] && break; done
+printf 'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'
+while IFS= read -r -t 5 frame; do printf 'ECHO:%s\n' "$frame"; done
+FIN
+chmod +x "$sw/dev_http.sh" "$sw/dev_digest.sh" "$sw/dev_ws.sh"
+
+shim_pids=()
+socat TCP-LISTEN:$dev_port,fork,reuseaddr "EXEC:$sw/dev_http.sh" >"$sw/dev_http.log" 2>&1 & shim_pids+=("$!")
+socat TCP-LISTEN:$digest_port,fork,reuseaddr "EXEC:$sw/dev_digest.sh" >"$sw/dev_digest.log" 2>&1 & shim_pids+=("$!")
+socat TCP-LISTEN:$ws_port,fork,reuseaddr "EXEC:$sw/dev_ws.sh" >"$sw/dev_ws.log" 2>&1 & shim_pids+=("$!")
+sleep 0.3
+env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$dev_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \
+  socat TCP-LISTEN:$shim_port,fork,reuseaddr "EXEC:$SHIM" >"$sw/shim.log" 2>&1 & shim_pids+=("$!")
+sleep 0.3
+
+"$REAL_CURL" -s --max-time 4 -D "$sw/root.hdr" "http://127.0.0.1:$shim_port/" -o "$sw/root.body"
+check_hdr() { grep -qE "$2" "$1" && printf 'ok   %-58s\n' "$3" || { printf 'FAIL %-58s no aparece /%s/ en %s\n' "$3" "$2" "$1"; fail=1; }; }
+check_hdr "$sw/root.hdr" "^Set-Cookie: vscode-secret-key-path=/devkit/secret-key; Path=/; SameSite=Lax" \
+  "shim: la raíz agrega la cookie del almacén de secretos"
+check "shim: la raíz conserva el cuerpo de dev" "cuerpo-/" "$(cat "$sw/root.body")"
+
+"$REAL_CURL" -s --max-time 4 -D "$sw/asset.hdr" "http://127.0.0.1:$shim_port/assets/foo.js" -o "$sw/asset.body"
+check "shim: un asset pasa transparente" "cuerpo-/assets/foo.js" "$(cat "$sw/asset.body")"
+if grep -qi '^Set-Cookie:' "$sw/asset.hdr"; then
+  printf 'FAIL %-58s trae Set-Cookie, solo la raíz debería\n' "shim: un asset no agrega la cookie"; fail=1
+else
+  printf 'ok   %-58s\n' "shim: un asset no agrega la cookie"
+fi
+
+"$REAL_CURL" -s --max-time 4 -X POST "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key1.bin"
+check "shim: la clave mide 32 bytes" "32" "$(wc -c < "$sw/key1.bin")"
+check "shim: la clave es el SHA-256 del token" "$digest_esperado" "$(od -An -tx1 "$sw/key1.bin" | tr -d ' \n')"
+
+# Recreate del proxy (sin volumen propio): otro shim, mismo token en dev,
+# misma clave. Prueba que se deriva de nuevo y no se cachea (DEVKIT-259).
+kill "${shim_pids[3]}" 2>/dev/null
+sleep 0.2
+env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$dev_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \
+  socat TCP-LISTEN:$shim_port,fork,reuseaddr "EXEC:$SHIM" >"$sw/shim2.log" 2>&1 & shim_pids[3]="$!"
+sleep 0.3
+"$REAL_CURL" -s --max-time 4 -X POST "http://127.0.0.1:$shim_port/devkit/secret-key" -o "$sw/key2.bin"
+check "shim: recreate deriva la misma clave" "$digest_esperado" "$(od -An -tx1 "$sw/key2.bin" | tr -d ' \n')"
+
+# WebSocket: sube, y lo que el navegador mande después del upgrade llega a
+# dev y su eco vuelve, todo en la misma conexión (prueba el relé de dos vías
+# de DEVKIT-259, no solo el intercambio de un tiro de arriba).
+mkfifo "$sw/ws_in"
+( printf 'GET /ws HTTP/1.1\r\nHost: h\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n'
+  sleep 0.3; printf 'hola\n'; sleep 0.3; printf 'mundo\n'; sleep 1 ) > "$sw/ws_in" &
+ws_writer=$!
+env DEVKIT_SHIM_UPSTREAM=127.0.0.1 DEVKIT_SHIM_UPSTREAM_PORT="$ws_port" DEVKIT_SHIM_DIGEST_PORT="$digest_port" \
+  timeout 4 bash "$SHIM" < "$sw/ws_in" > "$sw/ws.out" 2>"$sw/ws.err"
+kill "$ws_writer" 2>/dev/null
+check_hdr "$sw/ws.out" "^HTTP/1\.1 101 Switching Protocols" "shim: el upgrade de WebSocket pasa (101)"
+check_hdr "$sw/ws.out" "^ECHO:hola$" "shim: un frame del navegador llega a dev y su eco vuelve"
+check_hdr "$sw/ws.out" "^ECHO:mundo$" "shim: un segundo frame en la misma conexión también llega"
+
+for p in "${shim_pids[@]}"; do kill "$p" 2>/dev/null; done
 
 exit $fail

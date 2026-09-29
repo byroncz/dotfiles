@@ -315,6 +315,14 @@ if [ -s "$VSCODE_TOKEN" ]; then
   # Mismo patrón que el retorno OAuth: el servidor solo escucha en loopback y
   # socat une ambos extremos hacia el puerto que ve el resto de la red interna.
   nohup socat TCP-LISTEN:3001,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:3000 >/dev/null 2>&1 &
+  # Almacén persistente de secretos del workbench web (DEVKIT-259): el shim
+  # del proxy necesita el SHA-256 del token para responder POST
+  # /devkit/secret-key, pero el token vive solo en este contenedor (tmpfs
+  # $RUN_DIR, nunca en un volumen). En vez de compartir un volumen nuevo, este
+  # puerto -solo en la red `internal`, nunca publicado al host- recalcula y
+  # sirve el dígesto en cada conexión: se deriva, no se guarda en ningún lado.
+  nohup socat TCP-LISTEN:3002,fork,reuseaddr,bind=0.0.0.0 \
+    SYSTEM:"sha256sum '$VSCODE_TOKEN' | cut -c1-64" >/dev/null 2>&1 &
   log "editor VS Code activo en el puerto 3000"
 else
   warn "falta el secreto vscode-token en Bitwarden: el editor VS Code no arranca"
