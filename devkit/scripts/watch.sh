@@ -12,6 +12,16 @@
 #   3 ciclos respondidos y CAMBIOS otra vez en el head      -> task-block.sh
 #   PR mergeado, sin marcador devkit-closed                 -> task-close.sh
 #
+# PR marcado draft en GitHub                                -> nada (DEVKIT-250)
+#
+# Un PR draft queda fuera de esta tabla por completo, sin importar qué
+# marcadores traiga: es la señal estándar de "todavía no" y GitHub tampoco lo
+# deja mergear. `pasada` y `procesar_pr` lo detectan con `isDraft` (del mismo
+# `gh pr list`/`gh pr view` que ya hacían) y `atender_draft` corta antes de
+# llamar a `decide`: ni revisa, ni corrige, ni documenta, ni bloquea, y no
+# toca la card. Al dejar de ser draft (`gh pr ready`), la siguiente pasada lo
+# toma como un head cualquiera sin informe. Ver `atender_draft`, más abajo.
+#
 # cola.sh arranca la siguiente card de la cola del proyecto en cuanto una
 # card entra en `Lista para merge`, sin esperar el approve humano ni el
 # merge (DEVKIT-56). Desde DEVKIT-120 también se llama en cada pasada del
@@ -1437,14 +1447,41 @@ documentar_pr() {  # documentar_pr <num> <Clave> <head> <cuerpo del PR>
 # `MAX_CHAIN_ITER` es solo una cota de seguridad, no la guarda real: esa
 # sigue siendo `launched` y la guarda de tres ciclos, ya dentro de `decide` y
 # de cada `caso_*`.
+# Un PR draft queda fuera del ciclo automático (DEVKIT-250): es la señal
+# estándar de GitHub para "todavía no" y además no se puede mergear. Se avisa
+# una sola vez al notarlo -`launched` guarda la marca "draft:<num>", el mismo
+# mecanismo que evita repetir cualquier otro lanzamiento- y otra vez cuando
+# deja de serlo, justo al pie de `procesar_pr`, antes de decidir nada con
+# `decide`. Sin marcador propio en el PR (a diferencia de devkit-review o
+# devkit-block) porque no hace falta sobrevivir a un `devkit recreate`: en
+# cuanto el contenedor se reconstruye, la primera pasada vuelve a ver el PR
+# en draft y avisa de nuevo, que es inocuo (una línea en watch.log, nada más).
+atender_draft() {  # atender_draft <num> <Clave>
+  local num=$1 key=$2 lkey="draft:$num"
+  launched "$lkey" && return 0
+  mark "$lkey"
+  log "PR #$num ($key) en draft; el bucle no lo toca"
+}
+
 MAX_CHAIN_ITER=10
 
-procesar_pr() {  # procesar_pr <num> <url> <title>
-  local num=$1 url=$2 title=$3 key pr_full action head ref extra informe short cur prev="" intentos=0
+procesar_pr() {  # procesar_pr <num> <url> <title> [draft de gh pr list: true|false]
+  local num=$1 url=$2 title=$3 draft_lista=${4:-false} key pr_full action head ref extra informe short cur prev="" intentos=0
   key=$(key_of "$title" "$CODE") || return 0
   if [ -z "$BOT" ]; then
     log "PR #$num: sin login de la cuenta máquina; se omite"
     return 0
+  fi
+  # Atajo barato (DEVKIT-250): `pasada` ya trae `isDraft` del mismo `gh pr
+  # list` que arma esta lista de PRs, así que un draft que sigue siéndolo no
+  # gasta el `gh pr view` de más abajo en cada pasada.
+  if [ "$draft_lista" = true ]; then
+    atender_draft "$num" "$key"
+    return 0
+  fi
+  if launched "draft:$num"; then
+    unmark "draft:$num"
+    log "PR #$num ($key) ya no está en draft: el bucle lo toma como cualquier head sin informe"
   fi
   while [ "$intentos" -lt "$MAX_CHAIN_ITER" ]; do
     # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de la cadena
@@ -1454,8 +1491,15 @@ procesar_pr() {  # procesar_pr <num> <url> <title>
     intentos=$((intentos + 1))
     # `body` viaja en la misma consulta que decide() ya hacía (DEVKIT-92): es
     # lo único que necesita el caso `documentar` para saber si el PR trae la
-    # marca "Tipo: decisión"; decide() la ignora, sin cambios.
-    pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body 2>/dev/null)
+    # marca "Tipo: decisión"; decide() la ignora, sin cambios. `isDraft`
+    # (DEVKIT-250) cubre el caso en que un humano marca el PR como draft a
+    # mitad de una cadena ya en curso (`run_skill` tarda minutos): el chequeo
+    # de `draft_lista`, arriba, solo vio el estado al empezar esta llamada.
+    pr_full=$(gh pr view "$num" --json headRefOid,reviews,comments,body,isDraft 2>/dev/null)
+    if [ "$(jq -r '.isDraft // false' <<<"$pr_full" 2>/dev/null)" = true ]; then
+      atender_draft "$num" "$key"
+      return 0
+    fi
     IFS=$'\t' read -r action head ref extra informe < <(printf '%s' "$pr_full" | decide "$BOT")
     [ -n "${action:-}" ] || return 0
     short=${head:0:7}
@@ -1612,15 +1656,15 @@ pasada() {
     # fila de otro PR de esta misma tubería- y también cola.sh,
     # task-document.sh y task-block.sh: con `cmd | while ...`, todos heredan
     # la tubería como entrada estándar.
-    while IFS=$'\t' read -r -u 3 num url title; do
+    while IFS=$'\t' read -r -u 3 num url title draft; do
         # Guarda de modo (DEVKIT-137, H3): un alto llegado a mitad de esta
         # tubería (cada `procesar_pr` puede tardar minutos) corta antes del
         # siguiente PR en vez de lanzar pr-review/task-fix sobre los que
         # faltan por leer.
         [ "$(modo_actual)" != alto ] || break
-        procesar_pr "$num" "$url" "$title"
-    done 3< <(gh pr list --state open --limit 30 --json number,title,url \
-      --jq '.[] | "\(.number)\t\(.url)\t\(.title)"' 2>/dev/null)
+        procesar_pr "$num" "$url" "$title" "$draft"
+    done 3< <(gh pr list --state open --limit 30 --json number,title,url,isDraft \
+      --jq '.[] | "\(.number)\t\(.url)\t\(.title)\t\(.isDraft)"' 2>/dev/null)
   fi
 }
 
@@ -1650,12 +1694,14 @@ pasada() {
 #                           la guarda de `launched` con el informe incluido
 #                           (DEVKIT-101): si la clave ya está lanzada, avisa
 #                           una sola vez y sale; si no, marca y lanza
-#   --procesar-pr <num> <url> <título> [código]
+#   --procesar-pr <num> <url> <título> [código] [draft de gh pr list: true|false]
 #                           la cadena de reacción inmediata completa
 #                           (DEVKIT-108): decide, actúa y vuelve a decidir
 #                           sobre el mismo PR hasta un estado terminal o sin
 #                           progreso; es lo que el bucle principal llama por
-#                           cada fila de `gh pr list`
+#                           cada fila de `gh pr list`. El sexto argumento
+#                           (DEVKIT-250) simula el `isDraft` de esa misma
+#                           fila: "true" corta antes de llamar a `gh pr view`
 #   --modo-actual           el modo del interruptor de tres posiciones
 #                           (DEVKIT-136/137), leído de MODO_FILE
 #   --intentar-lanzar-cola <n>
@@ -1784,7 +1830,7 @@ case "${1:-}" in
   --procesar-pr)
     BOT="${DEVKIT_WATCH_BOT:-$(gh api user --jq .login 2>/dev/null)}"
     CODE="${5:-}"
-    procesar_pr "${2:-}" "${3:-}" "${4:-}"
+    procesar_pr "${2:-}" "${3:-}" "${4:-}" "${6:-false}"
     exit 0
     ;;
 esac
