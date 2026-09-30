@@ -520,6 +520,23 @@ check        "origin/<rama> ilegible: recreate se detiene" 1 "$ESTADO"
 check_salida "origin/<rama> ilegible: lo explica" "no se pudo leer \.devkit/devkit\.toml de origin/main"
 check        "origin/<rama> ilegible: no toca .env" previo.com "$(env_de DEVKIT_ALLOW_DOMAINS)"
 check_docker "origin/<rama> ilegible: no recrea" no 'force-recreate'
+check        "origin/<rama> ilegible: no pide confirmar una destrucción" no \
+             "$(grep -q 'Escribe "si"' "$OUT" && echo si || echo no)"
+
+# update lee origin antes de tocar nada: con origin/<rama> ilegible sale con 1
+# sin bajar el tarball ni cambiar DEVKIT_VERSION, para que el siguiente
+# `update` no crea que ya está al día con la imagen vieja (H1, revisión del
+# PR 157).
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+rm -f "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "update con origin/<rama> ilegible: se detiene" 1 "$ESTADO"
+check_salida "update con origin/<rama> ilegible: lo explica" "no se pudo leer \.devkit/devkit\.toml de origin/main"
+check        "update con origin/<rama> ilegible: DEVKIT_VERSION intacta" 0.1.0 "$(env_de DEVKIT_VERSION)"
+check        "update con origin/<rama> ilegible: no baja el template" no \
+             "$(grep -q 'actualizando template' "$OUT" && echo si || echo no)"
 
 # Con la rama fijada al instanciar (DEVKIT_REPO_REF), lee esa rama y no main.
 escenario dev

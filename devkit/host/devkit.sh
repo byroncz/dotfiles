@@ -119,7 +119,10 @@ leer_toml_origin() {
 # python (cambios sin commit, o una rama de card que aún no llegó a
 # origin/<rama>), avisa con el diff de esos cuatro campos: lo del checkout
 # vivo se pierde al recrear. Deja FUENTE_DIFIERE en 1 para que quien llame
-# decida si eso exige una confirmación aparte.
+# decida si eso exige una confirmación aparte. Sin --efectivo, si origin/<rama>
+# no se lee, sale con 1: quien llama corta antes de confirmar, descargar o
+# tocar nada, porque sync_toml_env abortaría igual después (DEVKIT-270). Con
+# --efectivo (`up`) solo avisa: `up` no depende de origin.
 #
 # `up` no llama a sync_toml_env (no toca domains/apt de .env), así que ahí
 # "se van a escribir" sería falso: con --efectivo imprime en cambio la lista
@@ -142,8 +145,12 @@ mostrar_fuente_toml() {  # mostrar_fuente_toml [--efectivo]
   }
   toml_vivo="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || toml_vivo=""
   if ! leer_toml_origin; then
-    echo "devkit: aviso: no se pudo leer origin/$ref; no se puede confirmar qué .devkit/devkit.toml quedará tras recrear" >&2
-    return 0
+    if [ "${1:-}" = --efectivo ]; then
+      echo "devkit: aviso: no se pudo leer origin/$ref; no se puede confirmar qué .devkit/devkit.toml quedará tras recrear" >&2
+      return 0
+    fi
+    echo "devkit: no se pudo leer .devkit/devkit.toml de origin/$ref; no se recrea con una lista de apt, domains o extensions que no salga de ahí" >&2
+    return 1
   fi
   sha_ref="$SHA_ORIGIN"; toml_ref="$TOML_ORIGIN"
   if [ "${1:-}" != --efectivo ]; then
@@ -653,7 +660,7 @@ confirm() {  # confirm [detalle-extra, para el aviso de FUENTE_DIFIERE]
 # que va a quedar tras recrear (mostrar_fuente_toml) y, si el checkout vivo
 # difiere de origin/<rama>, lo suma al mensaje de confirmación (DEVKIT-183).
 confirm_recreate() {
-  mostrar_fuente_toml
+  mostrar_fuente_toml || return 1
   detalle=""
   [ "$FUENTE_DIFIERE" = 1 ] && detalle="devkit: escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba."
   confirm "$detalle"
@@ -783,7 +790,7 @@ case "$cmd" in
     # El aviso y la confirmación van después de los chequeos de arriba (H2,
     # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
     # pedía aceptar una pérdida y después salía sin recrear nada.
-    mostrar_fuente_toml
+    mostrar_fuente_toml || exit 1
     if [ "$FUENTE_DIFIERE" = 1 ]; then
       confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
         || { echo "devkit: cancelado" >&2; exit 1; }
