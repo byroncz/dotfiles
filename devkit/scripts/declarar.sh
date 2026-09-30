@@ -106,20 +106,13 @@ agregar_valores() {
   rm -f "$tmp"
 }
 
-# `devkit recreate` lee `extensions`, `domains` y `apt` del checkout vivo de
-# /workspace (sync_toml_env), no de origin/main, y un PR -0 no actualiza ese
-# checkout: con una card en curso, o con main sin traer, el primer recreate
-# usa la lista vieja. Ese recreate re-clona main, así que el segundo ya la
-# aplica.
-NOTA_RECREATE="Ojo: recreate lee el valor del checkout vivo de /workspace, no de origin/main; si /workspace no está en un main al día (una card en curso, por ejemplo), el primer recreate usa la lista vieja y hace falta correrlo una segunda vez, que ya clona main con el valor."
-
 paso_siguiente() {  # paso_siguiente <clave> <rama> <proyecto>
   case "$1" in
     domains)
-      echo "Paso siguiente, en el host: \`devkit proxy <proyecto> --ref $2\` aplica los dominios ya, sin esperar el merge; tras el merge, \`devkit recreate <proyecto>\`. $NOTA_RECREATE"
+      echo "Paso siguiente, en el host: \`devkit proxy <proyecto> --ref $2\` aplica los dominios ya, sin esperar el merge; tras el merge, \`devkit recreate <proyecto>\`."
       ;;
     *)
-      echo "Paso siguiente, en el host y tras el merge: \`devkit recreate <proyecto>\` (basta recreate: reconstruye con caché la capa de $1). $NOTA_RECREATE"
+      echo "Paso siguiente, en el host y tras el merge: \`devkit recreate <proyecto>\` (basta recreate: reconstruye con caché la capa de $1)."
       ;;
   esac
 }
@@ -345,8 +338,8 @@ FIN
   check "extensions: creada tras la última línea de [devkit]" 'extensions = ["ms-python.python"]' \
     "$(git -C "$tmp/origin.git" show chore/DEVKIT-0-extensions-ms-python-python:$TOML | tail -1)"
   check "extensions: paso siguiente es recreate" 1 "$(printf '%s' "$salida" | grep -c 'devkit recreate <proyecto>')"
-  check "extensions: avisa que recreate puede hacer falta dos veces" 1 \
-    "$(printf '%s' "$salida" | grep -c 'el primer recreate usa la lista vieja y hace falta correrlo una segunda vez')"
+  check "extensions: ya no avisa de correr recreate dos veces (DEVKIT-270)" 0 \
+    "$(printf '%s' "$salida" | grep -c "segunda vez")"
   check "extensions: título de la spec" 1 \
     "$(grep -c -F -- '--title DEVKIT-0 declarar extensions: ms-python.python --body' "$tmp/gh.log")"
 

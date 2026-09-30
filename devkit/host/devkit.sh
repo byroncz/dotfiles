@@ -62,19 +62,28 @@ toml_list() {
   sed -n "s/^$1[[:space:]]*=[[:space:]]*\\[\\(.*\\)\\].*/\\1/p" \
     | tr ',' '\n' | sed -E 's/^[[:space:]"]*//; s/[[:space:]"]*$//' | tr '\n' ' ' | sed 's/ *$//'
 }
-# `apt` y `domains` de .devkit/devkit.toml alimentan el build y el proxy vía
-# compose, que los interpola desde este .env: sin esto, editar devkit.toml no hacía
-# nada (DEVKIT-6). Solo si el contenedor ya existe: en el primer `up` el
-# proyecto aún no está clonado.
-# `extensions` (DEVKIT-181) también sale de aquí, pero cruda (sin resolver
-# contra Open VSX): la deja en DEVKIT_PROJECT_EXTENSIONS para que
-# resolve_extensions la una con la del template sin leer el contenedor por
-# su cuenta.
+# `apt`, `domains` y `extensions` de .devkit/devkit.toml alimentan el build y
+# el proxy vía compose, que los interpola desde este .env: sin esto, editar
+# devkit.toml no hacía nada (DEVKIT-6). Salen de origin/<rama>
+# (leer_toml_origin), la misma fuente que el entrypoint reclona en /workspace
+# al recrear, y no del checkout vivo: un PR -0 (dk --declarar) no hace pull en
+# /workspace, y con una card en curso el checkout vivo es la rama de la card,
+# así que el primer recreate tras el merge aplicaba la lista vieja (DEVKIT-270).
+# `extensions` (DEVKIT-181) sale cruda (sin resolver contra Open VSX): la deja
+# en DEVKIT_PROJECT_EXTENSIONS para que resolve_extensions la una con la del
+# template sin leer el contenedor por su cuenta.
+# Solo si el contenedor responde: en el primer `up` el proyecto aún no está
+# clonado. Si responde pero origin/<rama> no se lee, sale con 1 antes de
+# recrear: seguir con la lista del checkout vivo es justo el error de arriba.
 sync_toml_env() {
-  toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || return 0
-  apt="$(printf '%s\n' "$toml" | toml_list apt)"
-  domains="$(printf '%s\n' "$toml" | toml_list domains)"
-  extensions="$(printf '%s\n' "$toml" | toml_list extensions)"
+  docker exec "devkit-$proj" true 2>/dev/null || return 0
+  leer_toml_origin || {
+    echo "devkit: no se pudo leer .devkit/devkit.toml de origin/$(repo_ref); no se recrea con una lista de apt, domains o extensions que no salga de ahí" >&2
+    return 1
+  }
+  apt="$(printf '%s\n' "$TOML_ORIGIN" | toml_list apt)"
+  domains="$(printf '%s\n' "$TOML_ORIGIN" | toml_list domains)"
+  extensions="$(printf '%s\n' "$TOML_ORIGIN" | toml_list extensions)"
   grep -v -e '^DEVKIT_EXTRA_APT=' -e '^DEVKIT_ALLOW_DOMAINS=' -e '^DEVKIT_PROJECT_EXTENSIONS=' "$dir/.env" > "$dir/.env.tmp" 2>/dev/null || : > "$dir/.env.tmp"
   { cat "$dir/.env.tmp"; printf 'DEVKIT_EXTRA_APT=%s\n' "$apt"; printf 'DEVKIT_ALLOW_DOMAINS=%s\n' "$domains"; printf 'DEVKIT_PROJECT_EXTENSIONS=%s\n' "$extensions"; } > "$dir/.env"
   rm -f "$dir/.env.tmp"
@@ -88,14 +97,32 @@ repo_ref() {
   ref="$(sed -n 's/^DEVKIT_REPO_REF=//p' "$dir/devkit.env" 2>/dev/null | tail -1)"
   printf '%s' "${ref:-main}"
 }
+# Lee .devkit/devkit.toml de origin/<rama> dentro del contenedor (el token de
+# GitHub vive en /run/devkit/env, mismo patrón que agentes_vivos) y deja el
+# archivo en TOML_ORIGIN y el commit corto en SHA_ORIGIN. Sale con 1 si el
+# fetch, el commit o el archivo fallan. Lo usan sync_toml_env (para .env) y
+# mostrar_fuente_toml (para avisar): ambos leen lo mismo (DEVKIT-270).
+TOML_ORIGIN=""; SHA_ORIGIN=""
+leer_toml_origin() {
+  TOML_ORIGIN=""; SHA_ORIGIN=""
+  rama_origin="$(repo_ref)"
+  docker exec "devkit-$proj" sh -c '. /run/devkit/env 2>/dev/null; git -C /workspace fetch -q origin "$1"' sh "$rama_origin" 2>/dev/null || return 1
+  sha_leido="$(docker exec "devkit-$proj" git -C /workspace rev-parse --short "origin/$rama_origin" 2>/dev/null)" || return 1
+  toml_leido="$(docker exec "devkit-$proj" git -C /workspace show "origin/$rama_origin:.devkit/devkit.toml" 2>/dev/null)" || return 1
+  SHA_ORIGIN="$sha_leido"; TOML_ORIGIN="$toml_leido"
+}
 # Antes de recrear/actualizar: dice de dónde sale el .devkit/devkit.toml que
 # va a quedar en /workspace (origin/<rama>, no el checkout vivo del
 # contenedor: eso se pierde al recrear, DEVKIT-183) y la lista de domains/apt
-# que sync_toml_env va a escribir en .env desde ese checkout vivo. Si el
-# checkout vivo difiere de origin/<rama> en domains, apt o python (cambios
-# sin commit, o una rama de card que aún no llegó a origin/<rama>), avisa con
-# el diff de esos tres campos y dónde va cada uno; deja FUENTE_DIFIERE en 1
-# para que quien llame decida si eso exige una confirmación aparte.
+# que sync_toml_env va a escribir en .env, de esa misma fuente (DEVKIT-270).
+# Si el checkout vivo difiere de origin/<rama> en domains, apt, extensions o
+# python (cambios sin commit, o una rama de card que aún no llegó a
+# origin/<rama>), avisa con el diff de esos cuatro campos: lo del checkout
+# vivo se pierde al recrear. Deja FUENTE_DIFIERE en 1 para que quien llame
+# decida si eso exige una confirmación aparte. Sin --efectivo, si origin/<rama>
+# no se lee, sale con 1: quien llama corta antes de confirmar, descargar o
+# tocar nada, porque sync_toml_env abortaría igual después (DEVKIT-270). Con
+# --efectivo (`up`) solo avisa: `up` no depende de origin.
 #
 # `up` no llama a sync_toml_env (no toca domains/apt de .env), así que ahí
 # "se van a escribir" sería falso: con --efectivo imprime en cambio la lista
@@ -117,25 +144,25 @@ mostrar_fuente_toml() {  # mostrar_fuente_toml [--efectivo]
     return 0
   }
   toml_vivo="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" || toml_vivo=""
+  if ! leer_toml_origin; then
+    if [ "${1:-}" = --efectivo ]; then
+      echo "devkit: aviso: no se pudo leer origin/$ref; no se puede confirmar qué .devkit/devkit.toml quedará tras recrear" >&2
+      return 0
+    fi
+    echo "devkit: no se pudo leer .devkit/devkit.toml de origin/$ref; no se recrea con una lista de apt, domains o extensions que no salga de ahí" >&2
+    return 1
+  fi
+  sha_ref="$SHA_ORIGIN"; toml_ref="$TOML_ORIGIN"
   if [ "${1:-}" != --efectivo ]; then
-    dom_vivo="$(printf '%s\n' "$toml_vivo" | toml_list domains)"
-    apt_vivo="$(printf '%s\n' "$toml_vivo" | toml_list apt)"
-    echo "devkit: domains que se van a escribir en .env (del checkout vivo del contenedor): ${dom_vivo:-(ninguno)}"
-    echo "devkit: apt que se va a escribir en .env (del checkout vivo del contenedor): ${apt_vivo:-(ninguno)}"
-  fi
-  sha_ref=""; toml_ref=""
-  if docker exec "devkit-$proj" sh -c '. /run/devkit/env 2>/dev/null; git -C /workspace fetch -q origin "$1"' sh "$ref" 2>/dev/null; then
-    sha_ref="$(docker exec "devkit-$proj" git -C /workspace rev-parse --short "origin/$ref" 2>/dev/null)" || sha_ref=""
-    toml_ref="$(docker exec "devkit-$proj" git -C /workspace show "origin/$ref:.devkit/devkit.toml" 2>/dev/null)" || toml_ref=""
-  fi
-  if [ -z "$sha_ref" ]; then
-    echo "devkit: aviso: no se pudo leer origin/$ref; no se puede confirmar qué .devkit/devkit.toml quedará tras recrear" >&2
-    return 0
+    dom_ref="$(printf '%s\n' "$toml_ref" | toml_list domains)"
+    apt_ref="$(printf '%s\n' "$toml_ref" | toml_list apt)"
+    echo "devkit: domains que se van a escribir en .env (de origin/$ref): ${dom_ref:-(ninguno)}"
+    echo "devkit: apt que se va a escribir en .env (de origin/$ref): ${apt_ref:-(ninguno)}"
   fi
   echo "devkit: al recrear, /workspace se clona de nuevo desde origin/$ref @$sha_ref: ese será el .devkit/devkit.toml"
   [ "$toml_ref" = "$toml_vivo" ] && return 0
   dif=""
-  for campo in domains apt python; do
+  for campo in domains apt extensions python; do
     if [ "$campo" = python ]; then
       v_vivo="$(printf '%s\n' "$toml_vivo" | toml_field python)"
       v_ref="$(printf '%s\n' "$toml_ref" | toml_field python)"
@@ -633,7 +660,7 @@ confirm() {  # confirm [detalle-extra, para el aviso de FUENTE_DIFIERE]
 # que va a quedar tras recrear (mostrar_fuente_toml) y, si el checkout vivo
 # difiere de origin/<rama>, lo suma al mensaje de confirmación (DEVKIT-183).
 confirm_recreate() {
-  mostrar_fuente_toml
+  mostrar_fuente_toml || return 1
   detalle=""
   [ "$FUENTE_DIFIERE" = 1 ] && detalle="devkit: escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba."
   confirm "$detalle"
@@ -666,17 +693,19 @@ guarda_agentes_vivos() {
 }
 # devkit proxy <proyecto> [--ref <rama>]: aplica al proxy los domains de una
 # rama sin esperar el merge (DEVKIT-182). El círculo vicioso que resuelve: una
-# card declara un dominio nuevo en domains de su rama, pero sync_toml_env solo
-# lee el checkout vivo del contenedor, y el ciclo devuelve el workspace a main
-# al cerrar o bloquear la card, así que el dominio nunca llegaba al proxy
-# antes del merge. net-open no sirve: abre toda la red para todos los
-# agentes. Acá el humano sigue aprobando cada dominio, solo que antes del PR,
-# al correr este comando a mano viendo la lista que imprime.
+# card declara un dominio nuevo en domains de su rama, pero recreate lo lee
+# de origin/<rama principal> (sync_toml_env, DEVKIT-270) y ahí el dominio no
+# existe hasta el merge, así que nunca llegaba al proxy antes del PR.
+# net-open no sirve: abre toda la red para todos los agentes. Acá el humano
+# sigue aprobando cada dominio, solo que antes del PR, al correr este comando
+# a mano viendo la lista que imprime.
 #
-# Sin --ref, lee .devkit/devkit.toml del checkout actual del contenedor
-# (mismo `cat` que sync_toml_env); con --ref, el archivo de esa rama en
-# origin, sin tocar el checkout. Siempre une con los domains de origin/main y
-# solo recrea el contenedor proxy: dev y sus agentes no se tocan.
+# Sin --ref, lee .devkit/devkit.toml del checkout actual del contenedor; con
+# --ref, el archivo de esa rama en origin, sin tocar el checkout. DEVKIT-270
+# cambió la fuente de recreate, no la de este comando: su fin es justo aplicar
+# lo que aún no está en origin/<rama principal>, así que sigue leyendo el
+# checkout vivo. Siempre une con los domains de origin/main y solo recrea el
+# contenedor proxy: dev y sus agentes no se tocan.
 proxy_toml_de() {  # proxy_toml_de <rama-en-origin | "">
   docker exec "devkit-$proj" true 2>/dev/null || {
     echo "devkit: devkit-$proj no responde; ¿el contenedor está arriba?" >&2
@@ -761,7 +790,7 @@ case "$cmd" in
     # El aviso y la confirmación van después de los chequeos de arriba (H2,
     # DEVKIT-183): antes, un proyecto ya en la versión destino o en modo dev
     # pedía aceptar una pérdida y después salía sin recrear nada.
-    mostrar_fuente_toml
+    mostrar_fuente_toml || exit 1
     if [ "$FUENTE_DIFIERE" = 1 ]; then
       confirm "devkit: update también recrea el contenedor; escribe \"si\" solo si aceptas perder lo que dice el aviso de arriba." \
         || { echo "devkit: cancelado" >&2; exit 1; }

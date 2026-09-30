@@ -48,12 +48,8 @@ sin botón "Instalar". Para sumar una, corre dentro del contenedor `dk
 suma a `extensions` de `.devkit/devkit.toml` (se suma a las del template),
 sin card ni revisión de agentes. Tras aprobarlo y mergearlo, corre `devkit
 recreate <proyecto>` en el host: reconstruye con caché solo la capa de
-extensiones, `rebuild` no hace falta. `recreate` lee el valor del checkout
-vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un
-`main` al día (por ejemplo, hay una card en curso), el primer `recreate`
-usa la lista vieja y hay que correrlo dos veces; el segundo ya clona `main`
-con el valor. Es el mismo camino para `domains` y `apt` (`dk --declarar
-domains pypi.org`, `dk --declarar apt jq`).
+extensiones, `rebuild` no hace falta. Es el mismo camino para `domains` y `apt`
+(`dk --declarar domains pypi.org`, `dk --declarar apt jq`).
 
 ## Stack
 

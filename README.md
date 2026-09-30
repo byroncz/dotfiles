@@ -48,12 +48,8 @@ sin botón "Instalar". Para sumar una, corre dentro del contenedor `dk
 suma a `extensions` de `.devkit/devkit.toml` (se suma a las del template),
 sin card ni revisión de agentes. Tras aprobarlo y mergearlo, corre `devkit
 recreate <proyecto>` en el host: reconstruye con caché solo la capa de
-extensiones, `rebuild` no hace falta. `recreate` lee el valor del checkout
-vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un
-`main` al día (por ejemplo, hay una card en curso), el primer `recreate`
-usa la lista vieja y hay que correrlo dos veces; el segundo ya clona `main`
-con el valor. Es el mismo camino para `domains` y `apt` (`dk --declarar
-domains pypi.org`, `dk --declarar apt jq`).
+extensiones, `rebuild` no hace falta. Es el mismo camino para `domains` y `apt`
+(`dk --declarar domains pypi.org`, `dk --declarar apt jq`).
 
 ## Stack
 
@@ -115,7 +111,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `dk --estado [--foto]` | En una terminal se refresca cada 3 s hasta Ctrl-C (`--seguir` sigue aceptado como sinónimo); `--foto` (o sin tty, por ejemplo en un pipe) imprime una sola vez. Muestra todos los agentes del contenedor; Ctrl-C cierra solo el monitor. La columna PR muestra `#<número>`: en una terminal que soporte hipervínculos se abre con Ctrl/Cmd+clic, y en la terminal integrada del editor lo abre en su propio webview de GitHub Pull Requests, sin pestaña nueva. ESTADO se colorea: en curso y Lista para merge en verde y negrita, terminó en verde, Mergeado en morado y negrita, la bloqueada de un veredicto de pr-review en rojo y negrita, error/bloqueada genérica en rojo, no arrancó/no lanzó en gris y el resto en ámbar. |
 | `dk --tablero [--foto]` | En una terminal se refresca cada 30 s hasta Ctrl-C (`--seguir` sigue aceptado como sinónimo); `--foto` (o sin tty) imprime una sola vez. Muestra las cards activas del proyecto en una tabla. Úsalo para ver de un vistazo qué card está en progreso o bloqueada. En progreso y Revisión automática se pintan del mismo verde y negrita que "en curso" en `dk --estado`; la columna PR abre el PR igual que ahí. |
 | `dk --cola` | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque. |
-| `dk --declarar <clave> <valor>...` | Abre el PR `<CÓDIGO>-0` con auto-merge que suma extensiones (`extensions`), dominios (`domains`) o paquetes (`apt`) a `.devkit/devkit.toml`, sin card ni revisión de agentes: trabaja en un worktree temporal desde `origin/main` y no toca `/workspace`. Valida el formato, omite lo ya declarado y no abre otro PR si ya hay uno de esa clave. Tras el merge, `devkit recreate <proyecto>` en el host; para `domains`, `devkit proxy <proyecto> --ref <rama>` lo aplica antes. `recreate` lee el valor del checkout vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un `main` al día (una card en curso), el primer `recreate` usa la lista vieja y hay que correrlo dos veces. La vista de Extensiones del editor no tiene tienda: este es el camino para sumar una. |
+| `dk --declarar <clave> <valor>...` | Abre el PR `<CÓDIGO>-0` con auto-merge que suma extensiones (`extensions`), dominios (`domains`) o paquetes (`apt`) a `.devkit/devkit.toml`, sin card ni revisión de agentes: trabaja en un worktree temporal desde `origin/main` y no toca `/workspace`. Valida el formato, omite lo ya declarado y no abre otro PR si ya hay uno de esa clave. Tras el merge, `devkit recreate <proyecto>` en el host; para `domains`, `devkit proxy <proyecto> --ref <rama>` lo aplica antes. La vista de Extensiones del editor no tiene tienda: este es el camino para sumar una. |
 | `dk --agentes-vivos` | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano. |
 | `dk --pausa` | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido. |
 | `dk --alto` | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente. |

@@ -264,6 +264,10 @@ escenario() {
   mkdir -p "$TMP/ws/.devkit"
   printf '[devkit]\ntemplate = "%s"\nproject  = "TEST"\n' "$1" > "$TMP/ws/.devkit/devkit.toml"
   printf 'DEVKIT_PROJECT=p\nDEVKIT_VERSION=%s\n' "$1" > "$TMP/root/p/.env"
+  # DEVKIT-270: recreate/rebuild/update leen apt, domains y extensions de
+  # origin/<rama>, no del checkout vivo: por defecto origin/main lleva lo mismo
+  # que el workspace, y el caso que quiera otra cosa escribe su propio archivo.
+  cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 }
 
 # corre <comando> [caído] [token] [extra]: ejecuta `devkit <comando> p
@@ -468,6 +472,82 @@ printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains  = ["a.com"]\n' >
 corre rebuild
 check_salida "rebuild con toml sucio avisa que difiere de origin/main" "difiere de origin/main"
 check_docker "rebuild con toml sucio igual reconstruye desde cero" si 'build --no-cache'
+
+# --- recreate/rebuild/update leen origin/<rama>, no el checkout vivo (DEVKIT-270) -
+# Un PR -0 (dk --declarar) no hace pull en /workspace: con una card en curso el
+# checkout vivo es la rama de la card, con otra lista que la de main. apt,
+# domains y extensions van a .env desde origin/<rama> (la fuente que se
+# reclona), no del checkout vivo.
+env_de() { sed -n "s/^$1=//p" "$TMP/root/p/.env" | tail -1; }
+toml_card='[devkit]\ntemplate = "dev"\nproject  = "TEST"\napt = ["jq"]\ndomains = ["card.com"]\nextensions = ["ms.card@1.0.0"]\n'
+toml_main='[devkit]\ntemplate = "dev"\nproject  = "TEST"\napt = ["curl"]\ndomains = ["a.com"]\nextensions = ["ms.main@1.0.0", "ms.otra@2.0.0"]\n'
+export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0" DEVKIT_TEST_OVX_ENGINE_2_0_0="^1.0.0"
+
+escenario dev
+printf "$toml_card" > "$TMP/ws/.devkit/devkit.toml"
+printf "$toml_main" > "$TMP/origin/main.toml"
+corre recreate
+check        "recreate con checkout vivo en rama de card: termina bien" 0 "$ESTADO"
+check        "recreate: apt sale de origin/main, no del checkout vivo" curl "$(env_de DEVKIT_EXTRA_APT)"
+check        "recreate: domains salen de origin/main" a.com "$(env_de DEVKIT_ALLOW_DOMAINS)"
+check        "recreate: extensions salen de origin/main" "ms.main@1.0.0 ms.otra@2.0.0" "$(env_de DEVKIT_PROJECT_EXTENSIONS)"
+check_salida "recreate: dice de dónde salen domains" 'domains que se van a escribir en \.env \(de origin/main\): a\.com'
+check_salida "recreate: avisa que extensions difiere" 'extensions: checkout vivo "ms\.card@1\.0\.0" -> origin/main "ms\.main@1\.0\.0 ms\.otra@2\.0\.0"'
+
+escenario dev
+printf "$toml_card" > "$TMP/ws/.devkit/devkit.toml"
+printf "$toml_main" > "$TMP/origin/main.toml"
+corre rebuild
+check        "rebuild con checkout vivo en rama de card: domains de origin/main" a.com "$(env_de DEVKIT_ALLOW_DOMAINS)"
+check        "rebuild: extensions de origin/main" "ms.main@1.0.0 ms.otra@2.0.0" "$(env_de DEVKIT_PROJECT_EXTENSIONS)"
+
+escenario 0.1.0
+printf "$toml_card" | sed 's/"dev"/"0.2.0"/' > "$TMP/ws/.devkit/devkit.toml"
+printf "$toml_main" | sed 's/"dev"/"0.2.0"/' > "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "update con checkout vivo en rama de card: apt de origin/main" curl "$(env_de DEVKIT_EXTRA_APT)"
+check        "update: extensions de origin/main" "ms.main@1.0.0 ms.otra@2.0.0" "$(env_de DEVKIT_PROJECT_EXTENSIONS)"
+
+# Si origin/<rama> no se lee, recreate se detiene antes de recrear y no toca
+# .env: seguir con la lista del checkout vivo es el error que corrige esta card.
+escenario dev
+printf "$toml_card" > "$TMP/ws/.devkit/devkit.toml"
+rm -f "$TMP/origin/main.toml"
+printf 'DEVKIT_ALLOW_DOMAINS=previo.com\n' >> "$TMP/root/p/.env"
+corre recreate
+check        "origin/<rama> ilegible: recreate se detiene" 1 "$ESTADO"
+check_salida "origin/<rama> ilegible: lo explica" "no se pudo leer \.devkit/devkit\.toml de origin/main"
+check        "origin/<rama> ilegible: no toca .env" previo.com "$(env_de DEVKIT_ALLOW_DOMAINS)"
+check_docker "origin/<rama> ilegible: no recrea" no 'force-recreate'
+check        "origin/<rama> ilegible: no pide confirmar una destrucción" no \
+             "$(grep -q 'Escribe "si"' "$OUT" && echo si || echo no)"
+
+# update lee origin antes de tocar nada: con origin/<rama> ilegible sale con 1
+# sin bajar el tarball ni cambiar DEVKIT_VERSION, para que el siguiente
+# `update` no crea que ya está al día con la imagen vieja (H1, revisión del
+# PR 157).
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+rm -f "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "update con origin/<rama> ilegible: se detiene" 1 "$ESTADO"
+check_salida "update con origin/<rama> ilegible: lo explica" "no se pudo leer \.devkit/devkit\.toml de origin/main"
+check        "update con origin/<rama> ilegible: DEVKIT_VERSION intacta" 0.1.0 "$(env_de DEVKIT_VERSION)"
+check        "update con origin/<rama> ilegible: no baja el template" no \
+             "$(grep -q 'actualizando template' "$OUT" && echo si || echo no)"
+
+# Con la rama fijada al instanciar (DEVKIT_REPO_REF), lee esa rama y no main.
+escenario dev
+printf 'DEVKIT_REPO_REF=rama-x\n' > "$TMP/root/p/devkit.env"
+printf "$toml_card" > "$TMP/ws/.devkit/devkit.toml"
+printf "$toml_main" > "$TMP/origin/main.toml"
+printf '[devkit]\ntemplate = "dev"\nproject  = "TEST"\ndomains = ["x.com"]\n' > "$TMP/origin/rama-x.toml"
+corre recreate
+check        "DEVKIT_REPO_REF: domains de origin/<esa rama>" x.com "$(env_de DEVKIT_ALLOW_DOMAINS)"
+unset DEVKIT_TEST_OVX_ENGINE_1_0_0 DEVKIT_TEST_OVX_ENGINE_2_0_0
+
 
 # H1, DEVKIT-183: up no llama a sync_toml_env (no escribe domains/apt en
 # .env), así que muestra la lista que ya hay en .env -la que compose usa de
@@ -1026,7 +1106,7 @@ check        "línea con comentario al final se usa igual" \
 # cruda en DEVKIT_PROJECT_EXTENSIONS; resolve_extensions la une, resolviendo
 # todo contra Open VSX igual que antes.
 escenario dev
-printf 'extensions = ["ms.otra@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["ms.otra@1.0.0"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
 export DEVKIT_TEST_OVX_VERSION=2.1.270
 corre recreate
@@ -1036,7 +1116,7 @@ check        "unión: incluye la del proyecto y la del template resuelta" \
 check        "unión: termina bien" 0 "$ESTADO"
 
 escenario dev
-printf 'extensions = ["Anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["Anthropic.claude-code@1.2.3"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
 corre recreate
 unset DEVKIT_TEST_OVX_ENGINE_1_2_3
@@ -1049,7 +1129,7 @@ check        "duplicado: termina bien" 0 "$ESTADO"
 # Open VSX no distingue mayúsculas en el id: un duplicado con otra
 # capitalización también debe deduplicarse a favor del proyecto (H2, DEVKIT-181).
 escenario dev
-printf 'extensions = ["anthropic.claude-code@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["anthropic.claude-code@1.2.3"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE_1_2_3="^1.0.0"
 corre recreate
 unset DEVKIT_TEST_OVX_ENGINE_1_2_3
@@ -1060,7 +1140,7 @@ check_docker "duplicado con otra capitalización: no consulta el /latest del tem
 check        "duplicado con otra capitalización: termina bien" 0 "$ESTADO"
 
 escenario dev
-printf 'extensions = ["ms.rota@9.9.9"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["ms.rota@9.9.9"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 corre recreate
 check_salida "404 de una extensión del proyecto: lo explica y nombra el origen" \
              'extensión ms\.rota 9\.9\.9 no existe en Open VSX \(404\) \(declarada en el proyecto\)'
@@ -1071,7 +1151,7 @@ check_docker "404 de una extensión del proyecto: no construye" no 'up -d'
 # impedir que las extensiones válidas (del proyecto y del template) resuelvan
 # (H4, DEVKIT-181).
 escenario dev
-printf 'extensions = ["sinpunto", "ms.valida@1.0.0"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["sinpunto", "ms.valida@1.0.0"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
 export DEVKIT_TEST_OVX_VERSION=2.1.270
 corre recreate
@@ -1085,7 +1165,7 @@ check        "elemento inválido: termina bien" 0 "$ESTADO"
 # Motor incompatible de una extensión fija del proyecto: se detiene y nombra
 # el origen, igual que el 404 de arriba (H5, DEVKIT-181).
 escenario dev
-printf 'extensions = ["ms.vieja@1.2.3"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["ms.vieja@1.2.3"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE_1_2_3="^2.0.0"
 corre recreate
 unset DEVKIT_TEST_OVX_ENGINE_1_2_3
@@ -1097,7 +1177,7 @@ check_docker "motor incompatible de una extensión del proyecto: no construye" n
 # "latest" declarado por el proyecto, sin @versión: se resuelve contra Open
 # VSX igual que "latest" del template (H5, DEVKIT-181).
 escenario dev
-printf 'extensions = ["ms.nueva"]\n' >> "$TMP/ws/.devkit/devkit.toml"
+printf 'extensions = ["ms.nueva"]\n' | tee -a "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml" >/dev/null
 export DEVKIT_TEST_OVX_ENGINE="^1.0.0"
 export DEVKIT_TEST_OVX_VERSION=3.0.0
 corre recreate
@@ -1112,6 +1192,7 @@ check        "latest del proyecto sin versión: termina bien" 0 "$ESTADO"
 # (H5, DEVKIT-181).
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\nextensions = ["ms.nueva@1.0.0"]\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 export DEVKIT_TEST_OVX_ENGINE_1_0_0="^1.0.0"
 export DEVKIT_TEST_OVX_VERSION=2.1.270
