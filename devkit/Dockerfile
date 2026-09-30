@@ -205,11 +205,31 @@ RUN set -eux; \
 # build si una versión nueva de openvscode-server ya no trae la clave, en
 # vez de dejar un `del` sobre algo que ya no está sin que nadie lo note.
 # product.json es de root; USER $USERNAME (arriba) no puede escribirlo.
+# DEVKIT-266: quitar la galería no apaga la sección "Recomendadas" de la
+# vista de Extensiones: VS Code la arma sin consultar la tienda, con cuatro
+# claves más de product.json, y ofrecería "Instalar" sobre extensiones que
+# no pueden bajarse. Se quitan igual, cada una con su guarda:
+#   - configBasedExtensionTips: sugerencias por archivos del workspace
+#     (.git/config -> GitLens y GitHub Pull Requests, Dockerfile -> Docker,
+#     package.json -> npm intellisense, pyproject.toml -> ruff y formateadores).
+#   - extensionRecommendations: lista fija de recomendadas de la distribución.
+#   - languageExtensionTips: sugerencias al abrir un archivo de un lenguaje.
+#   - keymapExtensionTips: sugerencias de mapas de teclas de otros editores.
 USER root
-RUN jq -e 'has("extensionsGallery")' /opt/openvscode-server/product.json >/dev/null \
- && jq 'del(.extensionsGallery)' /opt/openvscode-server/product.json > /tmp/product.json \
- && mv /tmp/product.json /opt/openvscode-server/product.json \
- && ! jq -e 'has("extensionsGallery")' /opt/openvscode-server/product.json >/dev/null
+RUN set -eu; \
+    product=/opt/openvscode-server/product.json; \
+    claves="extensionsGallery configBasedExtensionTips extensionRecommendations languageExtensionTips keymapExtensionTips"; \
+    for clave in $claves; do \
+      jq -e --arg k "$clave" 'has($k)' "$product" >/dev/null \
+        || { echo "product.json ya no trae $clave: revisar el bloque DEVKIT-260/266" >&2; exit 1; }; \
+    done; \
+    jq 'del(.extensionsGallery, .configBasedExtensionTips, .extensionRecommendations, .languageExtensionTips, .keymapExtensionTips)' \
+      "$product" > /tmp/product.json; \
+    mv /tmp/product.json "$product"; \
+    for clave in $claves; do \
+      ! jq -e --arg k "$clave" 'has($k)' "$product" >/dev/null \
+        || { echo "product.json sigue trayendo $clave" >&2; exit 1; }; \
+    done
 USER $USERNAME
 
 # --- Herramientas de Python para el editor ---------------------------------
