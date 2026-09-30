@@ -79,6 +79,12 @@
 #     Las primeras diez cards de la cola (DEVKIT-119): Clave, grupo (Épica de
 #     origen o "(sin Épica)") y título, en el mismo orden que decide "la
 #     siguiente card" (`cola.sh`). No acepta `--foto` ni `--seguir`.
+#   devkit-run --declarar <extensions|domains|apt> <valor>...
+#     Abre el PR `<CÓDIGO>-0 declarar <clave>: <valores>` con auto-merge que
+#     suma esos valores a `.devkit/devkit.toml` (DEVKIT-268), sin card ni
+#     agentes, desde un worktree temporal: no toca /workspace ni el candado.
+#     Delega en `declarar.sh`, que trae su propia autoprueba (`--test`, corrida
+#     también por la de este script).
 #   devkit-run --agentes-vivos
 #     PID, Clave y paso de cada `--worker`/`--sync` en curso en este
 #     contenedor (DEVKIT-138), o "sin agentes vivos". La misma detección por
@@ -11003,6 +11009,19 @@ FIN
     "$(echo '{"session_id":"sess-def"}' | DEVKIT_SKILL=task-fix DEVKIT_WS="$hs_dir/ws" DEVKIT_RUN_DIR="$hs_dir/run7" bash "$HERE/hook-stop.sh")"
   rm -rf "$hs_dir"
 
+  # DEVKIT-268: `--declarar` delega en declarar.sh, que prueba con git real
+  # sobre un origin local y un doble de gh la suma sin duplicar, la clave
+  # nueva, el título y la rama con -0, `--auto --squash`, los valores
+  # inválidos, el PR -0 previo y que el workspace no cambia. Aquí solo se
+  # comprueba que esa autoprueba pasa entera y que el despacho llega a ella.
+  local decl_salida decl_rc
+  decl_salida=$(bash "$HERE/declarar.sh" --test 2>&1); decl_rc=$?
+  check "declarar.sh --test: sale 0" 0 "$decl_rc"
+  check "declarar.sh --test: ningún caso FAIL" 0 "$(printf '%s\n' "$decl_salida" | grep -c '^FAIL')"
+  check "declarar.sh --test: corrió los casos" 1 "$([ "$(printf '%s\n' "$decl_salida" | grep -c '^ok')" -ge 30 ] && echo 1 || echo 0)"
+  bash "$HERE/devkit-run.sh" --declarar repos foo >/dev/null 2>&1
+  check "--declarar despacha a declarar.sh (clave desconocida: 64)" 64 "$?"
+
   return $fail
 }
 
@@ -11414,6 +11433,11 @@ $card_md"
     # lista para que el humano la vea sin abrir Notion.
     "$COLA_BIN" --lista
     exit $?
+    ;;
+  --declarar)
+    # DEVKIT-268: un script aparte, este archivo ya pasa de 11 000 líneas.
+    shift
+    exec "${DEVKIT_DECLARAR_BIN:-$HERE/declarar.sh}" "$@"
     ;;
   --agentes)
     # Para el segmento `agentes:<a>` del prompt: `agentes_en_curso_rapido`,
