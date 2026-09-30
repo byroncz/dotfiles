@@ -353,6 +353,7 @@ check        "rebuild también escribe DEVKIT_TZ" America/Bogota "$(env_tz)"
 
 escenario dev
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 ln -sfn /var/db/timezone/zoneinfo/America/Bogota "$TMP/localtime-mac"
 DEVKIT_LOCALTIME_FILE="$TMP/localtime-mac" corre update
@@ -538,6 +539,30 @@ check        "update con origin/<rama> ilegible: DEVKIT_VERSION intacta" 0.1.0 "
 check        "update con origin/<rama> ilegible: no baja el template" no \
              "$(grep -q 'actualizando template' "$OUT" && echo si || echo no)"
 
+# DEVKIT-271: la versión destino de update también sale de origin/<rama>. Con el
+# checkout vivo en una rama de card que aún declara la versión vieja y un PR de
+# template-update ya mergeado en origin/main, update actualiza a la nueva y no
+# responde "ya en <vieja>".
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.1.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/origin/main.toml"
+printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
+corre update
+check        "update con checkout vivo en template viejo y origin/main en el nuevo: termina bien" 0 "$ESTADO"
+check_salida "update toma la versión destino de origin/main" "actualizando template 0\.1\.0 -> 0\.2\.0"
+check        "update toma la versión destino de origin/main: DEVKIT_VERSION" 0.2.0 "$(env_de DEVKIT_VERSION)"
+check        "update toma la versión destino de origin/main: no dice 'ya en'" no \
+             "$(grep -q '^ya en ' "$OUT" && echo si || echo no)"
+
+# Al revés: el checkout vivo ya declara la nueva (card que sube template) pero
+# origin/main aún la vieja: no hay nada que actualizar.
+escenario 0.1.0
+printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+printf '[devkit]\ntemplate = "0.1.0"\nproject  = "TEST"\n' > "$TMP/origin/main.toml"
+corre update
+check_salida "update con checkout vivo adelantado a origin/main: ya está al día" "ya en 0\.1\.0"
+check        "update con checkout vivo adelantado a origin/main: DEVKIT_VERSION intacta" 0.1.0 "$(env_de DEVKIT_VERSION)"
+
 # Con la rama fijada al instanciar (DEVKIT_REPO_REF), lee esa rama y no main.
 escenario dev
 printf 'DEVKIT_REPO_REF=rama-x\n' > "$TMP/root/p/devkit.env"
@@ -699,6 +724,7 @@ check        "update ya en la versión destino: termina bien" 0 "$ESTADO"
 # de descargar la etiqueta.
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 corre update
 check        "update con compose.yaml sin EXTENSIONS se detiene" 1 "$ESTADO"
 check_salida "update con compose.yaml sin EXTENSIONS lo explica" "no declara EXTENSIONS"
@@ -706,6 +732,7 @@ check_docker "update con compose.yaml sin EXTENSIONS no descarga la etiqueta" no
 
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 corre update
 check_salida "update con compose.yaml al día no se detiene por EXTENSIONS" "actualizando template"
@@ -726,6 +753,7 @@ check        "compose.yaml desincronizado con etiqueta: no manda a --ref" no \
 # etiqueta destino, no contra el que había antes de bajarla.
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 cp "$TMP/root/p/compose.yaml" "$TMP/root/p/template/compose.yaml"
 export DEVKIT_TEST_TARBALL_COMPOSE="name: devkit-p-0.2.0"
@@ -760,6 +788,7 @@ check_salida "comando devkit desincronizado con etiqueta: up también avisa" "el
 # instalado, lo copia a bin/devkit.new y lo renombra encima al terminar.
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
 corre update
@@ -783,6 +812,7 @@ check        "bin/devkit viejo: update termina bien" 0 "$ESTADO"
 escenario 0.1.0
 echo '# quedó de una release vieja, antes de DEVKIT-258' >> "$TMP/root/bin/devkit"
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 corre update
 check        "bin/devkit ya venía viejo: update no repite el aviso confuso a mitad de camino" no \
@@ -794,6 +824,7 @@ check_salida "bin/devkit ya venía viejo: confirma el refresco" "devkit: comando
 # bin/devkit ya al día: update no dice nada de "actualizado" ni lo toca.
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 corre update
 check        "bin/devkit ya al día: update no dice que lo actualizó" no \
@@ -806,6 +837,7 @@ check        "bin/devkit ya al día: update termina bien" 0 "$ESTADO"
 # invocar compose.
 escenario 0.1.0
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
 export DEVKIT_TEST_COMPOSE_FAIL=1
@@ -873,6 +905,7 @@ check        "bin/devkit en una etiqueta más nueva: no habla de modo dev" no \
 escenario 0.1.0
 printf '0.1.0\n' > "$TMP/root/bin/devkit.version"
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
 corre update
@@ -888,6 +921,7 @@ check        "instalada 0.1.0, update a 0.2.0: devkit.version queda en 0.2.0" 0.
 escenario 0.1.0
 printf '1.2.0\n' > "$TMP/root/bin/devkit.version"
 printf '[devkit]\ntemplate = "0.2.0"\nproject  = "TEST"\n' > "$TMP/ws/.devkit/devkit.toml"
+cp "$TMP/ws/.devkit/devkit.toml" "$TMP/origin/main.toml"
 printf 'name: devkit-p\n    args:\n      EXTENSIONS: x\n' > "$TMP/root/p/compose.yaml"
 export DEVKIT_TEST_TARBALL_HOST_MARCA="# marca-de-la-release-0.2.0"
 corre update
