@@ -748,9 +748,18 @@ case "$cmd" in
   recreate) guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && warn_host_stale && resolve_extensions && compose up -d --build --force-recreate ;;
   rebuild)  guarda_agentes_vivos && confirm_recreate && sync_tz_env && sync_toml_env && sync_dev_template && warn_host_stale && resolve_extensions && compose build --no-cache && compose up -d --force-recreate ;;
   update)
-    toml="$(docker exec "devkit-$proj" cat /workspace/.devkit/devkit.toml 2>/dev/null)" \
+    # La versión destino sale de origin/<rama> (leer_toml_origin), no del
+    # checkout vivo: con una card en curso el checkout es la rama de la card, y
+    # un PR de template-update ya mergeado en main no se ve ahí, así que
+    # respondía "ya en <vieja>" (DEVKIT-271, mismo error de fondo que
+    # DEVKIT-270). Si origin/<rama> no se lee, sale con 1 sin tocar nada.
+    docker exec "devkit-$proj" true 2>/dev/null \
       || { echo "el contenedor no responde; arráncalo con 'devkit up $proj' primero" >&2; exit 1; }
-    target="$(printf '%s\n' "$toml" | toml_field template)"
+    leer_toml_origin || {
+      echo "devkit: no se pudo leer .devkit/devkit.toml de origin/$(repo_ref); no se sabe a qué versión actualizar" >&2
+      exit 1
+    }
+    target="$(printf '%s\n' "$TOML_ORIGIN" | toml_field template)"
     [ -n "$target" ] || { echo ".devkit/devkit.toml no declara 'template'" >&2; exit 1; }
     current="$(sed -n 's/^DEVKIT_VERSION=//p' "$dir/.env" | head -1)"
     if [ "$target" = "$current" ]; then
