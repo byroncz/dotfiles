@@ -2410,6 +2410,41 @@ PATH="$PROC_ALTO/bin:$PATH" DEVKIT_WATCH_BOT=bot \
 check_igual "alto: procesar_pr corta antes de consultar gh" 0 \
   "$(wc -l <"$PROC_ALTO/watch.log" | tr -d ' ')"
 
+# Contrato de `dk --declarar` (DEVKIT-268, declarar.sh): su PR se titula
+# `<CÓDIGO>-0 declarar <clave>: <valores>`, y `key_of` descarta la Clave
+# `<CÓDIGO>-0`, así que `procesar_pr` no lo revisa ni lo corrige ni gasta una
+# consulta a gh, y watch.log no registra ninguna línea de ese PR. Sin este
+# caso, cambiar `key_of` para aceptar el -0 pondría al bucle a revisar (y a
+# cerrar una card inexistente por) cada PR de `dk --declarar`. El control
+# con una card de verdad, en el mismo entorno, prueba que el doble de gh sí
+# registra sus llamadas.
+PROC_CERO=$(mktemp -d -p "$TMP")
+mkdir -p "$PROC_CERO/run" "$PROC_CERO/bin"
+cat >"$PROC_CERO/bin/gh" <<'FIN'
+#!/usr/bin/env bash
+echo "$*" >>"$DEVKIT_TEST_GH_LLAMADAS"
+exit 1
+FIN
+chmod +x "$PROC_CERO/bin/gh"
+for titulo_cero in "DEVKIT-0 declarar extensions: ms-python.python" \
+                   "DEVKIT-0 declarar domains: pypi.org files.pythonhosted.org" \
+                   "DEVKIT-0 declarar apt: jq"; do
+  PATH="$PROC_CERO/bin:$PATH" DEVKIT_WATCH_BOT=bot DEVKIT_TEST_GH_LLAMADAS="$PROC_CERO/llamadas" \
+    DEVKIT_RUN_DIR="$PROC_CERO/run" DEVKIT_WS="$PROC_CERO" \
+    bash "$WATCH" --procesar-pr 90 https://github.com/o/r/pull/90 "$titulo_cero" DEVKIT \
+    >"$PROC_CERO/watch.log" 2>&1
+  check_igual "-0: procesar_pr descarta \"${titulo_cero%%:*}\": watch.log vacío" 0 \
+    "$(wc -l <"$PROC_CERO/watch.log" | tr -d ' ')"
+  check_igual "-0: procesar_pr descarta \"${titulo_cero%%:*}\": ninguna llamada a gh" 0 \
+    "$([ -s "$PROC_CERO/llamadas" ] && echo 1 || echo 0)"
+done
+PATH="$PROC_CERO/bin:$PATH" DEVKIT_WATCH_BOT=bot DEVKIT_TEST_GH_LLAMADAS="$PROC_CERO/llamadas" \
+  DEVKIT_RUN_DIR="$PROC_CERO/run" DEVKIT_WS="$PROC_CERO" \
+  bash "$WATCH" --procesar-pr 91 https://github.com/o/r/pull/91 "DEVKIT-91 algo" DEVKIT \
+  >"$PROC_CERO/watch.log" 2>&1
+check_igual "-0: control, una card con Clave real sí consulta gh" 1 \
+  "$([ -s "$PROC_CERO/llamadas" ] && echo 1 || echo 0)"
+
 # --- run_skill desmarca la clave que ya tenía puesta quien llama al cortar en
 # alto (H6 de la revisión sobre el PR #103) ----------------------------------
 # Antes, `caso_fix`/`caso_revisar`/`caso_fix_humano` (y el relanzamiento de

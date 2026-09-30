@@ -33,17 +33,27 @@ Cada proyecto recibe su propio par de puertos de host (editor y retorno
 OAuth), asignado por `new-project.sh` al instalarlo: para verlos, `cat
 ~/.devkit/<proyecto>/.env`.
 
-Cada proyecto tiene también un volumen `editor-<proyecto>` que conserva el
-estado del editor VS Code del lado del servidor (estado de las extensiones,
-perfiles en caché y logs) entre reconstrucciones. No guarda las extensiones en
-sí: esas vienen en la imagen, así que una que instales a mano desde el editor
-no sobrevive al `devkit rebuild`. Para que sí sobreviva, declárala en
-`extensions` de `.devkit/devkit.toml` (se suma a las del template, por
-ejemplo `extensions = ["GitHub.vscode-github-actions",
-"ms-python.python@2026.2.0"]`) y corre `devkit recreate`. `devkit down` no
-borra el volumen, igual que
-al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
-`docker volume rm editor-<proyecto>`.
+El editor VS Code no guarda su sesión (la de GitHub Pull Requests, entre
+otras) del lado del servidor: no hay volumen para eso. El shim del proxy le
+agrega al editor la clave que necesita para cifrar su almacén de secretos en
+el navegador, así que la sesión sobrevive a `devkit recreate` mientras uses
+el mismo navegador y el mismo puerto de host; cambiar cualquiera de los dos
+la pierde. Tampoco guarda las extensiones: esas vienen en la imagen. La
+vista de Extensiones no tiene tienda en vivo: el build baja las extensiones
+con la red del host, pero el proxy en vivo del contenedor solo deja pasar lo
+que está en `allowlist.base` más `domains` de `.devkit/devkit.toml`, así que
+buscar ahí solo muestra el aviso nativo de que no hay galería configurada,
+sin botón "Instalar". Para sumar una, corre dentro del contenedor `dk
+--declarar extensions ms-python.python`: abre un PR con auto-merge que la
+suma a `extensions` de `.devkit/devkit.toml` (se suma a las del template),
+sin card ni revisión de agentes. Tras aprobarlo y mergearlo, corre `devkit
+recreate <proyecto>` en el host: reconstruye con caché solo la capa de
+extensiones, `rebuild` no hace falta. `recreate` lee el valor del checkout
+vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un
+`main` al día (por ejemplo, hay una card en curso), el primer `recreate`
+usa la lista vieja y hay que correrlo dos veces; el segundo ya clona `main`
+con el valor. Es el mismo camino para `domains` y `apt` (`dk --declarar
+domains pypi.org`, `dk --declarar apt jq`).
 
 ## Stack
 
@@ -54,7 +64,7 @@ al resto de los volúmenes con nombre; para reiniciarlo desde cero hace falta
 | tinyproxy | Proxy de salida con lista blanca de dominios (`allowlist.base` más `domains` de `.devkit/devkit.toml`). | alpine 3.22 |
 | uv | Instala la versión de Python de `.devkit/devkit.toml` y gestiona dependencias y entornos. | 0.12.7 |
 | Python | Lenguaje de los proyectos de datos. No viene en la imagen: cada proyecto fija su versión. | — |
-| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Extensiones del template más `extensions` de `.devkit/devkit.toml`. | 1.109.5 |
+| openvscode-server | Único editor del devkit: `devkit code <proyecto>` abre la URL con token. Extensiones del template más `extensions` de `.devkit/devkit.toml`; sin tienda en vivo, la vista de Extensiones solo lista lo instalado. | 1.109.5 |
 | devkit: enlaces del monitor | Extensión local del editor (sin Open VSX): un `TerminalLinkProvider` que abre el PR de la columna PR de `dk --estado`/`dk --tablero` en el webview de GitHub Pull Requests, sin pestaña nueva, en la terminal integrada. | 0.1.0 |
 | zsh + starship | Shell y prompt de una sola línea: proyecto, rama, cambios, agentes vivos y alarmas. | starship 1.24.2 |
 | Claude Code | Agente principal. Lee `AGENTS.md`, ejecuta las skills, abre PRs y actualiza Notion. | — |
@@ -82,7 +92,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `devkit stop <proyecto>` | Detiene sin perder nada. |
 | `devkit down <proyecto>` | Destruye el contenedor; lo no commiteado se pierde. |
 | `devkit recreate <proyecto>` | Recrea los contenedores, reconstruyendo solo las capas que cambiaron. Úsalo tras tocar `.devkit/devkit.toml` o, en modo dev, el propio `devkit/`. Se niega si hay un agente en curso; `--force` salta la guarda. `/workspace` no es un volumen: se vuelve a clonar desde `origin/<rama>`, así que antes de confirmar dice de dónde sale ese `.devkit/devkit.toml` y avisa si el que hay ahora en el contenedor difiere (cambios sin commit o una rama de card): eso se pierde. |
-| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza. Misma guarda de agentes en curso y mismo aviso de `.devkit/devkit.toml` que `recreate`. |
+| `devkit rebuild <proyecto>` | Reconstruye las imágenes desde cero y recrea. Úsalo cuando cambies el Dockerfile o sospeches que la imagen quedó corrupta; `recreate` no alcanza. Sumar una extensión, un dominio o un paquete apt no lo necesita: se declara con `dk --declarar` y basta `recreate`. Misma guarda de agentes en curso y mismo aviso de `.devkit/devkit.toml` que `recreate`. |
 | `devkit update <proyecto>` | Sube a la versión de template que pide `.devkit/devkit.toml`. También recrea el contenedor (mismo aviso que `recreate` si el toml vivo difiere del de `origin/<rama>`) y, si quedó desincronizado, refresca el propio comando `devkit` del host a esa versión. |
 | `devkit logs <proyecto>` | Arranque y bucles del contenedor. |
 | `devkit net-open <proyecto>` | Red abierta en esta sesión, solo para depurar. |
@@ -105,6 +115,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `dk --estado [--foto]` | En una terminal se refresca cada 3 s hasta Ctrl-C (`--seguir` sigue aceptado como sinónimo); `--foto` (o sin tty, por ejemplo en un pipe) imprime una sola vez. Muestra todos los agentes del contenedor; Ctrl-C cierra solo el monitor. La columna PR muestra `#<número>`: en una terminal que soporte hipervínculos se abre con Ctrl/Cmd+clic, y en la terminal integrada del editor lo abre en su propio webview de GitHub Pull Requests, sin pestaña nueva. ESTADO se colorea: en curso y Lista para merge en verde y negrita, terminó en verde, Mergeado en morado y negrita, la bloqueada de un veredicto de pr-review en rojo y negrita, error/bloqueada genérica en rojo, no arrancó/no lanzó en gris y el resto en ámbar. |
 | `dk --tablero [--foto]` | En una terminal se refresca cada 30 s hasta Ctrl-C (`--seguir` sigue aceptado como sinónimo); `--foto` (o sin tty) imprime una sola vez. Muestra las cards activas del proyecto en una tabla. Úsalo para ver de un vistazo qué card está en progreso o bloqueada. En progreso y Revisión automática se pintan del mismo verde y negrita que "en curso" en `dk --estado`; la columna PR abre el PR igual que ahí. |
 | `dk --cola` | Muestra las primeras diez cards de la cola, en el orden en que el bucle las va a tomar. Úsalo para ver qué sigue antes de que arranque. |
+| `dk --declarar <clave> <valor>...` | Abre el PR `<CÓDIGO>-0` con auto-merge que suma extensiones (`extensions`), dominios (`domains`) o paquetes (`apt`) a `.devkit/devkit.toml`, sin card ni revisión de agentes: trabaja en un worktree temporal desde `origin/main` y no toca `/workspace`. Valida el formato, omite lo ya declarado y no abre otro PR si ya hay uno de esa clave. Tras el merge, `devkit recreate <proyecto>` en el host; para `domains`, `devkit proxy <proyecto> --ref <rama>` lo aplica antes. `recreate` lee el valor del checkout vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un `main` al día (una card en curso), el primer `recreate` usa la lista vieja y hay que correrlo dos veces. La vista de Extensiones del editor no tiene tienda: este es el camino para sumar una. |
 | `dk --agentes-vivos` | Lista PID, Clave y paso de cada agente en curso en el contenedor, o dice que no hay ninguno. Úsalo antes de un `devkit recreate`/`devkit rebuild` a mano. |
 | `dk --pausa` | Pone el interruptor en pausa: el bucle deja de tomar cards nuevas de la cola cuando la obedezca; un lanzamiento manual sigue permitido. |
 | `dk --alto` | Pone el interruptor en alto: el bucle se detiene del todo cuando la obedezca y un lanzamiento manual se rechaza. Úsalo antes de una intervención que no debe cruzarse con ningún agente. |
@@ -136,6 +147,7 @@ Extensiones del editor, versionadas en `devkit/vscode/extensions.toml`: Anthropi
 | `notion.sh` | Cliente de la API de Notion para bash: leer y escribir cards y Documentación. |
 | `task-close.sh <Clave> [PR]` | Cierra una card mergeada: `Estado` a `Hecha` y marcador en el PR. Úsalo tras mergear a mano, cuando el bucle no la alcanzó a cerrar solo. |
 | `task-block.sh <Clave> <motivo>` | Bloquea una card y anota el motivo. Úsalo cuando falte algo del humano y no puedas seguir sin preguntar. |
+| `declarar.sh <clave> <valor>...` | Abre el PR `<CÓDIGO>-0` que suma valores a `extensions`, `domains` o `apt` (lo que invoca `dk --declarar`); trae su propia autoprueba con `--test`. |
 | `cola.sh [--lista]` | Imprime la Clave de la siguiente card de la cola, o con `--lista`, las primeras diez. |
 | `prompt-status.sh` | Arma la línea dinámica del prompt de starship. |
 | `dropbox-setup.sh` | Autoriza Dropbox una vez y genera el secreto `rclone_conf_b64`. |
@@ -187,10 +199,12 @@ Detalle y convenciones de cada transición:
   `rclone_conf_b64`.
 - **Open VSX**: registro de extensiones del editor. El template las declara
   en `devkit/vscode/extensions.toml`; un proyecto suma las suyas con
-  `extensions` en `.devkit/devkit.toml` (por ejemplo `extensions =
-  ["GitHub.vscode-github-actions", "ms-python.python@2026.2.0"]`, sin
-  versión resuelve a la más reciente), y si un id se repite gana la del
-  proyecto. Todas se resuelven contra Open VSX al construir la imagen.
+  `extensions` en `.devkit/devkit.toml`, que se declara con `dk --declarar
+  extensions <ns.ext[@versión]>` (sin versión resuelve a la más reciente), y
+  si un id se repite gana la del proyecto. Todas se resuelven contra Open
+  VSX al construir la imagen, nunca desde el editor en vivo: `product.json`
+  no trae `extensionsGallery`, así que la vista de Extensiones no ofrece una
+  tienda que el proxy no dejaría usar.
 
 ## Documentación
 

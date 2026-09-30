@@ -43,10 +43,17 @@ vista de Extensiones no tiene tienda en vivo: el build baja las extensiones
 con la red del host, pero el proxy en vivo del contenedor solo deja pasar lo
 que está en `allowlist.base` más `domains` de `.devkit/devkit.toml`, así que
 buscar ahí solo muestra el aviso nativo de que no hay galería configurada,
-sin botón "Instalar". Para sumar una, declárala en `extensions` de
-`.devkit/devkit.toml` (se suma a las del template, por ejemplo `extensions =
-["ms-python.python"]`) y corre `devkit rebuild <proyecto>`, el camino que
-documenta la chuleta para sumar una extensión.
+sin botón "Instalar". Para sumar una, corre dentro del contenedor `dk
+--declarar extensions ms-python.python`: abre un PR con auto-merge que la
+suma a `extensions` de `.devkit/devkit.toml` (se suma a las del template),
+sin card ni revisión de agentes. Tras aprobarlo y mergearlo, corre `devkit
+recreate <proyecto>` en el host: reconstruye con caché solo la capa de
+extensiones, `rebuild` no hace falta. `recreate` lee el valor del checkout
+vivo de `/workspace`, no de `origin/main`: si `/workspace` no está en un
+`main` al día (por ejemplo, hay una card en curso), el primer `recreate`
+usa la lista vieja y hay que correrlo dos veces; el segundo ya clona `main`
+con el valor. Es el mismo camino para `domains` y `apt` (`dk --declarar
+domains pypi.org`, `dk --declarar apt jq`).
 
 ## Stack
 
@@ -86,13 +93,12 @@ Detalle y convenciones de cada transición:
   `rclone_conf_b64`.
 - **Open VSX**: registro de extensiones del editor. El template las declara
   en `devkit/vscode/extensions.toml`; un proyecto suma las suyas con
-  `extensions` en `.devkit/devkit.toml` (por ejemplo `extensions =
-  ["GitHub.vscode-github-actions", "ms-python.python@2026.2.0"]`, sin
-  versión resuelve a la más reciente), y si un id se repite gana la del
-  proyecto. Todas se resuelven contra Open VSX al construir la imagen, nunca
-  desde el editor en vivo: `product.json` no trae `extensionsGallery`, así
-  que la vista de Extensiones no ofrece una tienda que el proxy no dejaría
-  usar.
+  `extensions` en `.devkit/devkit.toml`, que se declara con `dk --declarar
+  extensions <ns.ext[@versión]>` (sin versión resuelve a la más reciente), y
+  si un id se repite gana la del proyecto. Todas se resuelven contra Open
+  VSX al construir la imagen, nunca desde el editor en vivo: `product.json`
+  no trae `extensionsGallery`, así que la vista de Extensiones no ofrece una
+  tienda que el proxy no dejaría usar.
 
 ## Documentación
 
