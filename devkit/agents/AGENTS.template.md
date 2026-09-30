@@ -33,9 +33,8 @@ importa este archivo; Codex lo lee directamente. Es la única fuente.
 - Si una conexión falla con "connection refused", el dominio no está en la
   lista blanca del proxy. Ejecuta `devkit-net-denied` para confirmarlo,
   añádelo a `domains` en `.devkit/devkit.toml`, comitea y pushea: `devkit
-  recreate` no lo aplica antes del merge, porque el proxy del host solo lee
-  el checkout vivo del contenedor y el ciclo devuelve el workspace a `main`
-  al cerrar o bloquear la card (DEVKIT-182). Bloquea la card pidiendo
+  recreate` no lo aplica antes del merge, porque lee `domains` de `origin/main`,
+  donde la card aún no llegó (DEVKIT-182). Bloquea la card pidiendo
   `devkit proxy <proyecto> --ref <rama>` al humano; el detalle está en "Un
   dominio bloqueado" de `task-start` y `task-fix`.
 
