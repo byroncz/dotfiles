@@ -1408,6 +1408,12 @@ arrastrar_hijas() {  # arrastrar_hijas <n>
 # (DEVKIT-120, H1): guarda el último motivo por el que no se lanzó, para
 # avisar una sola vez por motivo y no en cada pasada del sondeo.
 LANZAR_COLA_ULTIMO_MOTIVO=""
+# Cuando la cola queda sin nada que lanzar y había un motivo avisado, se
+# escribe una línea `cola-<n> sin cards` y se olvida el motivo (DEVKIT-269,
+# H3): `devkit-run --estado` la lee como el fin de esa espera
+# (`motivo_espera_cola`); sin ella, el "cola-<n> espera: ..." quedaría pegado
+# en DETALLE aunque la cola ya se hubiera vaciado. Sin motivo pendiente no
+# escribe nada: una cola vacía de por sí no deja rastro en watch.log.
 lanzar_cola() {  # lanzar_cola <n>
   local n=$1 siguiente out rc estado sucio otros motivo
   siguiente=$("$COLA_BIN" 2>&1)
@@ -1416,7 +1422,13 @@ lanzar_cola() {  # lanzar_cola <n>
     log "ALARMA: cola-$n no pudo leer la cola (rc=$rc): $(printf '%s' "$siguiente" | tail -1 | cut -c1-160)"
     return
   fi
-  [ -n "$siguiente" ] || return 0
+  if [ -z "$siguiente" ]; then
+    if [ -n "$LANZAR_COLA_ULTIMO_MOTIVO" ]; then
+      log "cola-$n sin cards: la cola no tiene qué lanzar, ya no rige el motivo de espera anterior"
+      LANZAR_COLA_ULTIMO_MOTIVO=""
+    fi
+    return 0
+  fi
   # Mismo chequeo que task-begin.sh antes de tocar el workspace (DEVKIT-120,
   # H1): sin él, un archivo sin commit o un `claude -p` ajeno hacía fallar
   # `task-start` en cada pasada, y `task_begin_fallo` bloqueaba la cola
@@ -1754,6 +1766,9 @@ pasada() {
 #   --block-pr <num> <Clave> <url> <head> <ciclos>
 #                           el bloqueo por tres ciclos sin OK
 #   --lanzar-cola <n>       la siguiente card de la cola del proyecto
+#   --lanzar-cola-n <veces> `lanzar_cola` <veces> seguidas en el mismo proceso
+#                           (DEVKIT-269), para probar lo que persiste entre
+#                           llamadas
 #   --fix <num> <Clave> <url> <head> <ref>
 #                           el caso `fix` completo: task-fix, alarma de
 #                           task-fix vacío, relanzamiento y bloqueo
@@ -1848,6 +1863,14 @@ case "${1:-}" in
     ;;
   --lanzar-cola)
     lanzar_cola "${2:-}"
+    exit 0
+    ;;
+  --lanzar-cola-n)
+    # --lanzar-cola-n <veces>: `lanzar_cola` <veces> seguidas en el mismo
+    # proceso (DEVKIT-269, H3), como el bucle real: comparte
+    # LANZAR_COLA_ULTIMO_MOTIVO entre llamadas. Con
+    # `--lanzar-cola` suelto, cada proceso las arranca en blanco.
+    for ((_lanzar_n_i = 1; _lanzar_n_i <= ${2:-1}; _lanzar_n_i++)); do lanzar_cola "$_lanzar_n_i"; done
     exit 0
     ;;
   --intentar-lanzar-cola)

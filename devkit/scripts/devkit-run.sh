@@ -3658,7 +3658,8 @@ motivo_espera_cola() {  # motivo_espera_cola <watch.log>
   [ -f "$wlog" ] || return 0
   # Un solo recorrido: el último motivo queda vigente solo si ninguna línea
   # posterior es el lanzamiento de `lanzar_cola` (`cola-<n> terminado`/`falló`,
-  # en watch.sh o en task-close.sh), el de un `task-start` o un reinicio del
+  # en watch.sh o en task-close.sh), `cola-<n> sin cards` (la cola se vació
+  # sin lanzar nada, DEVKIT-269 H3), el de un `task-start` o un reinicio del
   # bucle -después de cualquiera de esos, el bucle ya pasó de largo el motivo
   # o perdió su memoria (`LANZAR_COLA_ULTIMO_MOTIVO`)-. El cierre de otra skill
   # (`task-close`, `task-fix`, `pr-review`...) no lo borra: `watch.sh` no vuelve
@@ -3671,6 +3672,7 @@ motivo_espera_cola() {  # motivo_espera_cola <watch.log>
     }
     ($2 ~ /^cola-[0-9]+$/ && ($3 == "terminado:" || $3 == "falló")) ||
     ($2 ~ /^task-start-/ && $3 == "lanzando") ||
+    ($2 ~ /^cola-[0-9]+$/ && $3 == "sin" && $4 == "cards:") ||
     ($2 == "vigilancia" && $3 == "iniciada") { m = "" }
     END { if (m != "") print m }
   ' "$wlog" | tr -s ' ' | sed 's/ *$//')
@@ -9291,7 +9293,7 @@ FIN
   local motivo_est motivo_modo motivo_alto
   motivo_est="$tmp/en-espera-motivo"
   mkdir -p "$motivo_est/sucio" "$motivo_est/pausa" "$motivo_est/lanzado" "$motivo_est/reinicio" \
-    "$motivo_est/merge" "$motivo_est/cola-terminado" "$motivo_est/cola-fallo"
+    "$motivo_est/merge" "$motivo_est/cola-terminado" "$motivo_est/cola-fallo" "$motivo_est/sin-cards"
   motivo_modo="$motivo_est/modo"
   printf pausa >"$motivo_modo"
   motivo_alto="$motivo_est/modo-alto"
@@ -9329,6 +9331,15 @@ FIN
   cat >>"$motivo_est/lanzado/watch.log" <<FIN
 2026-09-20T09:13:00Z task-start-2 lanzando (origen=bucle) modelo=opus esfuerzo=high ronda=1: "/task-start DEVKIT-71" log=$motivo_est/task-start-2.log
 FIN
+  # ... o a `cola-<n> sin cards` (H3): el humano lanzó `dk task-start` a mano
+  # mientras la cola esperaba por "otro agente"; la card pasó a En progreso, la
+  # cola quedó sin nada que lanzar y `lanzar_cola` dejó esa línea.
+  cat >"$motivo_est/sin-cards/watch.log" <<FIN2
+2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)
+2026-09-20T09:12:00Z cola-1790727085 espera: otro agente: 4242 claude -p /task-start DEVKIT-71
+2026-09-20T09:12:40Z task-start-7 terminado: modelo=opus esfuerzo=high ronda=1 costo=0.10 turnos=5 duracion=40s :: OK
+2026-09-20T09:13:00Z cola-1790727130 sin cards: la cola no tiene qué lanzar, ya no rige ningún motivo de espera anterior
+FIN2
   # ... o a un reinicio del bucle, que olvida el último motivo avisado.
   cp "$motivo_est/sucio/watch.log" "$motivo_est/reinicio/watch.log"
   printf '2026-09-20T09:13:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)\n' \
@@ -9375,6 +9386,13 @@ FIN
   check "fila_en_espera: motivo anterior a un reinicio del bucle, se ignora (cola vacía)" "cola vacía" \
     "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
         fila_en_espera "$motivo_est/reinicio/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: motivo anterior a cola-<n> sin cards, se ignora (cola vacía)" "cola vacía" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$motivo_est/sin-cards/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: motivo anterior a cola-<n> sin cards, vuelve a esperando aprobación" \
+    "esperando aprobación de DEVKIT-30" \
+    "$(MERGE_CACHE="$merge_con/merge.cache" MERGE_LOCK="$merge_con/merge.lock" \
+        fila_en_espera "$motivo_est/sin-cards/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
   check "fila_en_espera: bucle MUERTO con un motivo en el log, sigue bucle parado" "bucle parado" \
     "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
         fila_en_espera "$motivo_est/sucio/watch.log" "$espera_ahora" 'bucle: MUERTO, no encuentro watch.sh en ps' \

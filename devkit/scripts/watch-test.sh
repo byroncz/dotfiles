@@ -1395,6 +1395,42 @@ check_igual "workspace sucio: no lanza task-start" "" \
 check_log "workspace sucio: cola-<n> espera queda en watch.log" \
   'cola-92 espera: workspace sucio'
 
+# Cola que se vacía tras esperar (DEVKIT-269, H3): `lanzar_cola` sale en
+# silencio cuando cola.sh no devuelve nada, y el "cola-<n> espera: ..." de una
+# llamada anterior quedaba pegado en `dk --estado`. Dos llamadas en el mismo
+# proceso: la primera ve una card en Lista y el workspace sucio (deja el
+# motivo); la segunda, con la card ya En progreso, no ve nada que lanzar y debe
+# dejar "cola-<n> sin cards" una sola vez, aunque se repita.
+VACIA=$(mktemp -d -p "$TMP")
+mkdir -p "$VACIA/run" "$VACIA/ws/.devkit"
+printf 'project = "DEVKIT"\n' >"$VACIA/ws/.devkit/devkit.toml"
+git init -q "$VACIA/ws"
+touch "$VACIA/ws/sin-commit.txt"
+cat >"$VACIA/notion.sh" <<FIN2
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "activas DEVKIT")
+    n=\$(cat "$VACIA/activas-n" 2>/dev/null || echo 0)
+    echo \$((n + 1)) >"$VACIA/activas-n"
+    if [ "\$n" -eq 0 ]; then echo '[]'
+    else echo '[{"clave":"DEVKIT-90","estado":"En progreso","nivel":"Tarea"}]'; fi ;;
+  "sueltas DEVKIT") cat "$SUELTA/sueltas.json" ;;
+  "epicas-backlog DEVKIT") echo '[]' ;;
+  "sueltas-backlog DEVKIT") echo '[]' ;;
+esac
+FIN2
+chmod +x "$VACIA/notion.sh"
+env DEVKIT_NOTION_BIN="$VACIA/notion.sh" DEVKIT_PS_BIN="$SUELTA/ps-vacio" \
+    DEVKIT_RUN_BIN="$SUCIO/devkit-run" DEVKIT_RUN_DIR="$VACIA/run" DEVKIT_WS="$VACIA/ws" \
+  bash "$WATCH" --lanzar-cola-n 3 >"$VACIA/watch.log" 2>&1
+OUT="$VACIA/watch.log"
+check_log "cola vacía tras esperar: la primera llamada deja el motivo" \
+  'cola-1 espera: workspace sucio'
+check_log "cola vacía tras esperar: la segunda deja cola-<n> sin cards" \
+  'cola-2 sin cards:'
+check_igual "cola vacía tras esperar: sin cards se avisa una sola vez, no en cada llamada" 1 \
+  "$(grep -c 'sin cards:' "$VACIA/watch.log")"
+
 # Idempotente: con la card ya En progreso (lo que Notion reflejaría tras el
 # lanzamiento real), cola.sh no vuelve a sugerirla y una segunda pasada no
 # lanza otra vez.
