@@ -267,10 +267,9 @@ igual; sigue esta sección entera en vez del resto del paso 3 y de los pasos
 
 Si algún comando de los pasos de arriba falla con "connection refused",
 corre `devkit-net-denied` para confirmarlo. Sobre la rama de la card,
-`devkit recreate` no sirve: el proxy del host solo lee `domains` del checkout
-que esté vivo en el contenedor, y el ciclo devuelve el workspace a `main` al
-cerrar o bloquear la card, así que el dominio nunca le llega antes del merge
-(DEVKIT-182). En su lugar, sin publicar ninguna respuesta `devkit-fix`:
+`devkit recreate` no sirve: lee `domains` de `origin/main`, donde la card aún
+no llegó, así que el dominio no le llega antes del merge (DEVKIT-182). En su
+lugar, sin publicar ninguna respuesta `devkit-fix`:
 
 1. Agrega el dominio a `domains` de `.devkit/devkit.toml`, comitea
    (`fix(<Clave>): agregar <dominio> a domains`) y pushea.
