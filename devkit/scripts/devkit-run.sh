@@ -3639,37 +3639,43 @@ arranque_bucle_ts() {  # arranque_bucle_ts <watch.log>
 #
 # <motivo> (DEVKIT-269): con el bucle vivo y la cola con cards, `watch.sh`
 # puede no tomarlas por un motivo que solo deja en watch.log, una vez
-# (DEVKIT-101: "workspace sucio: ...", "otro agente: ...", "modo pausa: ...");
-# `motivo_espera_cola` lo rescata y DETALLE lo muestra en vez de "cola vacía",
-# que aquí sería falso. Va antes que "esperando aprobación de ..." y después de
-# "bucle parado": con el bucle muerto ningún motivo del log sigue vigente.
+# (DEVKIT-101: "workspace sucio: ...", "otro agente: ..."); `modo pausa`/`modo
+# alto` no salen del log sino de `modo_actual`, ver abajo. `motivo_espera_cola`
+# lo rescata y DETALLE lo muestra en vez de "cola vacía", que aquí sería falso.
+# Va antes que "esperando aprobación de ..." y después de "bucle parado": con el
+# bucle muerto ningún motivo del log sigue vigente.
 motivo_espera_cola() {  # motivo_espera_cola <watch.log>
-  local wlog=$1 motivo
-  [ -f "$wlog" ] || return 0
-  # Un solo recorrido: el último motivo queda vigente solo si ninguna línea
-  # posterior es un lanzamiento, un cierre o un reinicio del bucle -después de
-  # cualquiera de esos, el bucle ya pasó de largo el motivo o perdió su
-  # memoria (`LANZAR_COLA_ULTIMO_MOTIVO`)-. Las líneas de motivo se
-  # clasifican primero: un archivo sucio llamado "terminado" no debe contar
-  # como cierre.
-  motivo=$(awk '
-    $2 ~ /^cola-/ && $3 == "espera:" {
-      m = substr($0, index($0, " espera: ") + 9); pausa = 0; next
-    }
-    $2 == "modo" && $3 == "pausa:" {
-      m = substr($0, index($0, " modo pausa: ") + 1); pausa = 1; next
-    }
-    / (vigilancia iniciada|lanzando) | terminado[: ]| falló |terminó con error/ { m = ""; pausa = 0 }
-    END { if (m != "") print (pausa ? "P" : "C") m }
-  ' "$wlog" | tr -s ' ' | sed 's/ *$//')
-  [ -n "$motivo" ] || return 0
-  # "modo pausa" no deja línea al reanudar (registrar_cambio_modo solo avisa
-  # al entrar): sin este chequeo, la reanudación con la cola vacía dejaría el
-  # motivo pegado.
-  if [ "${motivo:0:1}" = P ] && [ "$(modo_actual)" != pausa ]; then
+  local wlog=$1 modo motivo
+  # "modo pausa"/"modo alto" es un estado persistente, no un evento: watch.log
+  # solo deja una línea al entrar en pausa, y cualquier cierre posterior (un
+  # merge, un `dk <skill>` a mano) la taparía. Se lee de `modo_actual`, que
+  # además cubre `alto` y no deja el motivo pegado al reanudar (DEVKIT-269, H2).
+  modo=$(modo_actual)
+  if [ "$modo" != trabajo ]; then
+    printf 'modo %s: no se toma la siguiente card de la cola hasta reanudar\n' "$modo"
     return 0
   fi
-  printf '%s\n' "${motivo:1}"
+  [ -f "$wlog" ] || return 0
+  # Un solo recorrido: el último motivo queda vigente solo si ninguna línea
+  # posterior es el lanzamiento de `lanzar_cola` (`cola-<n> terminado`/`falló`,
+  # en watch.sh o en task-close.sh), el de un `task-start` o un reinicio del
+  # bucle -después de cualquiera de esos, el bucle ya pasó de largo el motivo
+  # o perdió su memoria (`LANZAR_COLA_ULTIMO_MOTIVO`)-. El cierre de otra skill
+  # (`task-close`, `task-fix`, `pr-review`...) no lo borra: `watch.sh` no vuelve
+  # a avisar el mismo motivo, así que esa línea sigue siendo la única
+  # explicación (DEVKIT-269, H1). Se comparan campos, no texto libre: un
+  # archivo sucio llamado "terminado" no debe contar como cierre.
+  motivo=$(awk '
+    $2 ~ /^cola-[0-9]+$/ && $3 == "espera:" {
+      m = substr($0, index($0, " espera: ") + 9); next
+    }
+    ($2 ~ /^cola-[0-9]+$/ && ($3 == "terminado:" || $3 == "falló")) ||
+    ($2 ~ /^task-start-/ && $3 == "lanzando") ||
+    ($2 == "vigilancia" && $3 == "iniciada") { m = "" }
+    END { if (m != "") print m }
+  ' "$wlog" | tr -s ' ' | sed 's/ *$//')
+  [ -n "$motivo" ] || return 0
+  printf '%s\n' "$motivo"
 }
 
 fila_en_espera() {  # fila_en_espera <watch.log> <ahora epoch> [bucle_texto]
@@ -9211,6 +9217,9 @@ $(printf '%s' "$bloque_sin" | grep -c 'DEVKIT-57 ')"
   local espera_est espera_ahora salida_espera pslist_espera
   espera_est="$tmp/en-espera"
   mkdir -p "$espera_est"
+  # `fila_en_espera` lee el modo real (DEVKIT-269, H2): sin este archivo
+  # inexistente, un /run/devkit/modo en pausa del host rompería estas pruebas.
+  MODO_FILE="$espera_est/sin-modo"
   cat >"$espera_est/watch.log" <<FIN
 2026-09-20T09:00:00Z vigilancia iniciada (cada 30s, guardia de 200 ciclos; PRs mergeados cada 300s)
 2026-09-20T09:05:00Z task-fix-1 lanzando (origen=humano) modelo=opus esfuerzo=high ronda=1: "/task-fix DEVKIT-70" log=$espera_est/task-fix-1.log
@@ -9275,18 +9284,46 @@ FIN
   # --- DEVKIT-269: DETALLE con el motivo por el que el bucle no toma la cola -
   # Mismo log que arriba más una línea de motivo posterior al último cierre,
   # tal como la escribe `lanzar_cola` (con el doble espacio de `git status
-  # --porcelain` tras "sucio:") o `registrar_cambio_modo`.
-  local motivo_est motivo_modo
+  # --porcelain` tras "sucio:"). "modo pausa"/"modo alto" no salen del log
+  # sino de MODO_FILE: el log de `pausa` trae, además, los cierres que
+  # escriben `task-close.sh` y un `dk <skill>` a mano después de entrar en
+  # pausa, y no deben taparlo (H2).
+  local motivo_est motivo_modo motivo_alto
   motivo_est="$tmp/en-espera-motivo"
-  mkdir -p "$motivo_est/sucio" "$motivo_est/pausa" "$motivo_est/lanzado" "$motivo_est/reinicio"
+  mkdir -p "$motivo_est/sucio" "$motivo_est/pausa" "$motivo_est/lanzado" "$motivo_est/reinicio" \
+    "$motivo_est/merge" "$motivo_est/cola-terminado" "$motivo_est/cola-fallo"
   motivo_modo="$motivo_est/modo"
   printf pausa >"$motivo_modo"
+  motivo_alto="$motivo_est/modo-alto"
+  printf alto >"$motivo_alto"
   cp "$espera_est/watch.log" "$motivo_est/sucio/watch.log"
   printf '2026-09-20T09:12:00Z cola-1790727085 espera: workspace sucio:  M .devkit/devkit.toml \n' \
     >>"$motivo_est/sucio/watch.log"
   cp "$espera_est/watch.log" "$motivo_est/pausa/watch.log"
-  printf '2026-09-20T09:12:00Z modo pausa: no se toma la siguiente card de la cola hasta reanudar\n' \
-    >>"$motivo_est/pausa/watch.log"
+  cat >>"$motivo_est/pausa/watch.log" <<FIN
+2026-09-20T09:12:00Z modo pausa: no se toma la siguiente card de la cola hasta reanudar
+2026-09-20T09:12:30Z cola-150 no se llama: modo pausa
+2026-09-20T09:12:31Z task-close-150 terminado: bash, cerrada la card DEVKIT-150 :: OK
+2026-09-20T09:13:00Z pr-review-151-abc1234 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+FIN
+  # Un merge con el workspace sucio (H1): `task-close.sh` deja "cola-<PR>
+  # espera: ..." y enseguida `watch.sh` deja "task-close-<PR> terminado", más
+  # el cierre de otras skills. Ninguno de esos cierres lanza la cola.
+  cp "$motivo_est/sucio/watch.log" "$motivo_est/merge/watch.log"
+  cat >>"$motivo_est/merge/watch.log" <<FIN
+2026-09-20T09:12:30Z cola-150 espera: workspace sucio:  M .devkit/devkit.toml
+2026-09-20T09:12:31Z task-close-150 terminado: bash, cerrada la card DEVKIT-150 :: OK
+2026-09-20T09:13:00Z task-fix-3 terminado: modelo=opus esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-20T09:13:30Z pr-review-151-abc1234 terminado: modelo=fable esfuerzo=high costo=1.0 turnos=9 :: OK
+2026-09-20T09:14:00Z devkit-run "/task-document DEVKIT-150" terminado [task-document-4]: modelo=opus esfuerzo=high ronda=1 :: OK
+FIN
+  # El lanzamiento de `lanzar_cola` sí lo borra, con éxito o con error.
+  cp "$motivo_est/sucio/watch.log" "$motivo_est/cola-terminado/watch.log"
+  printf '2026-09-20T09:13:00Z cola-1790727090 terminado: bash, lanzada la siguiente card: task-start DEVKIT-71 :: OK\n' \
+    >>"$motivo_est/cola-terminado/watch.log"
+  cp "$motivo_est/sucio/watch.log" "$motivo_est/cola-fallo/watch.log"
+  printf '2026-09-20T09:13:00Z cola-1790727090 falló (rc=1): bash, lanzada la siguiente card: task-start DEVKIT-71 :: mal\n' \
+    >>"$motivo_est/cola-fallo/watch.log"
   # El motivo es anterior a un lanzamiento y a su cierre: ya no rige.
   cp "$motivo_est/sucio/watch.log" "$motivo_est/lanzado/watch.log"
   cat >>"$motivo_est/lanzado/watch.log" <<FIN
@@ -9314,6 +9351,24 @@ FIN
   check "fila_en_espera: modo pausa ya reanudado, vuelve a cola vacía" "cola vacía" \
     "$(MODO_FILE="$motivo_est/no-existe" MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
         fila_en_espera "$motivo_est/pausa/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: modo pausa sin ninguna línea de aviso en el log, igual lo muestra" \
+    "modo pausa: no se toma la siguiente card de la cola hasta reanudar" \
+    "$(MODO_FILE="$motivo_modo" MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: modo alto también muestra su motivo, no cola vacía" \
+    "modo alto: no se toma la siguiente card de la cola hasta reanudar" \
+    "$(MODO_FILE="$motivo_alto" MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$espera_est/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: motivo seguido de task-close y otros cierres (merge), sigue vigente" \
+    "workspace sucio: M .devkit/devkit.toml" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$motivo_est/merge/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: motivo anterior a cola-<n> terminado (lanzar_cola), se ignora" "cola vacía" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$motivo_est/cola-terminado/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
+  check "fila_en_espera: motivo anterior a cola-<n> falló (lanzar_cola), se ignora" "cola vacía" \
+    "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
+        fila_en_espera "$motivo_est/cola-fallo/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
   check "fila_en_espera: motivo anterior a un lanzamiento posterior, se ignora (cola vacía)" "cola vacía" \
     "$(MERGE_CACHE="$merge_vacio/merge.cache" MERGE_LOCK="$merge_vacio/merge.lock" \
         fila_en_espera "$motivo_est/lanzado/watch.log" "$espera_ahora" | awk -F'\t' '{print $6}')"
