@@ -1,46 +1,67 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="700" viewBox="0 0 1200 700">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1159" viewBox="0 0 1200 1159">
 <style>
   text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .t { font-size: 34px; font-weight: 700; fill: #d4d4d4; fill-opacity: .60; }
   .g { font-size: 16px; font-weight: 700; letter-spacing: .06em; fill: #d4d4d4; fill-opacity: .60; }
   .c { font-size: 16px; font-weight: 700; fill: #d4d4d4; fill-opacity: .76; }
+  .e { font-size: 13px; fill: #d4d4d4; fill-opacity: .60; }
   .d { font-size: 13px; fill: #d4d4d4; fill-opacity: .60; }
 </style>
 <text x="60" y="70" class="t">devkit: comandos</text>
 <text x="60" y="150" class="g">En el host</text>
 <text x="60" y="184" class="c">devkit code &lt;proyecto&gt;</text>
-<text x="60" y="202" class="d">Espera el arranque, hasta 10 min mostrando el avance, y a…</text>
-<text x="60" y="230" class="c">devkit shell &lt;proyecto&gt;</text>
-<text x="60" y="248" class="d">Espera el arranque, hasta 10 min mostrando el avance, y a…</text>
-<text x="60" y="276" class="c">devkit recreate &lt;proyecto&gt;</text>
-<text x="60" y="294" class="d">Recrea los contenedores, reconstruyendo solo las capas qu…</text>
-<text x="60" y="322" class="c">devkit rebuild &lt;proyecto&gt;</text>
-<text x="60" y="340" class="d">Reconstruye las imágenes desde cero y recrea. Úsalo cuand…</text>
-<text x="60" y="368" class="c">devkit awake &lt;proyecto&gt;</text>
-<text x="60" y="386" class="d">Solo macOS: evita que el host se suspenda mientras el con…</text>
+<text x="60" y="202" class="e">$ devkit code ventas</text>
+<text x="60" y="220" class="d"><tspan x="60">Espera el arranque, hasta 10 min mostrando el avance, y</tspan><tspan x="60" dy="17">abre el editor en el navegador; sin open, imprime la URL</tspan><tspan x="60" dy="17">para pegarla a mano (macOS la abre sola).</tspan></text>
+<text x="60" y="288" class="c">devkit shell &lt;proyecto&gt;</text>
+<text x="60" y="306" class="e">$ devkit shell ventas</text>
+<text x="60" y="324" class="d"><tspan x="60">Espera el arranque, hasta 10 min mostrando el avance, y</tspan><tspan x="60" dy="17">abre una shell dentro del contenedor. Úsalo para depurar o</tspan><tspan x="60" dy="17">correr un comando suelto sin abrir el editor.</tspan></text>
+<text x="60" y="392" class="c">devkit recreate &lt;proyecto&gt;</text>
+<text x="60" y="410" class="e">$ devkit recreate ventas</text>
+<text x="60" y="428" class="d"><tspan x="60">Recrea los contenedores, reconstruyendo solo las capas que</tspan><tspan x="60" dy="17">cambiaron. Úsalo tras tocar .devkit/devkit.toml o, en modo</tspan><tspan x="60" dy="17">dev, el propio devkit/.</tspan></text>
+<text x="60" y="496" class="c">devkit rebuild &lt;proyecto&gt;</text>
+<text x="60" y="514" class="e">$ devkit rebuild ventas</text>
+<text x="60" y="532" class="d"><tspan x="60">Reconstruye las imágenes desde cero y recrea. Úsalo cuando</tspan><tspan x="60" dy="17">cambies el Dockerfile o sospeches que la imagen quedó</tspan><tspan x="60" dy="17">corrupta; recreate no alcanza.</tspan></text>
+<text x="60" y="600" class="c">devkit awake &lt;proyecto&gt;</text>
+<text x="60" y="618" class="e">$ devkit awake ventas</text>
+<text x="60" y="636" class="d"><tspan x="60">Solo macOS: evita que el host se suspenda mientras el</tspan><tspan x="60" dy="17">contenedor esté vivo (caffeinate); en otro host avisa y no</tspan><tspan x="60" dy="17">hace nada.</tspan></text>
 <text x="620" y="150" class="g">Agentes</text>
 <text x="620" y="184" class="c">dk --estado [--foto]</text>
-<text x="620" y="202" class="d">En una terminal se refresca cada 3 s hasta Ctrl-C (--segu…</text>
-<text x="620" y="230" class="c">dk --tablero [--foto]</text>
-<text x="620" y="248" class="d">En una terminal se refresca cada 30 s hasta Ctrl-C (--seg…</text>
-<text x="620" y="276" class="c">dk &lt;skill&gt; &lt;Clave&gt;</text>
-<text x="620" y="294" class="d">Lanza una skill en segundo plano y se queda mostrando su …</text>
-<text x="620" y="322" class="c">dk pr-review &lt;N&gt;</text>
-<text x="620" y="340" class="d">Revisa el PR número &lt;N&gt; como revisor independiente y publ…</text>
-<text x="620" y="368" class="c">dk task-fix &lt;N&gt;</text>
-<text x="620" y="386" class="d">Corrige el PR número &lt;N&gt; según los hallazgos de la última…</text>
-<text x="60" y="430" class="g">Cards</text>
-<text x="60" y="464" class="c">task-close.sh &lt;Clave&gt; [PR]</text>
-<text x="60" y="482" class="d">Cierra una card mergeada: Estado a Hecha y marcador en el…</text>
-<text x="60" y="510" class="c">task-block.sh &lt;Clave&gt; &lt;motivo&gt;</text>
-<text x="60" y="528" class="d">Bloquea una card y anota el motivo. Úsalo cuando falte al…</text>
-<text x="60" y="556" class="c">devkit-net-denied</text>
-<text x="60" y="574" class="d">Lista los dominios que el proxy rechazó recientemente. Ús…</text>
-<text x="620" y="430" class="g">Python</text>
-<text x="620" y="464" class="c">uv add &lt;paquete&gt;</text>
-<text x="620" y="482" class="d">Agrega una dependencia al proyecto y la fija en pyproject…</text>
-<text x="620" y="510" class="c">uv sync</text>
-<text x="620" y="528" class="d">Instala en el entorno del proyecto exactamente las depend…</text>
-<text x="620" y="556" class="c">uv run &lt;comando&gt;</text>
-<text x="620" y="574" class="d">Corre un comando dentro del entorno del proyecto, sin act…</text>
+<text x="620" y="202" class="e">$ dk --estado</text>
+<text x="620" y="220" class="d"><tspan x="620">En una terminal se refresca cada 3 s hasta Ctrl-C</tspan><tspan x="620" dy="17">(--seguir sigue aceptado como sinónimo); --foto (o sin</tspan><tspan x="620" dy="17">tty, por ejemplo en un pipe) imprime una sola vez.</tspan></text>
+<text x="620" y="288" class="c">dk --tablero [--foto]</text>
+<text x="620" y="306" class="e">$ dk --tablero</text>
+<text x="620" y="324" class="d"><tspan x="620">En una terminal se refresca cada 30 s hasta Ctrl-C</tspan><tspan x="620" dy="17">(--seguir sigue aceptado como sinónimo); --foto (o sin</tspan><tspan x="620" dy="17">tty) imprime una sola vez.</tspan></text>
+<text x="620" y="392" class="c">dk &lt;skill&gt; &lt;Clave&gt;</text>
+<text x="620" y="410" class="e">$ dk --seguir task-start DEVKIT-42</text>
+<text x="620" y="428" class="d"><tspan x="620">Lanza una skill en segundo plano y se queda mostrando su</tspan><tspan x="620" dy="17">avance hasta que termina. Úsalo para lanzar cualquier</tspan><tspan x="620" dy="17">skill a mano, fuera del ciclo automático del bucle.</tspan></text>
+<text x="620" y="496" class="c">dk pr-review &lt;N&gt;</text>
+<text x="620" y="514" class="e">$ dk pr-review 42</text>
+<text x="620" y="532" class="d"><tspan x="620">Revisa el PR número &lt;N&gt; como revisor independiente y</tspan><tspan x="620" dy="17">publica el veredicto. Úsalo para forzar una revisión sin</tspan><tspan x="620" dy="17">esperar al bucle.</tspan></text>
+<text x="620" y="600" class="c">dk task-fix &lt;N&gt;</text>
+<text x="620" y="618" class="e">$ dk task-fix 42</text>
+<text x="620" y="636" class="d"><tspan x="620">Corrige el PR número &lt;N&gt; según los hallazgos de la última</tspan><tspan x="620" dy="17">revisión. Úsalo para forzar una corrección sin esperar al</tspan><tspan x="620" dy="17">bucle.</tspan></text>
+<text x="60" y="700" class="g">Cards</text>
+<text x="60" y="734" class="c">task-close.sh &lt;Clave&gt; [PR]</text>
+<text x="60" y="752" class="e">$ task-close.sh DEVKIT-42 118</text>
+<text x="60" y="770" class="d"><tspan x="60">Cierra una card mergeada: Estado a Hecha y marcador en el</tspan><tspan x="60" dy="17">PR. Úsalo tras mergear a mano, cuando el bucle no la</tspan><tspan x="60" dy="17">alcanzó a cerrar solo.</tspan></text>
+<text x="60" y="838" class="c">task-block.sh &lt;Clave&gt; &lt;motivo&gt;</text>
+<text x="60" y="856" class="e">$ task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..."</text>
+<text x="60" y="874" class="d"><tspan x="60">Bloquea una card y anota el motivo. Úsalo cuando falte</tspan><tspan x="60" dy="17">algo del humano y no puedas seguir sin preguntar.</tspan></text>
+<text x="620" y="700" class="g">Python</text>
+<text x="620" y="734" class="c">uv add &lt;paquete&gt;</text>
+<text x="620" y="752" class="e">$ uv add polars</text>
+<text x="620" y="770" class="d"><tspan x="620">Agrega una dependencia al proyecto y la fija en</tspan><tspan x="620" dy="17">pyproject.toml. Úsalo para instalar una librería nueva.</tspan></text>
+<text x="620" y="821" class="c">uv sync</text>
+<text x="620" y="839" class="e">$ uv sync</text>
+<text x="620" y="857" class="d"><tspan x="620">Instala en el entorno del proyecto exactamente las</tspan><tspan x="620" dy="17">dependencias de pyproject.toml. Úsalo tras cambiar de rama</tspan><tspan x="620" dy="17">o editar pyproject.toml a mano.</tspan></text>
+<text x="620" y="925" class="c">uv run &lt;comando&gt;</text>
+<text x="620" y="943" class="e">$ uv run python etl.py</text>
+<text x="620" y="961" class="d"><tspan x="620">Corre un comando dentro del entorno del proyecto, sin</tspan><tspan x="620" dy="17">activarlo a mano. Úsalo para ejecutar un script o una</tspan><tspan x="620" dy="17">prueba puntual.</tspan></text>
+<text x="60" y="921" class="g">Proyecto</text>
+<text x="60" y="955" class="c">dk --declarar &lt;clave&gt; &lt;valor&gt;...</text>
+<text x="60" y="973" class="e">$ dk --declarar extensions ms-python.python charliermarsh.ruff</text>
+<text x="60" y="991" class="d"><tspan x="60">Formas: dk --declarar extensions ms-python.python, dk</tspan><tspan x="60" dy="17">--declarar domains pypi.org files.pythonhosted.org, dk</tspan><tspan x="60" dy="17">--declarar apt jq.</tspan></text>
+<text x="60" y="1059" class="c">devkit-net-denied</text>
+<text x="60" y="1077" class="e">$ devkit-net-denied</text>
+<text x="60" y="1095" class="d"><tspan x="60">Lista los dominios que el proxy rechazó recientemente.</tspan><tspan x="60" dy="17">Úsalo cuando una conexión falle con "connection refused",</tspan><tspan x="60" dy="17">para saber qué dominio falta en la lista blanca.</tspan></text>
 </svg>
