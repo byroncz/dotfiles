@@ -209,12 +209,17 @@ RUN set -eux; \
 # vista de Extensiones: VS Code la arma sin consultar la tienda, con cuatro
 # claves más de product.json, y ofrecería "Instalar" sobre extensiones que
 # no pueden bajarse. Se quitan igual, cada una con su guarda:
-#   - configBasedExtensionTips: sugerencias por archivos del workspace
-#     (.git/config -> GitLens y GitHub Pull Requests, Dockerfile -> Docker,
-#     package.json -> npm intellisense, pyproject.toml -> ruff y formateadores).
-#   - extensionRecommendations: lista fija de recomendadas de la distribución.
+#   - configBasedExtensionTips: sugerencias por archivos de configuración del
+#     workspace (.git/config -> GitLens y GitHub Pull Requests,
+#     pyproject.toml/setup.cfg/tox.ini -> ruff y formateadores).
+#   - extensionRecommendations: sugerencias al abrir un archivo que calza con
+#     un pathGlob o un lenguaje (Dockerfile -> Docker, package.json -> npm
+#     intellisense, *.py -> Python).
 #   - languageExtensionTips: sugerencias al abrir un archivo de un lenguaje.
 #   - keymapExtensionTips: sugerencias de mapas de teclas de otros editores.
+# Límite conocido: esto no apaga las recomendaciones del workspace. Un repo
+# con .vscode/extensions.json y "recommendations" sigue mostrando la sección
+# "Recomendadas" con un "Instalar" que no funciona.
 USER root
 RUN set -eu; \
     product=/opt/openvscode-server/product.json; \
