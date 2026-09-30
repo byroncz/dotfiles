@@ -112,11 +112,6 @@
   <div class="ejemplo">$ task-block.sh DEVKIT-42 "Qué intenté: ... Qué necesito: ..."</div>
   <p class="descripcion">Bloquea una card y anota el motivo. Úsalo cuando falte algo del humano y no puedas seguir sin preguntar.</p>
 </div>
-<div class="tarjeta">
-  <div class="comando">devkit-net-denied</div>
-  <div class="ejemplo">$ devkit-net-denied</div>
-  <p class="descripcion">Lista los dominios que el proxy rechazó recientemente. Úsalo cuando una conexión falle con "connection refused", para saber qué dominio falta en la lista blanca.</p>
-</div>
 <h2>Python</h2>
 <div class="tarjeta">
   <div class="comando">uv add &lt;paquete&gt;</div>
@@ -132,6 +127,17 @@
   <div class="comando">uv run &lt;comando&gt;</div>
   <div class="ejemplo">$ uv run python etl.py</div>
   <p class="descripcion">Corre un comando dentro del entorno del proyecto, sin activarlo a mano. Úsalo para ejecutar un script o una prueba puntual.</p>
+</div>
+<h2>Proyecto</h2>
+<div class="tarjeta">
+  <div class="comando">dk --declarar &lt;clave&gt; &lt;valor&gt;...</div>
+  <div class="ejemplo">$ dk --declarar extensions ms-python.python charliermarsh.ruff</div>
+  <p class="descripcion">Formas: <code>dk --declarar extensions ms-python.python</code>, <code>dk --declarar domains pypi.org files.pythonhosted.org</code>, <code>dk --declarar apt jq</code>. Abre el PR <code>&lt;CÓDIGO&gt;-0</code> con auto-merge, sin card ni agentes, que suma el valor a <code>.devkit/devkit.toml</code>; tras el merge, <code>devkit recreate &lt;proyecto&gt;</code> en el host.</p>
+</div>
+<div class="tarjeta">
+  <div class="comando">devkit-net-denied</div>
+  <div class="ejemplo">$ devkit-net-denied</div>
+  <p class="descripcion">Lista los dominios que el proxy rechazó recientemente. Úsalo cuando una conexión falle con "connection refused", para saber qué dominio falta en la lista blanca.</p>
 </div>
 </body>
 </html>
