@@ -51,6 +51,15 @@ valido() {
   esac
 }
 
+# identidad <clave> <valor>: lo que identifica al valor para detectar
+# duplicados, en minúsculas. En `extensions` es el id, sin `@versión`.
+identidad() {
+  local v
+  v=$(printf '%s' "$2" | tr 'A-Z' 'a-z')
+  [ "$1" = extensions ] && v=${v%%@*}
+  printf '%s' "$v"
+}
+
 ejemplo_de() {
   case "$1" in
     extensions) echo 'ms-python.python o ms-python.python@2024.2.1' ;;
@@ -152,15 +161,34 @@ main() {
   # estar en la rama de una card con otro contenido).
   actuales=$(git -C "$WS" show "origin/main:$TOML" 2>/dev/null | toml_list "$clave") \
     || { err "no pude leer $TOML de origin/main"; return 1; }
-  local p minus
+  # Un valor es duplicado por su identidad, no por la cadena entera: una
+  # extensión con otra versión (`ms-python.python@2026.2.0`) sigue siendo la
+  # misma y dejaría dos entradas para un solo id (H3).
+  local p id w existente
+  local -a en_toml=()
+  read -ra en_toml <<<"$actuales"  # sin globbing: un dominio puede traer `*.`
   for p in "${pedidos[@]}"; do
-    minus=$(printf '%s' "$p" | tr 'A-Z' 'a-z')
-    case " $(printf '%s' "$actuales" | tr 'A-Z' 'a-z') " in
-      *" $minus "*) ya_declarados+=("$p"); continue ;;
-    esac
-    case " $(printf '%s ' "${nuevos[@]:-}" | tr 'A-Z' 'a-z') " in
-      *" $minus "*) continue ;;
-    esac
+    id=$(identidad "$clave" "$p")
+    existente=""
+    for w in ${en_toml[@]+"${en_toml[@]}"}; do
+      [ "$(identidad "$clave" "$w")" = "$id" ] && { existente=$w; break; }
+    done
+    if [ -n "$existente" ]; then
+      if [ "$(printf '%s' "$existente" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$p" | tr 'A-Z' 'a-z')" ]; then
+        ya_declarados+=("$p")
+      else
+        ya_declarados+=("$p (ya está como $existente)")
+      fi
+      continue
+    fi
+    for w in ${nuevos[@]+"${nuevos[@]}"}; do
+      [ "$(identidad "$clave" "$w")" = "$id" ] || continue
+      if [ "$(printf '%s' "$w" | tr 'A-Z' 'a-z')" != "$(printf '%s' "$p" | tr 'A-Z' 'a-z')" ]; then
+        err "pediste $w y $p, que son la misma extensión con distinta versión: elige una."
+        return 64
+      fi
+      continue 2
+    done
     nuevos+=("$p")
   done
   if [ "${#nuevos[@]}" -eq 0 ]; then
@@ -370,6 +398,36 @@ FIN
   check "otro directorio: abre el PR" 1 "$(printf '%s' "$salida" | grep -c 'pull/77')"
   check "otro directorio: gh se llamó 3 veces (list, create, merge)" 3 "$(wc -l <"$tmp/gh.pwd" | tr -d ' ')"
   check "otro directorio: todas las llamadas de gh desde el workspace" "$tmp/ws" "$(sort -u "$tmp/gh.pwd")"
+
+  # 9. Una extensión ya declarada se reconoce por su id, con o sin versión (H3).
+  # Un clon aparte suma la extensión a main; $WS trae ese main con su fetch.
+  git clone -q "$tmp/origin.git" "$tmp/ws2" 2>/dev/null
+  git -C "$tmp/ws2" config user.name prueba
+  git -C "$tmp/ws2" config user.email prueba@example.com
+  echo 'extensions = ["ms-python.python"]' >>"$tmp/ws2/$TOML"
+  git -C "$tmp/ws2" commit -q -am 'declara ms-python.python' && git -C "$tmp/ws2" push -q origin HEAD:main
+  : >"$tmp/gh.log"
+  salida=$(correr extensions ms-python.python@2026.2.0); rc=$?
+  check "id con versión ya declarado sin ella: sale 0" 0 "$rc"
+  check "id con versión: avisa con la entrada existente" 1 \
+    "$(printf '%s' "$salida" | grep -c 'ms-python.python@2026.2.0 (ya está como ms-python.python)')"
+  check "id con versión: no abre PR" 0 "$(grep -c 'pr create' "$tmp/gh.log")"
+  salida=$(correr extensions MS-Python.Python); rc=$?
+  check "id con otras mayúsculas: ya declarado" 1 "$(printf '%s' "$salida" | grep -c 'Ya está declarado en extensions')"
+  git -C "$tmp/ws2" reset -q --hard HEAD~1
+  echo 'extensions = ["ms-python.python@2026.2.0"]' >>"$tmp/ws2/$TOML"
+  git -C "$tmp/ws2" commit -q -am 'declara ms-python.python con versión' && git -C "$tmp/ws2" push -q -f origin HEAD:main
+  salida=$(correr extensions ms-python.python); rc=$?
+  check "id sin versión ya declarado con ella: sale 0" 0 "$rc"
+  check "id sin versión: avisa con la entrada existente" 1 \
+    "$(printf '%s' "$salida" | grep -c 'ms-python.python (ya está como ms-python.python@2026.2.0)')"
+  check "id sin versión: no abre PR" 0 "$(grep -c 'pr create' "$tmp/gh.log")"
+  correr extensions redhat.java redhat.java@1.0.0 >/dev/null; check "mismo id con dos versiones en el pedido: 64" 64 "$?"
+  check "dos versiones: no abre PR" 0 "$(grep -c 'pr create' "$tmp/gh.log")"
+  salida=$(correr extensions redhat.java REDHAT.java); rc=$?
+  check "mismo id repetido en el pedido: sale 0" 0 "$rc"
+  check "mismo id repetido: una sola entrada en la rama" 1 \
+    "$(git -C "$tmp/origin.git" show chore/DEVKIT-0-extensions-redhat-java:$TOML | grep '^extensions' | grep -oi 'redhat\.java' | wc -l | tr -d ' ')"
 
   return $fail
 }
