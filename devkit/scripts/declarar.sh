@@ -141,6 +141,11 @@ main() {
   codigo=$(sed -n 's/^project[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$WS/$TOML" 2>/dev/null | head -1)
   [ -n "$codigo" ] || { err "no encuentro \"project\" en $WS/$TOML"; return 1; }
 
+  # gh resuelve el repo desde el directorio en que corre: sin esto, invocado
+  # desde ~ o desde un clon anidado (sandbox.local/) mira otro repo que el del
+  # origin al que se sube la rama.
+  cd "$WS" || { err "no puedo entrar a $WS"; return 1; }
+
   git -C "$WS" fetch -q origin main 2>/dev/null || { err "git fetch origin main falló; sin red no se puede abrir el PR."; return 1; }
 
   # Qué falta, contra el toml de origin/main (no el del workspace, que puede
@@ -165,7 +170,7 @@ main() {
   [ "${#ya_declarados[@]}" -eq 0 ] || echo "Ya estaba en $clave y se omite: ${ya_declarados[*]}."
 
   # Dos PRs -0 sobre la misma clave chocarían al mezclar la misma línea.
-  lista=$("$GH" pr list --state open --limit 100 --json number,title,url 2>/dev/null) \
+  lista=$("$GH" pr list --state open --limit 100 --json number,title,url) \
     || { err "gh pr list no respondió"; return 1; }
   pr_previo=$(printf '%s' "$lista" | jq -r --arg pre "$codigo-0 declarar $clave:" \
     '[.[] | select(.title | startswith($pre))] | first | .url // empty') \
@@ -209,7 +214,7 @@ Abierto con \`dk --declarar\`, sin card ni revisión de agentes: la Clave \`$cod
 ## Cómo aplicarlo
 
 $(paso_siguiente "$clave" "$rama")"
-  url=$("$GH" pr create --base main --head "$rama" --title "$titulo" --body "$cuerpo" 2>/dev/null) \
+  url=$("$GH" pr create --base main --head "$rama" --title "$titulo" --body "$cuerpo") \
     || { err "gh pr create falló; la rama $rama quedó en origin."; return 1; }
   url=$(printf '%s\n' "$url" | tail -1)
   [ -n "$url" ] || { err "gh pr create no devolvió la URL; la rama $rama quedó en origin."; return 1; }
@@ -257,6 +262,7 @@ FIN
   cat >"$tmp/bin/gh" <<'FIN'
 #!/usr/bin/env bash
 echo "$*" >>"$GH_LOG"
+echo "$PWD" >>"$GH_PWD"
 case "$1 $2" in
   "pr list") cat "$GH_LISTA" ;;
   "pr create") echo "https://github.com/o/r/pull/77" ;;
@@ -266,7 +272,8 @@ FIN
   chmod +x "$tmp/bin/gh"
   echo '[]' >"$tmp/lista.json"
   : >"$tmp/gh.log"
-  local -a entorno=(DEVKIT_WS="$tmp/ws" DEVKIT_GH_BIN="$tmp/bin/gh" GH_LOG="$tmp/gh.log" GH_LISTA="$tmp/lista.json"
+  : >"$tmp/gh.pwd"
+  local -a entorno=(DEVKIT_WS="$tmp/ws" DEVKIT_GH_BIN="$tmp/bin/gh" GH_LOG="$tmp/gh.log" GH_PWD="$tmp/gh.pwd" GH_LISTA="$tmp/lista.json"
                 DEVKIT_DECLARAR_WORKTREE_DIR="$tmp")
   local salida rc
   correr() { env "${entorno[@]}" bash "${BASH_SOURCE[0]}" "$@" 2>&1; }
@@ -353,6 +360,16 @@ FIN
   # 7. El workspace sigue igual tras todo lo anterior.
   check "workspace: mismo git status al final" "$estado_antes" "$(git -C "$tmp/ws" status --short)"
   check "workspace: misma rama al final" "$rama_antes" "$(git -C "$tmp/ws" branch --show-current)"
+
+  # 8. gh corre siempre desde el workspace, sin importar desde dónde se invoque.
+  : >"$tmp/gh.pwd"
+  echo '[]' >"$tmp/lista.json"
+  mkdir -p "$tmp/otro/repo-anidado"
+  salida=$(cd "$tmp/otro/repo-anidado" && env "${entorno[@]}" bash "$HERE/declarar.sh" apt wget 2>&1); rc=$?
+  check "otro directorio: sale 0" 0 "$rc"
+  check "otro directorio: abre el PR" 1 "$(printf '%s' "$salida" | grep -c 'pull/77')"
+  check "otro directorio: gh se llamó 3 veces (list, create, merge)" 3 "$(wc -l <"$tmp/gh.pwd" | tr -d ' ')"
+  check "otro directorio: todas las llamadas de gh desde el workspace" "$tmp/ws" "$(sort -u "$tmp/gh.pwd")"
 
   return $fail
 }
